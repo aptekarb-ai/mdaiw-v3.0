@@ -1,0 +1,40 @@
+﻿# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Django
+backend/media/
+backend/staticfiles/
+*.sqlite3
+
+# Node and React
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+
+# Face Recognition temporary data
+face-temp/
+biometric-temp/

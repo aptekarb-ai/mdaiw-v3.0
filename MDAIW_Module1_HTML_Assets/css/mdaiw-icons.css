@@ -1,0 +1,83 @@
+:root {
+  --mdaiw-dark-teal: #002D38;
+  --mdaiw-cyan: #0082AD;
+  --mdaiw-green: #76C043;
+  --mdaiw-light-gray: #F4F6F8;
+  --mdaiw-white: #FFFFFF;
+  --mdaiw-charcoal: #333333;
+}
+
+.mdaiw-icon {
+  display: inline-block;
+  width: 1.25rem;
+  height: 1.25rem;
+  background-color: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  vertical-align: -0.2em;
+}
+
+.mdaiw-icon--home { -webkit-mask-image: url("../icons/svg/home.svg"); mask-image: url("../icons/svg/home.svg"); }
+.mdaiw-icon--login { -webkit-mask-image: url("../icons/svg/login.svg"); mask-image: url("../icons/svg/login.svg"); }
+.mdaiw-icon--logout { -webkit-mask-image: url("../icons/svg/logout.svg"); mask-image: url("../icons/svg/logout.svg"); }
+.mdaiw-icon--registration { -webkit-mask-image: url("../icons/svg/registration.svg"); mask-image: url("../icons/svg/registration.svg"); }
+.mdaiw-icon--about { -webkit-mask-image: url("../icons/svg/about.svg"); mask-image: url("../icons/svg/about.svg"); }
+.mdaiw-icon--dashboard { -webkit-mask-image: url("../icons/svg/dashboard.svg"); mask-image: url("../icons/svg/dashboard.svg"); }
+.mdaiw-icon--employees { -webkit-mask-image: url("../icons/svg/employees.svg"); mask-image: url("../icons/svg/employees.svg"); }
+.mdaiw-icon--performance { -webkit-mask-image: url("../icons/svg/performance.svg"); mask-image: url("../icons/svg/performance.svg"); }
+.mdaiw-icon--recognition { -webkit-mask-image: url("../icons/svg/recognition.svg"); mask-image: url("../icons/svg/recognition.svg"); }
+.mdaiw-icon--landing-page { -webkit-mask-image: url("../icons/svg/landing-page.svg"); mask-image: url("../icons/svg/landing-page.svg"); }
+.mdaiw-icon--email { -webkit-mask-image: url("../icons/svg/email.svg"); mask-image: url("../icons/svg/email.svg"); }
+.mdaiw-icon--finance { -webkit-mask-image: url("../icons/svg/finance.svg"); mask-image: url("../icons/svg/finance.svg"); }
+.mdaiw-icon--ai-assistants { -webkit-mask-image: url("../icons/svg/ai-assistants.svg"); mask-image: url("../icons/svg/ai-assistants.svg"); }
+.mdaiw-icon--reports { -webkit-mask-image: url("../icons/svg/reports.svg"); mask-image: url("../icons/svg/reports.svg"); }
+.mdaiw-icon--administration { -webkit-mask-image: url("../icons/svg/administration.svg"); mask-image: url("../icons/svg/administration.svg"); }
+.mdaiw-icon--settings { -webkit-mask-image: url("../icons/svg/settings.svg"); mask-image: url("../icons/svg/settings.svg"); }
+.mdaiw-icon--search { -webkit-mask-image: url("../icons/svg/search.svg"); mask-image: url("../icons/svg/search.svg"); }
+.mdaiw-icon--microphone { -webkit-mask-image: url("../icons/svg/microphone.svg"); mask-image: url("../icons/svg/microphone.svg"); }
+.mdaiw-icon--microphone-off { -webkit-mask-image: url("../icons/svg/microphone-off.svg"); mask-image: url("../icons/svg/microphone-off.svg"); }
+.mdaiw-icon--volume { -webkit-mask-image: url("../icons/svg/volume.svg"); mask-image: url("../icons/svg/volume.svg"); }
+.mdaiw-icon--volume-off { -webkit-mask-image: url("../icons/svg/volume-off.svg"); mask-image: url("../icons/svg/volume-off.svg"); }
+.mdaiw-icon--bell { -webkit-mask-image: url("../icons/svg/bell.svg"); mask-image: url("../icons/svg/bell.svg"); }
+.mdaiw-icon--profile { -webkit-mask-image: url("../icons/svg/profile.svg"); mask-image: url("../icons/svg/profile.svg"); }
+.mdaiw-icon--eye { -webkit-mask-image: url("../icons/svg/eye.svg"); mask-image: url("../icons/svg/eye.svg"); }
+.mdaiw-icon--eye-off { -webkit-mask-image: url("../icons/svg/eye-off.svg"); mask-image: url("../icons/svg/eye-off.svg"); }
+.mdaiw-icon--arrow-right { -webkit-mask-image: url("../icons/svg/arrow-right.svg"); mask-image: url("../icons/svg/arrow-right.svg"); }
+.mdaiw-icon--arrow-left { -webkit-mask-image: url("../icons/svg/arrow-left.svg"); mask-image: url("../icons/svg/arrow-left.svg"); }
+.mdaiw-icon--chevron-down { -webkit-mask-image: url("../icons/svg/chevron-down.svg"); mask-image: url("../icons/svg/chevron-down.svg"); }
+.mdaiw-icon--chevron-right { -webkit-mask-image: url("../icons/svg/chevron-right.svg"); mask-image: url("../icons/svg/chevron-right.svg"); }
+.mdaiw-icon--menu { -webkit-mask-image: url("../icons/svg/menu.svg"); mask-image: url("../icons/svg/menu.svg"); }
+.mdaiw-icon--close { -webkit-mask-image: url("../icons/svg/close.svg"); mask-image: url("../icons/svg/close.svg"); }
+.mdaiw-icon--upload { -webkit-mask-image: url("../icons/svg/upload.svg"); mask-image: url("../icons/svg/upload.svg"); }
+.mdaiw-icon--camera { -webkit-mask-image: url("../icons/svg/camera.svg"); mask-image: url("../icons/svg/camera.svg"); }
+.mdaiw-icon--face-scan { -webkit-mask-image: url("../icons/svg/face-scan.svg"); mask-image: url("../icons/svg/face-scan.svg"); }
+.mdaiw-icon--check { -webkit-mask-image: url("../icons/svg/check.svg"); mask-image: url("../icons/svg/check.svg"); }
+.mdaiw-icon--check-circle { -webkit-mask-image: url("../icons/svg/check-circle.svg"); mask-image: url("../icons/svg/check-circle.svg"); }
+.mdaiw-icon--error-circle { -webkit-mask-image: url("../icons/svg/error-circle.svg"); mask-image: url("../icons/svg/error-circle.svg"); }
+.mdaiw-icon--warning { -webkit-mask-image: url("../icons/svg/warning.svg"); mask-image: url("../icons/svg/warning.svg"); }
+.mdaiw-icon--calendar { -webkit-mask-image: url("../icons/svg/calendar.svg"); mask-image: url("../icons/svg/calendar.svg"); }
+.mdaiw-icon--phone { -webkit-mask-image: url("../icons/svg/phone.svg"); mask-image: url("../icons/svg/phone.svg"); }
+.mdaiw-icon--location { -webkit-mask-image: url("../icons/svg/location.svg"); mask-image: url("../icons/svg/location.svg"); }
+.mdaiw-icon--briefcase { -webkit-mask-image: url("../icons/svg/briefcase.svg"); mask-image: url("../icons/svg/briefcase.svg"); }
+.mdaiw-icon--department { -webkit-mask-image: url("../icons/svg/department.svg"); mask-image: url("../icons/svg/department.svg"); }
+.mdaiw-icon--manager { -webkit-mask-image: url("../icons/svg/manager.svg"); mask-image: url("../icons/svg/manager.svg"); }
+.mdaiw-icon--lock { -webkit-mask-image: url("../icons/svg/lock.svg"); mask-image: url("../icons/svg/lock.svg"); }
+.mdaiw-icon--unlock { -webkit-mask-image: url("../icons/svg/unlock.svg"); mask-image: url("../icons/svg/unlock.svg"); }
+.mdaiw-icon--play { -webkit-mask-image: url("../icons/svg/play.svg"); mask-image: url("../icons/svg/play.svg"); }
+.mdaiw-icon--pause { -webkit-mask-image: url("../icons/svg/pause.svg"); mask-image: url("../icons/svg/pause.svg"); }
+.mdaiw-icon--stop { -webkit-mask-image: url("../icons/svg/stop.svg"); mask-image: url("../icons/svg/stop.svg"); }
+.mdaiw-icon--send { -webkit-mask-image: url("../icons/svg/send.svg"); mask-image: url("../icons/svg/send.svg"); }
+.mdaiw-icon--edit { -webkit-mask-image: url("../icons/svg/edit.svg"); mask-image: url("../icons/svg/edit.svg"); }
+.mdaiw-icon--delete { -webkit-mask-image: url("../icons/svg/delete.svg"); mask-image: url("../icons/svg/delete.svg"); }
+.mdaiw-icon--refresh { -webkit-mask-image: url("../icons/svg/refresh.svg"); mask-image: url("../icons/svg/refresh.svg"); }
+.mdaiw-icon--shield-check { -webkit-mask-image: url("../icons/svg/shield-check.svg"); mask-image: url("../icons/svg/shield-check.svg"); }
+.mdaiw-icon--file { -webkit-mask-image: url("../icons/svg/file.svg"); mask-image: url("../icons/svg/file.svg"); }
+.mdaiw-icon--user-check { -webkit-mask-image: url("../icons/svg/user-check.svg"); mask-image: url("../icons/svg/user-check.svg"); }
+.mdaiw-icon--id-card { -webkit-mask-image: url("../icons/svg/id-card.svg"); mask-image: url("../icons/svg/id-card.svg"); }
+.mdaiw-icon--audio-wave { -webkit-mask-image: url("../icons/svg/audio-wave.svg"); mask-image: url("../icons/svg/audio-wave.svg"); }
+.mdaiw-icon--spinner { -webkit-mask-image: url("../icons/svg/spinner.svg"); mask-image: url("../icons/svg/spinner.svg"); }
+.mdaiw-icon--help { -webkit-mask-image: url("../icons/svg/help.svg"); mask-image: url("../icons/svg/help.svg"); }
