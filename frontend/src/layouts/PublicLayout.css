@@ -1,0 +1,28 @@
+.public-frame {
+  display: flex;
+  min-height: 100vh;
+}
+
+.public-frame__body {
+  flex: 1;
+  min-width: 776px;
+  display: flex;
+  flex-direction: column;
+}
+
+.public-frame__content {
+  flex: 1;
+  background: var(--color-background-light);
+  padding: var(--space-8) var(--space-10);
+}
+
+@media (max-width: 1023px) {
+  .public-frame {
+    flex-direction: column;
+  }
+
+  .public-frame__content {
+    min-width: 0;
+    padding: var(--space-6) var(--space-4);
+  }
+}

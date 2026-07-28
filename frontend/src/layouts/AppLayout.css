@@ -1,0 +1,27 @@
+.app-frame {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-frame__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-frame__content {
+  flex: 1;
+  background: var(--color-background-light);
+  padding: var(--space-6) var(--space-8);
+}
+
+@media (max-width: 1023px) {
+  .app-frame {
+    flex-direction: column;
+  }
+
+  .app-frame__content {
+    padding: var(--space-4);
+  }
+}

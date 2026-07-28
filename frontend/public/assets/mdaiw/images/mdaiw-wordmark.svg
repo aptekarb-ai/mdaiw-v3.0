@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="180" viewBox="0 0 720 180">
+  <rect width="720" height="180" rx="24" fill="#FFFFFF"/>
+  <g transform="translate(26 26)">
+    <rect width="128" height="128" rx="25" fill="#002D38"/>
+    <path d="M24 94V34l40 30 40-30v60H84V70L64 85 44 70v24z" fill="#FFFFFF"/>
+    <path d="M24 34 44 49v45H24zM84 49l20-15v60H84z" fill="#76C043"/>
+    <circle cx="64" cy="42" r="8" fill="#0082AD"/>
+  </g>
+  <text x="182" y="92" font-family="Arial, sans-serif" font-size="58" font-weight="700" fill="#002D38">MDAIW</text>
+  <text x="184" y="132" font-family="Arial, sans-serif" font-size="24" fill="#0082AD">Digital AI Workspace</text>
+</svg>
