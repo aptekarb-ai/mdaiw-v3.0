@@ -1,4 +1,4 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import { PublicSidebar } from '../components/navigation/PublicSidebar';
 import { Footer } from '../components/navigation/Footer';
 import './PublicLayout.css';

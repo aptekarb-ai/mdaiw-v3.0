@@ -39,6 +39,15 @@
   background: var(--color-primary-blue);
 }
 
+.app-sidebar__logout {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+}
+
 .app-sidebar__spacer {
   flex: 1;
 }

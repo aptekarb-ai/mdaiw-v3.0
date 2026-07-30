@@ -1,4 +1,7 @@
-import { NavLink } from 'react-router-dom';
+import { useState } from 'react';
+import { NavLink, useNavigate } from 'react-router';
+import { useAuth } from '../../hooks/useAuth';
+import { ConfirmDialog } from '../ConfirmDialog';
 import './AppSidebar.css';
 
 const APP_NAV = [
@@ -16,6 +19,16 @@ const APP_NAV = [
 ];
 
 export function AppSidebar() {
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+  const [confirmingLogout, setConfirmingLogout] = useState(false);
+
+  async function handleConfirmLogout() {
+    setConfirmingLogout(false);
+    await logout();
+    navigate('/login', { replace: true });
+  }
+
   return (
     <aside className="app-sidebar">
       <a
@@ -45,6 +58,13 @@ export function AppSidebar() {
             {item.label}
           </NavLink>
         ))}
+        <button
+          type="button"
+          className="app-sidebar__link app-sidebar__logout"
+          onClick={() => setConfirmingLogout(true)}
+        >
+          Logout
+        </button>
       </nav>
 
       <div className="app-sidebar__spacer" />
@@ -59,6 +79,15 @@ export function AppSidebar() {
         />
         <span>Ask Yukti</span>
       </div>
+
+      <ConfirmDialog
+        open={confirmingLogout}
+        heading="Log out of MDAIW?"
+        body="You will need to sign in again to access your workspace."
+        confirmLabel="Log Out"
+        onConfirm={handleConfirmLogout}
+        onCancel={() => setConfirmingLogout(false)}
+      />
     </aside>
   );
 }
