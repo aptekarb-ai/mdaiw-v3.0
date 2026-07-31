@@ -4,6 +4,7 @@ import type {
   LoginRequest,
   LoginSuccessResponse,
 } from '../types/auth';
+import type { RegistrationResponse } from '../types/registration';
 
 const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -18,13 +19,15 @@ function getCookie(name: string): string | null {
 interface ApiErrorBody {
   message?: string;
   code?: string;
+  errors?: Record<string, string[]>;
 }
 
 async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase();
   const headers = new Headers(options.headers);
+  const isFormData = options.body instanceof FormData;
 
-  if (options.body && !headers.has('Content-Type')) {
+  if (options.body && !isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
 
@@ -66,6 +69,7 @@ async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T
       message: body.message ?? 'Something went wrong. Please try again.',
       code: body.code,
       status: response.status,
+      errors: body.errors,
     };
     throw error;
   }
@@ -94,4 +98,11 @@ export async function logout(): Promise<void> {
 
 export async function getCurrentUser(): Promise<CurrentUserResponse> {
   return apiRequest<CurrentUserResponse>('/api/v1/auth/me/');
+}
+
+export async function registerEmployee(formData: FormData): Promise<RegistrationResponse> {
+  return apiRequest<RegistrationResponse>('/api/v1/auth/register/', {
+    method: 'POST',
+    body: formData,
+  });
 }

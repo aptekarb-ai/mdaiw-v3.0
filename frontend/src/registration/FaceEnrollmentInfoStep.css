@@ -1,0 +1,35 @@
+.face-enrollment-info-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-5);
+  padding: var(--space-6) 0;
+}
+
+.face-enrollment-info-step__illustration {
+  width: 160px;
+  height: 160px;
+}
+
+.face-enrollment-info-step__heading {
+  margin: 0;
+  font-size: 22px;
+  color: var(--color-primary-dark);
+}
+
+.face-enrollment-info-step__body {
+  max-width: 480px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.face-enrollment-info-step__notice {
+  background: var(--color-info-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-primary-dark);
+  font-size: 14px;
+  max-width: 480px;
+}

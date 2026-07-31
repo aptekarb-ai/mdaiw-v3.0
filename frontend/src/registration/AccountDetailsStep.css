@@ -1,0 +1,54 @@
+.account-details-step {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--space-8);
+}
+
+.account-details-step__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.password-requirements {
+  background: var(--color-background-light);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  align-self: flex-start;
+}
+
+.password-requirements__heading {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.password-requirements ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.password-requirements li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.password-requirements li[data-met='true'] {
+  color: var(--color-accent-green);
+  font-weight: 600;
+}
+
+@media (max-width: 1023px) {
+  .account-details-step {
+    grid-template-columns: 1fr;
+  }
+}

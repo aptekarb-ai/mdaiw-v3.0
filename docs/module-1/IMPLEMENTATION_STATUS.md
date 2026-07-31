@@ -7,7 +7,7 @@ MarketOne Digital AI Workspace (MDAIW)
 Module-1 — Application Landing Page, Employee Registration, Password Login, Face Recognition Login, Dashboard Shell, Yukti Text and Voice Assistant
 
 ## 3. Current date
-2026-07-29
+2026-07-31 (last updated after Checkpoint 4)
 
 ## 4. Current Git branch
 feature/module-1
@@ -57,7 +57,7 @@ Backend: 16 tests passing in `backend/accounts/tests.py` (1 health-check + 15 au
 - Username/password login with Django session authentication, CSRF-protected, session-persisted-on-refresh, generic invalid-credentials messaging, protected/public-only route guarding, remember-my-username (username only), working logout with confirmation modal — all verified by automated tests and live manual verification (Checkpoint 3)
 
 ## 14. Missing requirements
-Remaining functional requirements in Master Prompt sections 2–43: registration submission and final `EmployeeProfile` model (Checkpoint 4), Face Recognition enrollment/login and anti-spoofing (Checkpoint 5), Yukti text/voice assistant (Checkpoint 6), dashboard/profile/settings real functionality beyond the Checkpoint 3 identity summary (Checkpoint 7), full test suites, accessibility and security verification (Checkpoint 8).
+Remaining functional requirements in Master Prompt sections 2–43: Face Recognition enrollment/login and anti-spoofing (Checkpoint 5), Yukti text/voice assistant (Checkpoint 6), dashboard/profile/settings real functionality beyond the Checkpoint 3 identity summary (Checkpoint 7), full test suites, accessibility and security verification (Checkpoint 8). Registration submission and `EmployeeProfile` (Checkpoint 4) are now complete — see the Checkpoint 4 section below. The registration wizard's Face Enrollment step (step 3) is intentionally informational only in Checkpoint 4; live camera capture, liveness, embeddings, and `FaceCredential` creation are Checkpoint 5 work.
 
 ## 15. Security boundaries
 Carried forward from `CLAUDE.md`, in force for all future checkpoints:
@@ -213,6 +213,52 @@ No demo credentials are committed anywhere in this repository; `.env.example` an
 
 **No `npm audit fix --force` was run at any point in this migration.**
 
+## Checkpoint 4 — Employee Registration Wizard and EmployeeProfile
+
+### Architecture decisions
+- Domain boundaries per explicit direction: `accounts` app owns Django `User` creation, registration orchestration, and username/email/password validation (`accounts/registration.py`, `accounts/views.py::register_view`); a new `employees` app owns `EmployeeProfile` and its validators (`employees/models.py`, `employees/validators.py`); `faceauth` remains untouched and empty — `FaceCredential`/`FaceLoginAttempt` are Checkpoint 5 work only.
+- Registration stays a plain Django view (not DRF `APIView`), consistent with the Checkpoint 3 CSRF rationale already in this document — CSRF is enforced unconditionally by the real `CsrfViewMiddleware`, not delegated to DRF's session-authentication CSRF path.
+- Backend validation lives in a dedicated `accounts/registration.py` module (`validate_registration(post_data, files) -> (errors, cleaned)`) rather than inline in the view, so the view stays a thin orchestrator around validate → atomic-create → serialize.
+- Photo validation trusts neither the filename extension nor the client `Content-Type` header: `employees/validators.py::validate_profile_photo` decodes the image with Pillow (`Image.verify()` then a second `Image.open()` to read the confirmed `format`) and checks that against an explicit allow-list (`PROFILE_PHOTO_ALLOWED_CONTENT_TYPES` in `settings.py`).
+- Safe storage filenames: `employees/models.py::profile_photo_upload_path` discards the original filename entirely and generates `profile_photos/<uuid4 hex>.<ext>`.
+
+### Backend implementation
+- New `employees` app registered in `INSTALLED_APPS`, migration `employees/migrations/0001_initial.py` applied.
+- `EmployeeProfile` model: `user` (`OneToOneField` to `User`, `CASCADE`), `employee_id` (unique, `RegexValidator` limiting to letters/numbers/hyphens), `designation`, `department`, `location`, `manager_name`, `date_of_joining`, `phone` (`RegexValidator`, international-friendly), `date_of_birth`, `profile_photo` (optional `ImageField`), `registration_status` (`TextChoices`: `PENDING_FACE_ENROLLMENT` default, `ACTIVE`, `REJECTED`, `SUSPENDED`), `created_at`, `updated_at`. `clean()` rejects a `date_of_birth` of today or later (invoked via `full_clean()` in Django Admin). Registered in `employees/admin.py` with list display, filters, and search.
+- `POST /api/v1/auth/register/` (`accounts/urls.py`, `accounts/views.py::register_view`): validates the full multipart payload, then creates `User` (`is_active=False`) and `EmployeeProfile` (`registration_status=PENDING_FACE_ENROLLMENT` by field default) inside a single `transaction.atomic()` block. No Django session is created — the endpoint never calls `login()`. On an `IntegrityError` after a photo was already written to storage, the orphaned file is deleted before returning the error.
+- `Pillow==12.3.0` added to `backend/requirements.txt`. `settings.py` gained `PROFILE_PHOTO_MAX_BYTES` (5 MB) and `PROFILE_PHOTO_ALLOWED_CONTENT_TYPES` (`image/jpeg`, `image/png`, `image/webp`). `mdaiw/urls.py` serves `MEDIA_URL` from `MEDIA_ROOT` when `DEBUG=True`.
+
+### Frontend implementation
+- `types/registration.ts` — `AccountRegistrationData`, `EmployeeRegistrationData`, `RegistrationFormData`, `RegistrationFieldErrors`, `RegistrationResponse` (success/validation-error union), `RegistrationStatus`.
+- `api/client.ts` — added `registerEmployee(formData: FormData)`; the existing `apiRequest` wrapper was fixed to skip the automatic `Content-Type: application/json` header when the request body is a `FormData` instance (previously it would have always set JSON content type, which breaks multipart boundary negotiation — this bug did not manifest before because no caller had ever passed a `FormData` body until this checkpoint).
+- `forms/` (new, shared across future checkpoints too) — `FormField`, `PasswordField` (extracted from `LoginPage`'s inline show/hide pattern), `CheckboxField`, `SelectField`, `DateField`, `PhotoUploader` (object-URL preview with `useEffect` cleanup, client-side type/size validation before the file ever reaches parent state), `ValidationSummary`.
+- `registration/` (new) — `RegistrationWizard` (state/orchestration), `RegistrationStepper` (4-step visual states: upcoming/active/completed), `AccountDetailsStep`, `EmployeeDetailsStep`, `FaceEnrollmentInfoStep` (informational only — no `getUserMedia` call, verified by a test that spies on `navigator.mediaDevices.getUserMedia` and asserts it is never invoked), `ReviewSubmitStep` (passwords excluded, edit-buttons jump back to step 1/2, its own object-URL preview with cleanup), `RegistrationSuccess`, plus `validation.ts` (client-side mirrors of the backend rules) and `fieldMap.ts` (maps backend `snake_case` field errors back to the correct step/field for both display and step-navigation-on-error).
+- `pages/RegisterPage.tsx` replaced the static placeholder with `<RegistrationWizard />`.
+
+### Backend tests
+`backend/employees/tests.py` (2 tests) + `backend/accounts/tests.py` `RegistrationEndpointTests` (31 tests): successful registration, user+profile created together, new user inactive, status `PENDING_FACE_ENROLLMENT`, no session created, missing/duplicate username, missing/malformed/duplicate-case-insensitive work email, missing password, mismatched passwords, weak password rejected by Django's validators, duplicate employee ID, missing first/last name/designation/department/location, invalid/future date of birth, invalid date of joining, invalid phone, valid photo upload, unsupported file type, oversized upload, corrupt image, CSRF enforcement, atomic-rollback-on-duplicate-employee-id (pre-flight validation prevents any partial `User` row), password absent from every response, and a `FaceCredential` model absence check (`apps.get_model('faceauth', 'FaceCredential')` raises `LookupError`, confirming Checkpoint 4 created no face-related record of any kind). Total backend: **49 tests, all passing**.
+
+### Frontend tests
+`registration/RegistrationWizard.test.tsx` (21 tests): renders, all four step labels, Step 1 required validation, password mismatch, show/hide password, valid Step 1→2 navigation, Step 2 required validation, phone validation, date-of-birth-in-future validation, photo preview, unsupported-type rejection (using `userEvent.setup({ applyAccept: false })` to bypass the input's `accept` attribute the way a maliciously-renamed file would), oversized rejection, backward navigation preserving data, Face Enrollment informational step with a `getUserMedia` spy proving no camera call, review screen excluding passwords, edit-from-review returning to the right step, confirmation-checkbox gate, duplicate-submission prevention, backend-error-to-field mapping, success screen with pending-status display, and password-never-in-storage. All 28 pre-existing frontend tests still pass unmodified. Total frontend: **49 tests, all passing** (28 pre-existing + 21 new).
+
+### Validation results
+- Frontend: `npm audit --omit=dev` → 0 vulnerabilities; `npm run lint` → 0 warnings/errors; `npm run type-check` → passed; `npx vitest run` → 49/49 passed; `npm run build` → passed.
+- Backend: `manage.py check` → clean; `makemigrations --check --dry-run` → no changes; `migrate` → applied cleanly; `manage.py test` → 49/49 passed.
+
+### Manual verification (live `manage.py runserver`, curl)
+Performed against a temporary local port (`127.0.0.1:8123`) so the developer's normal dev server port was left untouched:
+1. `GET /api/v1/health/` → 200.
+2. `GET /api/v1/auth/csrf/` → cookie set; registration submitted as `multipart/form-data` with the CSRF token header → `201 Created`, response body matched the spec's example shape exactly (`user_id`, `username`, `employee_id`, `work_email`, `registration_status`, `face_enrollment_required` — no password, no filesystem path).
+3. Confirmed via Django shell: the created `User.is_active` is `False` and `EmployeeProfile.registration_status` is `PENDING_FACE_ENROLLMENT`.
+4. `POST /api/v1/auth/login/` with the new (inactive) account's correct username/password → `401`, `{"code": "INVALID_CREDENTIALS", "message": "Invalid username or password."}` — identical to any other failed login, never revealing the account is pending.
+5. Repeated registration with a real JPEG `profile_photo` (generated via Pillow) → `201`; confirmed the file was written to `media/profile_photos/<uuid>.jpg` (original filename discarded) and that no path appeared anywhere in the JSON response.
+6. Confirmed the pre-existing real superuser account (created by the user outside this session) was completely unaffected: its `password` hash and `last_login` timestamp were read before and after this checkpoint's work and are byte-identical, and `is_active`/`is_superuser` remain `True`. Its actual plaintext password is unknown to this session and was never needed or requested — this check is sufficient to prove Checkpoint 4 did not touch that row, without live-testing a real login for that account. This mirrors the same evidentiary standard used for the CSRF/session checks in Checkpoint 3.
+7. All test data created during manual verification (`manual.tester`, `manual.tester2`, their `EmployeeProfile` rows, and the uploaded test photo) was deleted afterward via the Django ORM/filesystem; the temporary dev server on port 8123 was stopped. The developer's real data (the one pre-existing superuser) was the only row touched by a read, never a write.
+
+### Risks and honest limitations carried forward
+- The Chrome browser extension was still not available this session (same limitation noted in Checkpoint 3) — full click-through-the-actual-wizard-in-a-real-browser verification was substituted with the automated RTL suite (which exercises the real rendered components, not mocks of them) plus the curl-based backend flow above. This should be redone with a real browser once the extension is available.
+- `EmployeeProfile.clean()`'s date-of-birth-in-the-future check is defensive (used by Django Admin's `ModelForm`); the registration endpoint performs its own equivalent check directly in `accounts/registration.py` before any database write, so the two are intentionally redundant rather than the endpoint depending on `full_clean()`.
+
 ## Checkpoint status
 
 | Checkpoint | Description | Status |
@@ -221,7 +267,7 @@ No demo credentials are committed anywhere in this repository; `.env.example` an
 | 1 | Repository audit and implementation tracking | Complete |
 | 2 | Foundation, design system and asset integration | Complete |
 | 3 | Password login and Django session authentication | Complete |
-| 4 | Employee registration wizard | Not started |
+| 4 | Employee registration wizard | Complete |
 | 5 | Face Recognition enrollment and login | Not started |
 | 6 | Yukti text and voice assistant | Not started |
 | 7 | Dashboard, profile, settings and responsive navigation | Not started |

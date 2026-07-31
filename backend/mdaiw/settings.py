@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'accounts',
+    'employees',
     'faceauth',
 ]
 
@@ -123,3 +124,6 @@ FACE_DETECTOR_BACKEND = os.environ.get('FACE_DETECTOR_BACKEND', 'retinaface')
 FACE_DISTANCE_METRIC = os.environ.get('FACE_DISTANCE_METRIC', 'cosine')
 FACE_MAX_FAILED_ATTEMPTS = int(os.environ.get('FACE_MAX_FAILED_ATTEMPTS', '5'))
 FACE_LOCK_MINUTES = int(os.environ.get('FACE_LOCK_MINUTES', '15'))
+
+PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024
+PROFILE_PHOTO_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']

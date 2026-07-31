@@ -1,10 +1,17 @@
 import json
 
-from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth import authenticate, get_user_model, login, logout
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
+
+from employees.models import EmployeeProfile
+
+from .registration import validate_registration
+
+User = get_user_model()
 
 
 def _serialize_user(user):
@@ -76,6 +83,80 @@ def login_view(request):
             'message': 'Signed in successfully.',
             'user': _serialize_user(user),
         }
+    )
+
+
+@require_POST
+def register_view(request):
+    errors, cleaned = validate_registration(request.POST, request.FILES)
+
+    if errors:
+        return JsonResponse(
+            {
+                'success': False,
+                'code': 'VALIDATION_ERROR',
+                'message': 'Please correct the highlighted fields.',
+                'errors': errors,
+            },
+            status=400,
+        )
+
+    photo_storage_field = None
+    photo_storage_name = None
+    try:
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=cleaned.username,
+                email=cleaned.work_email,
+                password=cleaned.password,
+                first_name=cleaned.first_name,
+                last_name=cleaned.last_name,
+                is_active=False,
+            )
+            profile = EmployeeProfile(
+                user=user,
+                employee_id=cleaned.employee_id,
+                designation=cleaned.designation,
+                department=cleaned.department,
+                location=cleaned.location,
+                manager_name=cleaned.manager_name,
+                date_of_joining=cleaned.date_of_joining,
+                phone=cleaned.phone,
+                date_of_birth=cleaned.date_of_birth,
+            )
+            if cleaned.profile_photo is not None:
+                profile.profile_photo = cleaned.profile_photo
+            profile.save()
+            if profile.profile_photo:
+                photo_storage_field = profile.profile_photo.field
+                photo_storage_name = profile.profile_photo.name
+    except IntegrityError:
+        if photo_storage_name and photo_storage_field:
+            photo_storage_field.storage.delete(photo_storage_name)
+        return JsonResponse(
+            {
+                'success': False,
+                'code': 'VALIDATION_ERROR',
+                'message': 'Please correct the highlighted fields.',
+                'errors': {'employee_id': ['This Employee ID is already registered.']},
+            },
+            status=400,
+        )
+
+    return JsonResponse(
+        {
+            'success': True,
+            'message': 'Registration details saved. Complete Face Enrollment to activate your account.',
+            'registration': {
+                'user_id': user.id,
+                'username': user.username,
+                'employee_id': profile.employee_id,
+                'work_email': user.email,
+                'registration_status': profile.registration_status,
+                'face_enrollment_required': True,
+            },
+        },
+        status=201,
     )
 
 
