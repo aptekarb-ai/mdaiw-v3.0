@@ -22,6 +22,7 @@ function renderLoginPage(authOverrides: Partial<ReturnType<typeof useAuth>> = {}
     login,
     logout: vi.fn(),
     clearError,
+    setAuthenticatedUser: vi.fn(),
     ...authOverrides,
   });
 
@@ -30,6 +31,7 @@ function renderLoginPage(authOverrides: Partial<ReturnType<typeof useAuth>> = {}
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/dashboard" element={<div>Dashboard content</div>} />
+        <Route path="/face-login" element={<div>Face login page</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -122,6 +124,15 @@ describe('LoginPage', () => {
     await user.click(screen.getByRole('button', { name: /Sign In/ }));
 
     expect(await screen.findByText('Dashboard content')).toBeInTheDocument();
+  });
+
+  it('navigates to /face-login when Sign in with Face Recognition is clicked', async () => {
+    const user = userEvent.setup();
+    renderLoginPage();
+
+    await user.click(screen.getByRole('button', { name: /Sign in with Face Recognition/ }));
+
+    expect(await screen.findByText('Face login page')).toBeInTheDocument();
   });
 
   it('shows the server error message on invalid credentials', () => {

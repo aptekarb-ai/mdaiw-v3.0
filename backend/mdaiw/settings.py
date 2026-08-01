@@ -118,12 +118,47 @@ CSRF_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 
-FACE_EMBEDDING_ENCRYPTION_KEY = os.environ.get('FACE_EMBEDDING_ENCRYPTION_KEY', '')
+FACE_EMBEDDING_ENCRYPTION_KEYS = [
+    key.strip()
+    for key in os.environ.get('FACE_EMBEDDING_ENCRYPTION_KEYS', '').split(',')
+    if key.strip()
+]
 FACE_MODEL_NAME = os.environ.get('FACE_MODEL_NAME', 'Facenet512')
 FACE_DETECTOR_BACKEND = os.environ.get('FACE_DETECTOR_BACKEND', 'retinaface')
 FACE_DISTANCE_METRIC = os.environ.get('FACE_DISTANCE_METRIC', 'cosine')
 FACE_MAX_FAILED_ATTEMPTS = int(os.environ.get('FACE_MAX_FAILED_ATTEMPTS', '5'))
-FACE_LOCK_MINUTES = int(os.environ.get('FACE_LOCK_MINUTES', '15'))
+FACE_FAILURE_WINDOW_MINUTES = int(os.environ.get('FACE_FAILURE_WINDOW_MINUTES', '15'))
+FACE_LOCK_MINUTES = int(os.environ.get('FACE_LOCK_MINUTES', '30'))
+FACE_CHALLENGE_TTL_SECONDS = int(os.environ.get('FACE_CHALLENGE_TTL_SECONDS', '120'))
+FACE_ENROLLMENT_TOKEN_TTL_SECONDS = int(os.environ.get('FACE_ENROLLMENT_TOKEN_TTL_SECONDS', '900'))
+FACE_MAX_FRAMES = int(os.environ.get('FACE_MAX_FRAMES', '4'))
+FACE_FRAME_MAX_BYTES = int(os.environ.get('FACE_FRAME_MAX_BYTES', str(2 * 1024 * 1024)))
+FACE_ENROLLMENT_RESUME_MAX_ATTEMPTS = int(os.environ.get('FACE_ENROLLMENT_RESUME_MAX_ATTEMPTS', '5'))
+FACE_ENROLLMENT_RESUME_WINDOW_MINUTES = int(os.environ.get('FACE_ENROLLMENT_RESUME_WINDOW_MINUTES', '15'))
+
+# DeepFace downloads model weights to this directory on first use instead of
+# the default ~/.deepface — kept inside the repo but git-ignored so it never
+# gets committed.
+FACE_MODEL_CACHE_DIR = BASE_DIR / '.face-models'
+FACE_MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault('DEEPFACE_HOME', str(FACE_MODEL_CACHE_DIR))
+
+# retina-face==0.0.18's model-construction code (retinaface_model.py) calls
+# raw tf.shape() on a KerasTensor, which TensorFlow 2.21's default Keras 3
+# backend rejects with "A KerasTensor cannot be used as input to a
+# TensorFlow function." tf-keras (installed alongside tensorflow) provides a
+# Keras-2-compatible implementation; this flag routes tf.keras through it,
+# which resolves the incompatibility. Must be set before TensorFlow is first
+# imported anywhere in the process, so it belongs here, at settings load
+# time — not inside faceauth/service.py, which may be imported after some
+# other codepath has already triggered a TensorFlow import.
+os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
 
 PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024
 PROFILE_PHOTO_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+
+# Django upload-size ceiling — comfortably covers FACE_MAX_FRAMES frames at
+# FACE_FRAME_MAX_BYTES each, so an oversized multipart request is rejected by
+# Django itself before any per-file validation or model inference runs.
+DATA_UPLOAD_MAX_MEMORY_SIZE = FACE_MAX_FRAMES * FACE_FRAME_MAX_BYTES + (1 * 1024 * 1024)
+FILE_UPLOAD_MAX_MEMORY_SIZE = FACE_FRAME_MAX_BYTES + (512 * 1024)

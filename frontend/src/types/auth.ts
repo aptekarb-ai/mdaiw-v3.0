@@ -46,4 +46,5 @@ export interface AuthContextValue {
   login: (credentials: LoginRequest) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
+  setAuthenticatedUser: (user: User) => void;
 }

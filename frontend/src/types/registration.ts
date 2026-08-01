@@ -46,6 +46,7 @@ export interface RegistrationSuccessPayload {
   work_email: string;
   registration_status: RegistrationStatus;
   face_enrollment_required: boolean;
+  enrollment_token: string;
 }
 
 export interface RegistrationSuccessResponse {

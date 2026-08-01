@@ -303,6 +303,7 @@ describe('RegistrationWizard', () => {
         work_email: 'new.employee@example.com',
         registration_status: 'PENDING_FACE_ENROLLMENT',
         face_enrollment_required: true,
+        enrollment_token: 'test-enrollment-token',
       },
     });
 
@@ -338,6 +339,7 @@ describe('RegistrationWizard', () => {
         work_email: 'new.employee@example.com',
         registration_status: 'PENDING_FACE_ENROLLMENT',
         face_enrollment_required: true,
+        enrollment_token: 'test-enrollment-token',
       },
     });
 

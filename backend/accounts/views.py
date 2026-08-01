@@ -8,6 +8,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_POST
 
 from employees.models import EmployeeProfile
+from faceauth.tokens import issue_enrollment_token
 
 from .registration import validate_registration
 
@@ -154,6 +155,7 @@ def register_view(request):
                 'work_email': user.email,
                 'registration_status': profile.registration_status,
                 'face_enrollment_required': True,
+                'enrollment_token': issue_enrollment_token(user),
             },
         },
         status=201,

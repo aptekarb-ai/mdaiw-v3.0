@@ -18,6 +18,7 @@ describe('AppSidebar logout', () => {
       login: vi.fn(),
       logout,
       clearError: vi.fn(),
+      setAuthenticatedUser: vi.fn(),
     });
 
     render(

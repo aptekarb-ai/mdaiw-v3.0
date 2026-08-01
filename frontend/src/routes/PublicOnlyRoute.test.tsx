@@ -16,6 +16,7 @@ function renderWithStatus(status: 'loading' | 'authenticated' | 'unauthenticated
     login: vi.fn(),
     logout: vi.fn(),
     clearError: vi.fn(),
+    setAuthenticatedUser: vi.fn(),
   });
 
   return render(

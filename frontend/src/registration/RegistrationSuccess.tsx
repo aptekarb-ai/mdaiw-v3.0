@@ -1,4 +1,4 @@
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { RegistrationSuccessPayload } from '../types/registration';
 import './RegistrationSuccess.css';
 
@@ -7,6 +7,14 @@ interface RegistrationSuccessProps {
 }
 
 export function RegistrationSuccess({ registration }: RegistrationSuccessProps) {
+  const navigate = useNavigate();
+
+  function goToFaceEnrollment() {
+    navigate('/face-enrollment', {
+      state: { enrollmentToken: registration.enrollment_token, username: registration.username },
+    });
+  }
+
   return (
     <div className="registration-success">
       <span
@@ -43,8 +51,15 @@ export function RegistrationSuccess({ registration }: RegistrationSuccessProps) 
         Face Enrollment required
       </p>
 
-      <Link to="/login" className="button button--primary registration-success__action">
-        Return to Login →
+      <button
+        type="button"
+        className="button button--primary registration-success__action"
+        onClick={goToFaceEnrollment}
+      >
+        Continue to Face Enrollment →
+      </button>
+      <Link to="/login" className="registration-success__secondary-action">
+        Return to Login
       </Link>
     </div>
   );

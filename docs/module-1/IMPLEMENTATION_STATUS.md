@@ -7,7 +7,7 @@ MarketOne Digital AI Workspace (MDAIW)
 Module-1 — Application Landing Page, Employee Registration, Password Login, Face Recognition Login, Dashboard Shell, Yukti Text and Voice Assistant
 
 ## 3. Current date
-2026-07-31 (last updated after Checkpoint 4)
+2026-08-01 (last updated after Checkpoint 5 real webcam verification)
 
 ## 4. Current Git branch
 feature/module-1
@@ -57,7 +57,7 @@ Backend: 16 tests passing in `backend/accounts/tests.py` (1 health-check + 15 au
 - Username/password login with Django session authentication, CSRF-protected, session-persisted-on-refresh, generic invalid-credentials messaging, protected/public-only route guarding, remember-my-username (username only), working logout with confirmation modal — all verified by automated tests and live manual verification (Checkpoint 3)
 
 ## 14. Missing requirements
-Remaining functional requirements in Master Prompt sections 2–43: Face Recognition enrollment/login and anti-spoofing (Checkpoint 5), Yukti text/voice assistant (Checkpoint 6), dashboard/profile/settings real functionality beyond the Checkpoint 3 identity summary (Checkpoint 7), full test suites, accessibility and security verification (Checkpoint 8). Registration submission and `EmployeeProfile` (Checkpoint 4) are now complete — see the Checkpoint 4 section below. The registration wizard's Face Enrollment step (step 3) is intentionally informational only in Checkpoint 4; live camera capture, liveness, embeddings, and `FaceCredential` creation are Checkpoint 5 work.
+Remaining functional requirements in Master Prompt sections 2–43: Yukti text/voice assistant (Checkpoint 6), dashboard/profile/settings real functionality beyond the Checkpoint 3 identity summary and Face status/removal wiring (Checkpoint 7), full test suites, accessibility and security verification (Checkpoint 8). Face Recognition enrollment/login and anti-spoofing (Checkpoint 5) are now complete, including user-performed real webcam verification — see the Checkpoint 5 section below.
 
 ## 15. Security boundaries
 Carried forward from `CLAUDE.md`, in force for all future checkpoints:
@@ -259,6 +259,89 @@ Performed against a temporary local port (`127.0.0.1:8123`) so the developer's n
 - The Chrome browser extension was still not available this session (same limitation noted in Checkpoint 3) — full click-through-the-actual-wizard-in-a-real-browser verification was substituted with the automated RTL suite (which exercises the real rendered components, not mocks of them) plus the curl-based backend flow above. This should be redone with a real browser once the extension is available.
 - `EmployeeProfile.clean()`'s date-of-birth-in-the-future check is defensive (used by Django Admin's `ModelForm`); the registration endpoint performs its own equivalent check directly in `accounts/registration.py` before any database write, so the two are intentionally redundant rather than the endpoint depending on `full_clean()`.
 
+## Checkpoint 5 — Face Enrollment, Liveness Validation and Face Recognition Login
+
+**Status: Complete.** Every layer (models, service, encryption, endpoints, frontend camera/liveness flow, tests) is implemented, passing automated validation, and has now been confirmed by the user through real webcam manual verification (see "Real webcam manual verification" below) covering every mandatory item.
+
+### Security position
+Defense-in-depth per the approved architecture: biometric consent, browser camera permission, randomized active-liveness challenge (backend-issued, frontend-guided via MediaPipe), backend single-face validation, backend DeepFace anti-spoofing, multi-frame identity consistency (cosine distance across all frames in a set, using DeepFace's own pre-tuned threshold — never an invented one), encrypted embedding storage (Fernet/MultiFernet), one-to-one username-based verification (never one-to-many search), rate limiting/lockout, and password fallback always available. This is explicitly documented as an MVP implementation, not certified production-grade biometric liveness — see "Known limitations" below.
+
+### Dependencies
+Full resolved set pinned in `backend/requirements.txt`: `deepface==0.0.100`, `retina-face==0.0.18`, `tensorflow==2.21.0`, `tf-keras==2.21.0` (added after discovering the incompatibility below), `cryptography==50.0.0`, `numpy==2.5.1`, `opencv-python==5.0.0.93` (deepface hard-depends on the GUI build directly in its own metadata — `opencv-python-headless` cannot be substituted without patching deepface itself), plus deepface's full transitive tree (pandas, keras, mtcnn, Flask, etc. — all pinned exactly). `pip check` reports no broken requirements. Frontend: `@mediapipe/tasks-vision@0.10.35` (exact), `npm audit --omit=dev` reports 0 vulnerabilities.
+
+### Discovered and fixed: retina-face vs. Keras 3
+While performing real (non-mocked) verification, the very first live face-detection call crashed with `ValueError: A KerasTensor cannot be used as input to a TensorFlow function.` — `retina-face==0.0.18`'s model-construction code (`retinaface_model.py`) calls raw `tf.shape()` on a `KerasTensor`, which TensorFlow 2.21's default Keras 3 backend rejects. This is a genuine upstream compatibility gap between the versions the checkpoint specified, not a defect introduced by this project's own code (which already never lets a raw DeepFace/TensorFlow exception reach an API response, regardless). **Fix:** `backend/mdaiw/settings.py` sets `os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')` at settings-load time, routing `tf.keras` through the installed `tf-keras` package (Keras-2-API compatible) instead of Keras 3. Verified by reproducing the exact same face-detection call against the exact same input twice — crashed without the flag, returned a clean `NO_FACE` result with it — see `backend/README.md`'s "Known issue and fix" section for the full reproduction.
+
+### Model/asset cache directories
+`backend/.face-models/` (git-ignored) — `DEEPFACE_HOME` is redirected here via `os.environ.setdefault` in `settings.py`, confirmed by inspecting the directory after a real download: `.face-models/.deepface/weights/retinaface.h5` (~119 MB). `frontend/public/assets/mediapipe/` (git-ignored: `*.task` and `wasm/`) — `frontend/scripts/setup-face-landmarker.ps1` copies the WASM vision runtime out of `node_modules/@mediapipe/tasks-vision/wasm` (no network needed, already on disk after `npm install`) and downloads `face_landmarker.task` from Google's model CDN (network needed, once).
+
+### Backend implementation
+- `faceauth/models.py` — `FaceCredential` (OneToOne `User`; `encrypted_embedding` TextField, `model_name`, `detector_backend`, `distance_metric`, `enrollment_frame_count`, `is_active`, `revoked_at`, `last_verified_at`), `FaceChallenge` (`token_hash` unique, `purpose` ENROLL/LOGIN, nullable `user` FK, `challenge_actions` JSONField, `expires_at`, `used_at`, `failed_attempts`), `FaceLoginAttempt` (nullable `user` FK, `username_hash`, `success`, `reason_code`, `distance`, `threshold`, `ip_hash`, `user_agent_hash`). Migration `faceauth/migrations/0001_initial.py`. Admin registration explicitly excludes `encrypted_embedding` from every surface (`list_display`, `readonly_fields`, and `exclude`).
+- `faceauth/hashing.py` — `generate_token()` (`secrets.token_urlsafe(32)`), `hash_token()` (SHA-256, only the hash is ever stored), `keyed_hash()` (HMAC-SHA256 with `DJANGO_SECRET_KEY` as a pepper, used only to pseudonymize username/IP/user-agent for audit logs — unrelated to and never used for biometric embedding encryption).
+- `faceauth/encryption.py` — `MultiFernet` over `FACE_EMBEDDING_ENCRYPTION_KEYS` (comma-separated; first key encrypts, all decrypt, enabling rotation). Embedding serialized as JSON (never pickle) with model/metric/detector metadata before encryption. Raises `EncryptionKeyMissing` when unconfigured and `EmbeddingDecryptionFailed` for corrupt/untrusted ciphertext — both are safe-failure conditions the calling view maps to a generic error, never a crash.
+- `faceauth/tokens.py` — `issue_enrollment_token`/`verify_enrollment_token` using `django.core.signing` (`FACE_ENROLLMENT_TOKEN_TTL_SECONDS`, default 900s). Re-checks `is_active`/`registration_status` at verify time (not just signature/expiry), which is what makes a token issued before a successful enrollment unusable afterward even though it would still cryptographically verify.
+- `faceauth/lockout.py` — computes lockout purely from `FaceLoginAttempt` rows: counts failures since the most recent success (so a success resets the counter) within `FACE_FAILURE_WINDOW_MINUTES` (15), locks for `FACE_LOCK_MINUTES` (30) if `FACE_MAX_FAILED_ATTEMPTS` (5) is reached. Never touches password login.
+- `faceauth/throttling.py` — simple `django.core.cache` counter (default LocMemCache, fine for this MVP's single-process dev target — no Redis introduced) for enrollment-resume rate limiting.
+- `faceauth/service.py` — every DeepFace/TensorFlow call isolated behind small wrapper functions (`_extract_faces`, `_represent`, `_verification_threshold`) so tests can mock them without ever importing TensorFlow. `decode_frame` validates size then verifies real image content with Pillow (`CAMERA_FRAME_INVALID` on failure) before any model call runs. `analyze_single_face` enforces exactly one real (non-spoofed) face (`NO_FACE`/`MULTIPLE_FACES`/`LIVENESS_FAILED`). `process_enrollment_frames`/`process_verification_frames` extract per-frame embeddings and reject cross-frame inconsistency (`INCONSISTENT_FRAMES`) using DeepFace's own pre-tuned cosine threshold (`deepface.modules.verification.find_threshold`) — never an invented number. `enroll()`/`verify()` tie it all together; `verify()` also checks the stored credential's model/metric metadata matches current config (`MODEL_MISMATCH`) before comparing.
+- `faceauth/views.py` — `challenge_view`, `enroll_view`, `verify_view`, `status_view`, `enrollment_view` (DELETE), `enrollment_resume_view`. All plain Django views (same CSRF rationale as `accounts` — real `CsrfViewMiddleware` enforcement, not DRF's session-authentication-gated CSRF path). `verify_view` always returns the identical generic `FACE_AUTHENTICATION_FAILED` body regardless of cause, recording the true `reason_code` only on `FaceLoginAttempt` for internal audit. `enroll_view` wraps `FaceCredential` creation + `User.is_active = True` + `EmployeeProfile.registration_status = ACTIVE` in one `transaction.atomic()` block.
+- `accounts/views.py::register_view` now also calls `faceauth.tokens.issue_enrollment_token(user)` and includes it as `registration.enrollment_token` in the success response.
+- `mdaiw/urls.py` mounts `faceauth.urls` at `api/v1/auth/face/`. `mdaiw/settings.py` gained `FACE_EMBEDDING_ENCRYPTION_KEYS` (replacing the unused singular Checkpoint-2-era placeholder), `FACE_FAILURE_WINDOW_MINUTES`, `FACE_LOCK_MINUTES` (15→30 to match this checkpoint's explicit policy), `FACE_CHALLENGE_TTL_SECONDS`, `FACE_ENROLLMENT_TOKEN_TTL_SECONDS`, `FACE_MAX_FRAMES`, `FACE_FRAME_MAX_BYTES`, `FACE_ENROLLMENT_RESUME_MAX_ATTEMPTS/WINDOW_MINUTES`, `FACE_MODEL_CACHE_DIR`/`DEEPFACE_HOME` redirection, `TF_USE_LEGACY_KERAS`, and `DATA_UPLOAD_MAX_MEMORY_SIZE`/`FILE_UPLOAD_MAX_MEMORY_SIZE` sized to comfortably cover `FACE_MAX_FRAMES` × `FACE_FRAME_MAX_BYTES` (Django itself rejects an oversized multipart request before any of our own validation or model inference runs).
+
+### Frontend implementation
+- `hooks/useCamera.ts` — `getUserMedia` only on explicit `start()` call (never on mount), `{video:{facingMode:'user'}, audio:false}`, maps `NotAllowedError`/`NotFoundError`/`NotReadableError` to distinct statuses, `stop()` stops every track and clears `video.srcObject`, cleanup on unmount via `useEffect` return, `captureFrame()` draws the current frame to an off-DOM canvas and resolves a JPEG `Blob`.
+- `hooks/useFaceLandmarker.ts` — loads `FaceLandmarker` from the local `/assets/mediapipe/` WASM+model path (not a CDN), `numFaces: 1`, blendshapes + facial transformation matrices enabled. Exports pure, independently-tested functions `faceCount()` and `isActionComplete()` (yaw estimated from the transformation matrix for `LOOK_CENTER`/`TURN_LEFT`/`TURN_RIGHT`; `eyeBlinkLeft`/`eyeBlinkRight` blendshape score for `BLINK`) — documented as a coarse UX-guidance heuristic only; the backend independently re-validates liveness and identity on every submitted frame regardless of what this reports.
+- `face-recognition/` — `CameraPreview`, `FaceFrameOverlay` (reuses the supplied `face-scan-frame.svg`), `LivenessChallenge`, `CaptureProgress`, `FaceProcessingState`, `FaceAuthError`, `BiometricConsent` (unchecked by default).
+- `pages/FaceEnrollmentPage.tsx` — resume-form stage (when the in-memory token was lost, e.g. a refresh) → consent → camera → liveness capture (auto-advances through the randomized action list, one frame per completed action, guarded against duplicate capture) → processing → success (calls `getCurrentUser()` then `AuthContext.setAuthenticatedUser()`, navigates to `/dashboard`) → error (retry or password fallback). Camera is stopped on success, failure, cancel, and unmount.
+- `pages/FaceLoginPage.tsx` — username + consent → camera → liveness capture → verification. On success, `submitVerification`'s response already includes the full `user` object (unlike enroll), so `AuthContext.setAuthenticatedUser()` is called directly without an extra request, then navigates to `/dashboard`. On failure, generic `FaceAuthError` with password fallback.
+- `context/AuthProvider.tsx`/`types/auth.ts` — added `setAuthenticatedUser(user)` to `AuthContextValue`, since Face Enrollment/Face Recognition login create a Django session out-of-band (not through the existing `login()` password flow) and need a way to hydrate the same context.
+- `pages/LoginPage.tsx` — the previously `disabled` "Sign in with Face Recognition" button is now enabled and navigates to `/face-login`, passing the typed username via router state.
+- `App.tsx` — added `/face-enrollment` (outside `ProtectedRoute`/`PublicOnlyRoute` — reachable by pending, genuinely unauthenticated users, which is the entire point) and `/face-login` (under `PublicOnlyRoute`, alongside `/login`/`/register`).
+
+### Backend tests
+`faceauth/tests.py` (54 tests, DeepFace fully mocked via `_extract_faces`/`_represent`/`_verification_threshold` patches, temporary Fernet keys via `override_settings`): challenge creation (enroll/login/unknown-username), randomized-actions structural check, token-hash-not-raw-token, invalid/expired/single-use/wrong-purpose challenge rejection, CSRF enforcement (challenge/enroll/verify/deletion), consent required, zero/multiple-face rejection, spoof rejection, inconsistent-frames rejection, corrupt-image rejection, oversized-frame rejection, successful enrollment (+ user activated, profile ACTIVE, credential decryptable, no plaintext embedding in DB, no file fields on the model, embedding never in response), atomic rollback on credential conflict, missing-encryption-key safe failure, successful/failed/inactive-user/missing-credential/revoked-credential/corrupt-credential verification, generic-failure-identical-across-causes, lockout after 5 failures + reset on success, password login unaffected during lockout, session created on success, status endpoint (authentication required, hides embedding), deletion (valid/invalid password, CSRF), enrollment-resume (correct/incorrect password, unknown username, already-active account, no session created, throttling). `accounts/tests.py::test_no_facecredential_created` updated from a Checkpoint-4-era "model doesn't exist" check to a real "registration alone creates zero `FaceCredential` rows" functional check, since the model now genuinely exists. **Total backend: 103 tests, all passing** (49 pre-existing + 54 new).
+
+### Frontend tests
+`hooks/useCamera.test.ts` (9): no request before `start()`, ready/denied/unavailable/busy/unsupported/insecure-context statuses, track stopped on `stop()` and on unmount. `hooks/useFaceLandmarker.test.ts` (11): `faceCount`/`isActionComplete` pure-function unit tests including real yaw-matrix math for `TURN_LEFT`/`TURN_RIGHT` and blendshape-score math for `BLINK` (no mocking — these are genuinely exercised, not stubbed). `pages/FaceEnrollmentPage.test.tsx` (9) and `pages/FaceLoginPage.test.tsx` (8): consent gating, camera not requested before user action, permission-error display, one-capture-per-action (asserted via mock call count), full success path (submission → `getCurrentUser`/`setAuthenticatedUser` → `/dashboard`), failure path with camera stopped, cancel with camera stopped and redirect, resume-form flow, router-state username prefill, no frames/tokens/credentials ever written to Local/Session Storage. One test added to `pages/LoginPage.test.tsx` for the newly-enabled Face Recognition button. **Total frontend: 87 tests, all passing** (49 pre-existing + 38 new).
+
+### Validation results
+- Frontend: `npm audit --omit=dev` → 0 vulnerabilities; `npm run lint` → 0 warnings/errors; `npm run type-check` → passed; `npx vitest run` → 87/87 passed; `npm run build` → passed.
+- Backend: `pip check` → no broken requirements; `manage.py check` → clean; `makemigrations --check --dry-run` → no changes; `manage.py test` → 103/103 passed.
+
+### Real (non-mocked) script/HTTP-level verification performed by the assistant
+Performed earlier in this checkpoint, before real webcam access was available, against the actual installed DeepFace/TensorFlow/RetinaFace stack (not mocked), via a temporary local port (`127.0.0.1:8125`) so the developer's normal dev port was left untouched:
+1. Cold model download: first real `analyze_single_face` call downloaded RetinaFace weights (~119 MB) to `backend/.face-models/.deepface/weights/retinaface.h5` (confirming `DEEPFACE_HOME` redirection works) and completed in **45.0 seconds**; a second call in a fresh process with weights already cached took **31.4 seconds** (import-chain-dominated, not network — this cost is paid once per server process, not per request).
+2. This is where the retina-face/Keras-3 incompatibility (documented above) was actually discovered: a later real detection call crashed with the KerasTensor `ValueError`. Reproduced deterministically, root-caused to `retinaface_model.py`'s `tf.shape()` call, fixed via `TF_USE_LEGACY_KERAS=1`, and reproduced again post-fix returning a clean result — both reproductions used the identical input file.
+3. Full real HTTP flow after the fix: registered a real pending user via `POST /register/` → received a genuine signed `enrollment_token` → `POST /face/challenge/` with `purpose=ENROLL` returned a genuinely **randomized** 3-action subset (observed two different orderings across two runs: `["BLINK","LOOK_CENTER","TURN_RIGHT"]` and `["TURN_LEFT","TURN_RIGHT","LOOK_CENTER"]`) → `POST /face/enroll/` with 3 synthetic solid-color JPEG frames correctly returned `{"success": false, "code": "NO_FACE", ...}` — proving the complete real stack (token verification, challenge validation, frame decoding, real RetinaFace detection) is genuinely wired end-to-end.
+4. All test users/profiles/challenges created during this verification were deleted afterward; the temporary dev server was stopped; no data belonging to the developer's real accounts was touched.
+
+### Real webcam manual verification (user-performed)
+The user completed the full webcam click-through and confirmed every mandatory item:
+- Real webcam permission and preview
+- Biometric consent
+- Randomized liveness challenge
+- Face Enrollment
+- User activated after enrollment
+- `EmployeeProfile` changed to `ACTIVE`
+- Encrypted `FaceCredential` created
+- No raw Face Recognition frames retained
+- Camera tracks stopped after completion and cancellation
+- Face Recognition login
+- Django session restoration after refresh
+- Incorrect-person rejection
+- Photograph/screen-replay behaviour
+- Face failure lockout
+- Password-login fallback
+- Generic public failure messages
+- No passwords, frames, embeddings, or biometric tokens in browser storage
+
+This closes the gap flagged in the prior update of this document (implementation complete but manual verification pending) — Checkpoint 5 is now fully verified end-to-end by a human with a real camera, not just by automated tests and script/HTTP-level checks.
+
+### Known limitations (documented per the master prompt's honesty requirement)
+- This is an MVP liveness implementation (randomized-action + anti-spoofing + cross-frame consistency), not a certified, production-grade biometric liveness system — specialist evaluation is recommended before any production use.
+- The frontend's yaw/blink heuristics (`isActionComplete`) are coarse UX guidance only; they do not gate security in any way — the backend independently re-validates every frame regardless of what the client believed was true.
+- `/face/verify/`'s challenge-issuance step does not defend against timing-based username enumeration (a nonexistent username's challenge is created identically to a real one, but request latency for the subsequent verify call could theoretically differ) — noted as a gap, not engineered around, given MVP scope.
+- `django.core.cache`'s default LocMemCache backs enrollment-resume throttling — fine for this MVP's single-process target, would need a shared backend (still not Redis/Celery per the Module-1 infra exclusion, but something process-shared) for a real multi-process deployment.
+
 ## Checkpoint status
 
 | Checkpoint | Description | Status |
@@ -268,7 +351,7 @@ Performed against a temporary local port (`127.0.0.1:8123`) so the developer's n
 | 2 | Foundation, design system and asset integration | Complete |
 | 3 | Password login and Django session authentication | Complete |
 | 4 | Employee registration wizard | Complete |
-| 5 | Face Recognition enrollment and login | Not started |
+| 5 | Face Recognition enrollment and login | Complete |
 | 6 | Yukti text and voice assistant | Not started |
 | 7 | Dashboard, profile, settings and responsive navigation | Not started |
 | 8 | Security, accessibility, testing and final verification | Not started |

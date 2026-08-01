@@ -67,8 +67,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearError = useCallback(() => setError(null), []);
 
+  const setAuthenticatedUser = useCallback((nextUser: User) => {
+    setUser(nextUser);
+    setStatus('authenticated');
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ status, user, error, login, logout, clearError }}>
+    <AuthContext.Provider value={{ status, user, error, login, logout, clearError, setAuthenticatedUser }}>
       {children}
     </AuthContext.Provider>
   );

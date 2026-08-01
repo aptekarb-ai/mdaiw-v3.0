@@ -421,8 +421,7 @@ class RegistrationEndpointTests(TestCase):
         self.assertNotIn('StrongPass123', json.dumps(response.json()))
 
     def test_no_facecredential_created(self):
-        from django.apps import apps
+        from faceauth.models import FaceCredential
 
         self.client.post('/api/v1/auth/register/', self._valid_payload())
-        with self.assertRaises(LookupError):
-            apps.get_model('faceauth', 'FaceCredential')
+        self.assertEqual(FaceCredential.objects.count(), 0)

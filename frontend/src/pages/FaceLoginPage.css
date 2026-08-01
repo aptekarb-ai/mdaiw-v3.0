@@ -1,0 +1,38 @@
+.face-login-page {
+  max-width: 640px;
+  margin: var(--space-8) auto;
+}
+
+.face-login-page__card {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  box-shadow: var(--shadow-card);
+}
+
+.face-login-page__eyebrow {
+  margin: 0;
+  color: var(--color-primary-blue);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.face-login-page__heading {
+  margin: var(--space-2) 0 var(--space-2);
+  font-size: 26px;
+  color: var(--color-primary-dark);
+}
+
+.face-login-page__supporting {
+  margin: 0 0 var(--space-6);
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.face-login-page__actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-6);
+}

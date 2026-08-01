@@ -181,15 +181,11 @@ export function LoginPage() {
         <button
           type="button"
           className="button button--outline login-page__face-button"
-          disabled
-          aria-describedby="login-face-note"
+          onClick={() => navigate('/face-login', { state: { username: username.trim() } })}
         >
           <span className="mdaiw-icon mdaiw-icon--face-scan" aria-hidden="true" />
           Sign in with Face Recognition
         </button>
-        <p id="login-face-note" className="login-page__face-note">
-          Face Recognition login will be available in Checkpoint 5.
-        </p>
 
         <button type="button" className="login-page__yukti-button" disabled>
           <span className="mdaiw-icon mdaiw-icon--microphone" aria-hidden="true" />

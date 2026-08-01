@@ -64,3 +64,10 @@
 .registration-success__action {
   width: 100%;
 }
+
+.registration-success__secondary-action {
+  display: block;
+  margin-top: var(--space-3);
+  color: var(--color-primary-blue);
+  font-size: 14px;
+}

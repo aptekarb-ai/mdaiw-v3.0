@@ -22,7 +22,7 @@ interface ApiErrorBody {
   errors?: Record<string, string[]>;
 }
 
-async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method ?? 'GET').toUpperCase();
   const headers = new Headers(options.headers);
   const isFormData = options.body instanceof FormData;
