@@ -33,6 +33,7 @@ INSTALLED_APPS = [
     'accounts',
     'employees',
     'faceauth',
+    'yukti',
 ]
 
 MIDDLEWARE = [
@@ -237,3 +238,21 @@ PROFILE_PHOTO_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 # Django itself before any per-file validation or model inference runs.
 DATA_UPLOAD_MAX_MEMORY_SIZE = FACE_MAX_FRAMES * FACE_FRAME_MAX_BYTES + (1 * 1024 * 1024)
 FILE_UPLOAD_MAX_MEMORY_SIZE = FACE_FRAME_MAX_BYTES + (512 * 1024)
+
+YUKTI_INTENT_MAX_REQUESTS = int(os.environ.get('YUKTI_INTENT_MAX_REQUESTS', '30'))
+YUKTI_INTENT_WINDOW_SECONDS = int(os.environ.get('YUKTI_INTENT_WINDOW_SECONDS', '60'))
+
+# Optional AI-backed Yukti provider. Empty/unset YUKTI_AI_PROVIDER (the
+# default) or a missing OPENAI_API_KEY means Yukti runs the deterministic
+# rule-based router only — see yukti/providers.py::get_default_provider().
+YUKTI_AI_PROVIDER = os.environ.get('YUKTI_AI_PROVIDER', '')
+YUKTI_AI_MODEL = os.environ.get('YUKTI_AI_MODEL', 'gpt-4o-mini')
+YUKTI_AI_TIMEOUT_SECONDS = float(os.environ.get('YUKTI_AI_TIMEOUT_SECONDS', '8'))
+YUKTI_AI_MAX_OUTPUT_TOKENS = int(os.environ.get('YUKTI_AI_MAX_OUTPUT_TOKENS', '400'))
+# Separate, tighter throttle for the paid provider call itself — a traffic
+# spike degrades to the free deterministic router rather than the API bill.
+YUKTI_AI_MAX_REQUESTS_PER_WINDOW = int(os.environ.get('YUKTI_AI_MAX_REQUESTS_PER_WINDOW', '20'))
+YUKTI_AI_WINDOW_SECONDS = int(os.environ.get('YUKTI_AI_WINDOW_SECONDS', '60'))
+# Server-only. Never exposed to Vite/frontend JavaScript, never returned in
+# any API response, never committed with a real value (see .env.example).
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')

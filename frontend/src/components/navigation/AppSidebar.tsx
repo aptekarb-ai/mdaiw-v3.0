@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router';
 import { useAuth } from '../../hooks/useAuth';
+import { useYukti } from '../../hooks/useYukti';
 import { ConfirmDialog } from '../ConfirmDialog';
 import './AppSidebar.css';
 
@@ -20,6 +21,7 @@ const APP_NAV = [
 
 export function AppSidebar() {
   const { logout } = useAuth();
+  const { open: openYukti } = useYukti();
   const navigate = useNavigate();
   const [confirmingLogout, setConfirmingLogout] = useState(false);
 
@@ -69,7 +71,7 @@ export function AppSidebar() {
 
       <div className="app-sidebar__spacer" />
 
-      <div className="app-sidebar__yukti">
+      <button type="button" className="app-sidebar__yukti" onClick={openYukti}>
         <img
           src="/assets/mdaiw/images/yukti-assistant.svg"
           alt=""
@@ -78,7 +80,7 @@ export function AppSidebar() {
           height={24}
         />
         <span>Ask Yukti</span>
-      </div>
+      </button>
 
       <ConfirmDialog
         open={confirmingLogout}

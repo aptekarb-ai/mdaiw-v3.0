@@ -3,9 +3,14 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import { AppSidebar } from './AppSidebar';
 import { useAuth } from '../../hooks/useAuth';
+import { useYukti } from '../../hooks/useYukti';
 
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: vi.fn(),
+}));
+
+vi.mock('../../hooks/useYukti', () => ({
+  useYukti: vi.fn(),
 }));
 
 describe('AppSidebar logout', () => {
@@ -20,6 +25,7 @@ describe('AppSidebar logout', () => {
       clearError: vi.fn(),
       setAuthenticatedUser: vi.fn(),
     });
+    vi.mocked(useYukti).mockReturnValue({ open: vi.fn() } as unknown as ReturnType<typeof useYukti>);
 
     render(
       <MemoryRouter initialEntries={['/dashboard']}>

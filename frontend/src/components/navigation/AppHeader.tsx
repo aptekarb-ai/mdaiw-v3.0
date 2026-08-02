@@ -1,6 +1,9 @@
+import { useYukti } from '../../hooks/useYukti';
 import './AppHeader.css';
 
 export function AppHeader() {
+  const { open } = useYukti();
+
   return (
     <header className="app-header">
       <div className="app-header__search">
@@ -9,8 +12,10 @@ export function AppHeader() {
           type="search"
           placeholder="Search or ask Yukti..."
           aria-label="Search or ask Yukti"
+          onClick={open}
+          readOnly
         />
-        <button type="button" aria-label="Talk to Yukti" disabled>
+        <button type="button" aria-label="Talk to Yukti" onClick={open}>
           <span
             className="mdaiw-icon mdaiw-icon--microphone"
             aria-hidden="true"

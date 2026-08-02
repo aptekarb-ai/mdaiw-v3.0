@@ -14,6 +14,7 @@ urlpatterns = [
     path('api/v1/health/', health_check, name='health-check'),
     path('api/v1/auth/', include('accounts.urls')),
     path('api/v1/auth/face/', include('faceauth.urls')),
+    path('api/v1/yukti/', include('yukti.urls')),
 ]
 
 if settings.DEBUG:
