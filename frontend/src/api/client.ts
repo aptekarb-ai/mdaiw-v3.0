@@ -20,6 +20,7 @@ interface ApiErrorBody {
   message?: string;
   code?: string;
   errors?: Record<string, string[]>;
+  request_id?: string;
 }
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -46,7 +47,14 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
       headers,
       credentials: 'include',
     });
-  } catch {
+  } catch (caught) {
+    // An abort (whether from a caller-supplied timeout or an explicit user
+    // cancel) is not a network failure — re-throw it as-is so callers can
+    // tell the two apart and show the right message, instead of collapsing
+    // every fetch failure into the same generic text.
+    if (caught instanceof DOMException && caught.name === 'AbortError') {
+      throw caught;
+    }
     const error: ApiError = {
       message: 'We could not connect. Check your connection and try again.',
     };
@@ -70,6 +78,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
       code: body.code,
       status: response.status,
       errors: body.errors,
+      requestId: body.request_id,
     };
     throw error;
   }

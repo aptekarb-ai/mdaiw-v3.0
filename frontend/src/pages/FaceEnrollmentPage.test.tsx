@@ -5,15 +5,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FaceEnrollmentPage } from './FaceEnrollmentPage';
 import { useCamera } from '../hooks/useCamera';
 import { isActionComplete, useFaceLandmarker } from '../hooks/useFaceLandmarker';
+import { useFaceReadiness } from '../hooks/useFaceReadiness';
 import { useAuth } from '../hooks/useAuth';
 import { createEnrollChallenge, resumeEnrollment, submitEnrollment } from '../api/faceauth';
 import { getCurrentUser } from '../api/client';
 
-vi.mock('../hooks/useCamera', () => ({ useCamera: vi.fn() }));
+vi.mock('../hooks/useCamera', () => ({ useCamera: vi.fn(), isFrameQualityAcceptable: vi.fn(() => true) }));
 vi.mock('../hooks/useFaceLandmarker', () => ({
   useFaceLandmarker: vi.fn(),
   isActionComplete: vi.fn(),
+  isFramePositionAcceptable: vi.fn(() => true),
+  createBlinkCycleTracker: vi.fn(() => ({ update: vi.fn(() => false), reset: vi.fn() })),
+  buildLivenessDiagnostics: vi.fn(() => null),
 }));
+vi.mock('../hooks/useFaceReadiness', () => ({ useFaceReadiness: vi.fn() }));
 vi.mock('../hooks/useAuth', () => ({ useAuth: vi.fn() }));
 vi.mock('../api/faceauth', () => ({
   createEnrollChallenge: vi.fn(),
@@ -71,6 +76,7 @@ describe('FaceEnrollmentPage', () => {
       clearError: vi.fn(),
       setAuthenticatedUser: vi.fn(),
     });
+    vi.mocked(useFaceReadiness).mockReturnValue({ status: 'READY', retry: vi.fn() });
     window.localStorage.clear();
     window.sessionStorage.clear();
   });
@@ -124,7 +130,22 @@ describe('FaceEnrollmentPage', () => {
     await user.click(screen.getByRole('button', { name: 'Continue →' }));
 
     expect(await screen.findByRole('button', { name: 'Open Camera' })).toBeInTheDocument();
-    expect(resumeEnrollment).toHaveBeenCalledWith('pending.user', 'StrongPass123');
+    expect(resumeEnrollment).toHaveBeenCalledWith('pending.user', 'StrongPass123', 'enroll');
+  });
+
+  it('offers a Skip option that activates the account without opening the camera', async () => {
+    vi.mocked(resumeEnrollment).mockResolvedValue({ success: true, activated: true, face_enrolled: false });
+    const user = userEvent.setup();
+    renderPage(undefined);
+
+    await user.type(screen.getByLabelText(/^Username/), 'pending.user');
+    await user.type(screen.getByLabelText(/^Password/), 'StrongPass123');
+    await user.click(screen.getByRole('button', { name: /Skip Face Login/ }));
+
+    await waitFor(() =>
+      expect(resumeEnrollment).toHaveBeenCalledWith('pending.user', 'StrongPass123', 'skip'),
+    );
+    expect(await screen.findByText('Login page')).toBeInTheDocument();
   });
 
   it('shows the camera permission error state', async () => {
@@ -190,8 +211,8 @@ describe('FaceEnrollmentPage', () => {
       challenge: { token: 'chal-1', actions: [...ACTIONS], expires_in: 120 },
     });
     vi.mocked(submitEnrollment).mockRejectedValue({
-      message: 'No face was detected. Position your face in the frame and try again.',
-      code: 'NO_FACE',
+      message: 'Keep your complete face visible inside the guide.',
+      code: 'NO_FACE_DETECTED',
       status: 400,
     });
 
@@ -201,7 +222,7 @@ describe('FaceEnrollmentPage', () => {
     await user.click(screen.getByRole('button', { name: 'Open Camera' }));
 
     expect(
-      await screen.findByText('No face was detected. Position your face in the frame and try again.', {}, { timeout: 5000 }),
+      await screen.findByText('Keep your complete face visible inside the guide.', {}, { timeout: 5000 }),
     ).toBeInTheDocument();
     expect(stopCamera).toHaveBeenCalled();
   }, 10000);

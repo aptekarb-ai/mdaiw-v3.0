@@ -5,15 +5,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FaceLoginPage } from './FaceLoginPage';
 import { useCamera } from '../hooks/useCamera';
 import { isActionComplete, useFaceLandmarker } from '../hooks/useFaceLandmarker';
+import { useFaceReadiness } from '../hooks/useFaceReadiness';
 import { useAuth } from '../hooks/useAuth';
+import { useYukti } from '../hooks/useYukti';
 import { createLoginChallenge, submitVerification } from '../api/faceauth';
 
-vi.mock('../hooks/useCamera', () => ({ useCamera: vi.fn() }));
+vi.mock('../hooks/useCamera', () => ({ useCamera: vi.fn(), isFrameQualityAcceptable: vi.fn(() => true) }));
 vi.mock('../hooks/useFaceLandmarker', () => ({
   useFaceLandmarker: vi.fn(),
   isActionComplete: vi.fn(),
+  isFramePositionAcceptable: vi.fn(() => true),
+  createBlinkCycleTracker: vi.fn(() => ({ update: vi.fn(() => false), reset: vi.fn() })),
+  buildLivenessDiagnostics: vi.fn(() => null),
 }));
+vi.mock('../hooks/useFaceReadiness', () => ({ useFaceReadiness: vi.fn() }));
 vi.mock('../hooks/useAuth', () => ({ useAuth: vi.fn() }));
+vi.mock('../hooks/useYukti', () => ({ useYukti: vi.fn() }));
 vi.mock('../api/faceauth', () => ({
   createLoginChallenge: vi.fn(),
   submitVerification: vi.fn(),
@@ -68,6 +75,10 @@ describe('FaceLoginPage', () => {
       clearError: vi.fn(),
       setAuthenticatedUser: vi.fn(),
     });
+    vi.mocked(useYukti).mockReturnValue({
+      registerActionHandlers: vi.fn(() => () => {}),
+    } as unknown as ReturnType<typeof useYukti>);
+    vi.mocked(useFaceReadiness).mockReturnValue({ status: 'READY', retry: vi.fn() });
     window.localStorage.clear();
     window.sessionStorage.clear();
   });

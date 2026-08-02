@@ -45,5 +45,24 @@ export interface FaceStatusResponse {
 
 export interface EnrollmentResumeResponse {
   success: true;
-  enrollment_token: string;
+  enrollment_token?: string;
+  activated?: boolean;
+  face_enrolled?: boolean;
+}
+
+export interface EnrollmentProofResponse {
+  success: true;
+  message: string;
+  proof_token: string;
+  expires_in: number;
+  request_id?: string;
+}
+
+export type FaceReadinessStatus = 'READY' | 'LOADING' | 'UNAVAILABLE';
+
+export interface FaceReadinessResponse {
+  success: boolean;
+  status: FaceReadinessStatus;
+  code?: string;
+  engine?: string;
 }

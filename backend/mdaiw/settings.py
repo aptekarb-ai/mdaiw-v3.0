@@ -126,15 +126,90 @@ FACE_EMBEDDING_ENCRYPTION_KEYS = [
 FACE_MODEL_NAME = os.environ.get('FACE_MODEL_NAME', 'Facenet512')
 FACE_DETECTOR_BACKEND = os.environ.get('FACE_DETECTOR_BACKEND', 'retinaface')
 FACE_DISTANCE_METRIC = os.environ.get('FACE_DISTANCE_METRIC', 'cosine')
+
+# Which FaceRecognitionEngine new enrollments use — 'opencv_sface' (YuNet
+# detection + SFace embeddings/matching) or 'deepface' (the pre-existing
+# RetinaFace/Facenet512 pipeline above, kept for rollback and for verifying
+# credentials created before this setting existed). See
+# faceauth/engines/registry.py. Existing FaceCredential rows always verify
+# through the engine recorded on them (FaceCredential.engine_name),
+# regardless of this setting — see faceauth/service.py's engine-aware
+# verify() path.
+FACE_RECOGNITION_ENGINE = os.environ.get('FACE_RECOGNITION_ENGINE', 'opencv_sface')
+
+# Passive anti-spoofing is independent of which FaceRecognitionEngine is
+# selected (YuNet+SFace has no anti-spoofing of its own) — see
+# faceauth/anti_spoof/registry.py. 'silent_face' wraps the project's
+# existing Fasnet-based passive anti-spoofing model.
+FACE_ANTI_SPOOF_PROVIDER = os.environ.get('FACE_ANTI_SPOOF_PROVIDER', 'silent_face')
+
+# Official OpenCV Zoo cosine-similarity threshold documented in the SFace
+# model's own reference demo (models/face_recognition_sface/sface.py,
+# `_threshold_cosine = 0.363`) — used as the initial value here, not
+# invented. Must be recalibrated against this project's own real-environment
+# enrollment/verification data before production use (different cameras,
+# lighting, and population than OpenCV's own evaluation set can shift the
+# operating point) — see docs/module-1/IMPLEMENTATION_STATUS.md.
+FACE_SFACE_COSINE_THRESHOLD = float(os.environ.get('FACE_SFACE_COSINE_THRESHOLD', '0.363'))
+# YuNet's own confidence score (0-1) for a detection to be trusted at all.
+# 0.6 is YuNet's own documented/demo default confidence threshold.
+FACE_MIN_DETECTION_CONFIDENCE = float(os.environ.get('FACE_MIN_DETECTION_CONFIDENCE', '0.6'))
+# Minimum face bounding-box width/height, in pixels, at the ~640x480 capture
+# resolution this project requests (see frontend/src/hooks/useCamera.ts) —
+# rejects a face too small to embed reliably before spending a model call on it.
+FACE_MIN_FACE_SIZE_PIXELS = int(os.environ.get('FACE_MIN_FACE_SIZE_PIXELS', '60'))
+
+# Local, git-ignored OpenCV model files — see
+# faceauth/management/commands/download_face_models.py. Never downloaded
+# during an active enrollment request; must exist before the engine can warm.
+FACE_OPENCV_MODEL_DIR = BASE_DIR / '.face-models' / 'opencv'
+FACE_OPENCV_MODEL_DIR.mkdir(parents=True, exist_ok=True)
+FACE_YUNET_MODEL_PATH = FACE_OPENCV_MODEL_DIR / 'yunet.onnx'
+FACE_SFACE_MODEL_PATH = FACE_OPENCV_MODEL_DIR / 'sface.onnx'
 FACE_MAX_FAILED_ATTEMPTS = int(os.environ.get('FACE_MAX_FAILED_ATTEMPTS', '5'))
 FACE_FAILURE_WINDOW_MINUTES = int(os.environ.get('FACE_FAILURE_WINDOW_MINUTES', '15'))
 FACE_LOCK_MINUTES = int(os.environ.get('FACE_LOCK_MINUTES', '30'))
 FACE_CHALLENGE_TTL_SECONDS = int(os.environ.get('FACE_CHALLENGE_TTL_SECONDS', '120'))
 FACE_ENROLLMENT_TOKEN_TTL_SECONDS = int(os.environ.get('FACE_ENROLLMENT_TOKEN_TTL_SECONDS', '900'))
 FACE_MAX_FRAMES = int(os.environ.get('FACE_MAX_FRAMES', '4'))
+# Of the frames a request submits (all independently detection/anti-spoof/
+# quality/position validated), only this many highest-quality ones are
+# actually spent on the embedding model — see
+# faceauth/service.py::process_enrollment_frames. Never allowed below 2:
+# cross-frame identity consistency needs at least two embeddings.
+FACE_EMBEDDING_FRAME_COUNT = int(os.environ.get('FACE_EMBEDDING_FRAME_COUNT', '2'))
 FACE_FRAME_MAX_BYTES = int(os.environ.get('FACE_FRAME_MAX_BYTES', str(2 * 1024 * 1024)))
 FACE_ENROLLMENT_RESUME_MAX_ATTEMPTS = int(os.environ.get('FACE_ENROLLMENT_RESUME_MAX_ATTEMPTS', '5'))
 FACE_ENROLLMENT_RESUME_WINDOW_MINUTES = int(os.environ.get('FACE_ENROLLMENT_RESUME_WINDOW_MINUTES', '15'))
+
+# Throttling for the final atomic registration submission (account + employee
+# + Face Enrollment together) and for issuing the anonymous, pre-account
+# ENROLL challenge used by the inline registration-wizard Face Enrollment step.
+REGISTRATION_MAX_ATTEMPTS = int(os.environ.get('REGISTRATION_MAX_ATTEMPTS', '10'))
+REGISTRATION_WINDOW_MINUTES = int(os.environ.get('REGISTRATION_WINDOW_MINUTES', '60'))
+FACE_ENROLLMENT_CHALLENGE_MAX_ATTEMPTS = int(os.environ.get('FACE_ENROLLMENT_CHALLENGE_MAX_ATTEMPTS', '10'))
+FACE_ENROLLMENT_CHALLENGE_WINDOW_MINUTES = int(os.environ.get('FACE_ENROLLMENT_CHALLENGE_WINDOW_MINUTES', '15'))
+
+# The registration wizard's Step 3 validates captured frames immediately
+# (faceauth/views.py::enrollment_proof_view) and gets back a single-use proof
+# referencing the already-encrypted embedding. Its TTL must comfortably cover
+# Step 4 review time, unlike the short-lived capture challenge above.
+FACE_ENROLLMENT_PROOF_TTL_SECONDS = int(os.environ.get('FACE_ENROLLMENT_PROOF_TTL_SECONDS', '900'))
+FACE_ENROLLMENT_PROOF_MAX_ATTEMPTS = int(os.environ.get('FACE_ENROLLMENT_PROOF_MAX_ATTEMPTS', '10'))
+FACE_ENROLLMENT_PROOF_WINDOW_MINUTES = int(os.environ.get('FACE_ENROLLMENT_PROOF_WINDOW_MINUTES', '15'))
+
+# Hard budget for the synchronous biometric-processing call inside
+# enrollment_proof_view, once models are confirmed loaded (see
+# faceauth/apps.py::FaceauthConfig.ready() and service.is_ready() — a
+# request never even attempts processing while models are still warming;
+# it fails fast with MODEL_UNAVAILABLE instead). 120s comfortably covers
+# real per-frame CPU inference for a handful of frames with headroom; the
+# frontend's own request timeout (see frontend/.env.example's
+# VITE_FACE_PROCESSING_TIMEOUT_MS) must always be set higher than this,
+# with a safety margin, so this backend timeout — with its specific,
+# distinguishable error code — is what normally fires, not a generic
+# client-side abort.
+FACE_PROCESSING_TIMEOUT_SECONDS = int(os.environ.get('FACE_PROCESSING_TIMEOUT_SECONDS', '120'))
 
 # DeepFace downloads model weights to this directory on first use instead of
 # the default ~/.deepface — kept inside the repo but git-ignored so it never

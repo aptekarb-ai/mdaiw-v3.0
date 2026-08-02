@@ -35,6 +35,7 @@ export interface ApiError {
   code?: string;
   status?: number;
   errors?: Record<string, string[]>;
+  requestId?: string;
 }
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';

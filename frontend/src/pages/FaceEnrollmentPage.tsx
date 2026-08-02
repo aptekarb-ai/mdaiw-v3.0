@@ -4,13 +4,16 @@ import { createEnrollChallenge, resumeEnrollment, submitEnrollment } from '../ap
 import { getCurrentUser } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
 import { useCamera } from '../hooks/useCamera';
-import { isActionComplete, useFaceLandmarker, type ChallengeAction } from '../hooks/useFaceLandmarker';
+import { useFaceReadiness } from '../hooks/useFaceReadiness';
+import { useFaceLandmarker, type ChallengeAction, type LivenessDiagnosticsSnapshot } from '../hooks/useFaceLandmarker';
+import { useLivenessActionDetector } from '../hooks/useLivenessCapture';
 import { BiometricConsent } from '../face-recognition/BiometricConsent';
 import { CameraPreview } from '../face-recognition/CameraPreview';
 import { CaptureProgress } from '../face-recognition/CaptureProgress';
 import { FaceAuthError } from '../face-recognition/FaceAuthError';
 import { FaceProcessingState } from '../face-recognition/FaceProcessingState';
 import { LivenessChallenge } from '../face-recognition/LivenessChallenge';
+import { LivenessDiagnosticsPanel } from '../face-recognition/LivenessDiagnosticsPanel';
 import { FormField } from '../forms/FormField';
 import type { ApiError } from '../types/auth';
 import './FaceEnrollmentPage.css';
@@ -22,14 +25,13 @@ interface LocationState {
   username?: string;
 }
 
-const DETECTION_INTERVAL_MS = 200;
-
 export function FaceEnrollmentPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { setAuthenticatedUser } = useAuth();
   const { videoRef, status: cameraStatus, errorMessage: cameraError, start: startCamera, stop: stopCamera, captureFrame } = useCamera();
   const { status: landmarkerStatus, detect } = useFaceLandmarker();
+  const { status: readinessStatus, retry: retryReadiness } = useFaceReadiness();
 
   const initialState = (location.state as LocationState | null) ?? null;
 
@@ -41,20 +43,21 @@ export function FaceEnrollmentPage() {
   const [actionIndex, setActionIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<LivenessDiagnosticsSnapshot | null>(null);
 
   const [resumeUsername, setResumeUsername] = useState(initialState?.username ?? '');
   const [resumePassword, setResumePassword] = useState('');
   const [resumeError, setResumeError] = useState('');
+  const [isSkippingResume, setIsSkippingResume] = useState(false);
 
   const framesRef = useRef<Blob[]>([]);
-  const capturingRef = useRef(false);
 
   async function handleResumeSubmit(event: React.FormEvent) {
     event.preventDefault();
     setResumeError('');
     try {
-      const response = await resumeEnrollment(resumeUsername.trim(), resumePassword);
-      setEnrollmentToken(response.enrollment_token);
+      const response = await resumeEnrollment(resumeUsername.trim(), resumePassword, 'enroll');
+      setEnrollmentToken(response.enrollment_token ?? null);
       setStage('consent');
     } catch (caught) {
       const apiError = caught as ApiError;
@@ -62,7 +65,31 @@ export function FaceEnrollmentPage() {
     }
   }
 
+  // Face Login is optional (Section J of the optional-enrollment fix) — an
+  // account left PENDING_FACE_ENROLLMENT by the previous mandatory flow can
+  // finish activating with password login alone, once ownership is proven
+  // with username/password exactly as the enroll path above requires. Never
+  // auto-signs the user in, matching the password-only registration path's
+  // own behaviour (a fresh signup does not get logged in automatically
+  // either) — they land on the login page and sign in themselves.
+  async function handleResumeSkip() {
+    setResumeError('');
+    setIsSkippingResume(true);
+    try {
+      await resumeEnrollment(resumeUsername.trim(), resumePassword, 'skip');
+      navigate('/login', { state: { activated: true } });
+    } catch (caught) {
+      const apiError = caught as ApiError;
+      setResumeError(apiError.message || 'We could not resume Face Enrollment with the details provided.');
+    } finally {
+      setIsSkippingResume(false);
+    }
+  }
+
   function handleOpenCamera() {
+    if (readinessStatus !== 'READY') {
+      return;
+    }
     setStage('camera');
     void startCamera();
   }
@@ -100,32 +127,24 @@ export function FaceEnrollmentPage() {
     };
   }, [stage, cameraStatus, landmarkerStatus, enrollmentToken, stopCamera]);
 
-  // Liveness detection loop: watch for the current requested action to
-  // complete, capture that frame, then advance to the next action.
-  useEffect(() => {
-    if (stage !== 'liveness' || actionIndex >= actions.length) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      if (capturingRef.current || !videoRef.current) {
-        return;
+  // Liveness detection loop — shared with FaceEnrollmentStep.tsx/
+  // FaceLoginPage.tsx via useLivenessCapture.ts.
+  useLivenessActionDetector({
+    active: stage === 'liveness' && actionIndex < actions.length,
+    videoRef,
+    detect,
+    action: actions[actionIndex],
+    onDiagnostics: setDiagnostics,
+    onReady: async () => {
+      const blob = await captureFrame();
+      if (!blob) {
+        return false;
       }
-      const result = detect(videoRef.current, performance.now());
-      if (isActionComplete(result, actions[actionIndex])) {
-        capturingRef.current = true;
-        void captureFrame().then((blob) => {
-          if (blob) {
-            framesRef.current = [...framesRef.current, blob];
-            setActionIndex((prev) => prev + 1);
-          }
-          capturingRef.current = false;
-        });
-      }
-    }, DETECTION_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [stage, actionIndex, actions, videoRef, captureFrame, detect]);
+      framesRef.current = [...framesRef.current, blob];
+      setActionIndex((prev) => prev + 1);
+      return true;
+    },
+  });
 
   // All frames captured — submit for backend verification.
   useEffect(() => {
@@ -177,6 +196,7 @@ export function FaceEnrollmentPage() {
     setActionIndex(0);
     framesRef.current = [];
     setChallengeToken(null);
+    setDiagnostics(null);
     setStage('consent');
   }
 
@@ -219,8 +239,16 @@ export function FaceEnrollmentPage() {
               value={resumePassword}
               onChange={(event) => setResumePassword(event.target.value)}
             />
-            <button type="submit" className="button button--primary">
+            <button type="submit" className="button button--primary" disabled={isSkippingResume}>
               Continue →
+            </button>
+            <button
+              type="button"
+              className="button button--outline"
+              disabled={!resumeUsername.trim() || !resumePassword || isSkippingResume}
+              onClick={handleResumeSkip}
+            >
+              {isSkippingResume ? 'Activating account...' : 'Skip Face Login and finish setting up my account'}
             </button>
           </form>
         </div>
@@ -239,11 +267,24 @@ export function FaceEnrollmentPage() {
         {stage === 'consent' && (
           <>
             <BiometricConsent checked={consentChecked} onChange={setConsentChecked} />
+            {readinessStatus === 'LOADING' && (
+              <p className="face-enrollment-page__readiness-notice" role="status">
+                Preparing secure Face Recognition. This may take a moment.
+              </p>
+            )}
+            {readinessStatus === 'UNAVAILABLE' && (
+              <div className="face-enrollment-page__readiness-notice face-enrollment-page__readiness-notice--error">
+                <p role="alert">Face Recognition is temporarily unavailable. Please try again in a moment.</p>
+                <button type="button" className="button button--outline" onClick={retryReadiness}>
+                  Check Again
+                </button>
+              </div>
+            )}
             <div className="face-enrollment-page__actions">
               <button
                 type="button"
                 className="button button--primary"
-                disabled={!consentChecked}
+                disabled={!consentChecked || readinessStatus !== 'READY'}
                 onClick={handleOpenCamera}
               >
                 Open Camera
@@ -260,8 +301,12 @@ export function FaceEnrollmentPage() {
             )}
             {stage === 'liveness' && actions.length > 0 && (
               <>
-                <LivenessChallenge action={actions[actionIndex] ?? actions[actions.length - 1]} isComplete={false} />
+                <LivenessChallenge
+                  action={actions[actionIndex] ?? actions[actions.length - 1]}
+                  diagnostics={diagnostics}
+                />
                 <CaptureProgress actions={actions} completedCount={actionIndex} />
+                <LivenessDiagnosticsPanel diagnostics={diagnostics} />
               </>
             )}
             <div className="face-enrollment-page__actions">

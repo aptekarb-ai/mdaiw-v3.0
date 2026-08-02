@@ -2,14 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { createLoginChallenge, submitVerification } from '../api/faceauth';
 import { useAuth } from '../hooks/useAuth';
+import { useYukti } from '../hooks/useYukti';
 import { useCamera } from '../hooks/useCamera';
-import { isActionComplete, useFaceLandmarker, type ChallengeAction } from '../hooks/useFaceLandmarker';
+import { useFaceReadiness } from '../hooks/useFaceReadiness';
+import { useFaceLandmarker, type ChallengeAction, type LivenessDiagnosticsSnapshot } from '../hooks/useFaceLandmarker';
+import { useLivenessActionDetector } from '../hooks/useLivenessCapture';
 import { BiometricConsent } from '../face-recognition/BiometricConsent';
 import { CameraPreview } from '../face-recognition/CameraPreview';
 import { CaptureProgress } from '../face-recognition/CaptureProgress';
 import { FaceAuthError } from '../face-recognition/FaceAuthError';
 import { FaceProcessingState } from '../face-recognition/FaceProcessingState';
 import { LivenessChallenge } from '../face-recognition/LivenessChallenge';
+import { LivenessDiagnosticsPanel } from '../face-recognition/LivenessDiagnosticsPanel';
 import { FormField } from '../forms/FormField';
 import type { ApiError } from '../types/auth';
 import type { VerifySuccessResponse } from '../types/faceauth';
@@ -21,15 +25,15 @@ interface LocationState {
   username?: string;
 }
 
-const DETECTION_INTERVAL_MS = 200;
-
 export function FaceLoginPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { setAuthenticatedUser } = useAuth();
+  const { registerActionHandlers } = useYukti();
   const { videoRef, status: cameraStatus, errorMessage: cameraError, start: startCamera, stop: stopCamera, captureFrame } =
     useCamera();
   const { status: landmarkerStatus, detect } = useFaceLandmarker();
+  const { status: readinessStatus, retry: retryReadiness } = useFaceReadiness();
 
   const initialState = (location.state as LocationState | null) ?? null;
 
@@ -41,13 +45,29 @@ export function FaceLoginPage() {
   const [actionIndex, setActionIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<LivenessDiagnosticsSnapshot | null>(null);
 
   const framesRef = useRef<Blob[]>([]);
-  const capturingRef = useRef(false);
+
+  useEffect(() => {
+    return registerActionHandlers({
+      onFocusField: (field) => {
+        if (field === 'username') {
+          document.getElementById('face-login-username')?.focus();
+        }
+      },
+      onFillField: (field, value) => {
+        if (field === 'username') {
+          setUsername(value);
+          document.getElementById('face-login-username')?.focus();
+        }
+      },
+    });
+  }, [registerActionHandlers]);
 
   function handleStartVerification(event: React.FormEvent) {
     event.preventDefault();
-    if (!username.trim() || !consentChecked) {
+    if (!username.trim() || !consentChecked || readinessStatus !== 'READY') {
       return;
     }
     setStage('camera');
@@ -86,31 +106,24 @@ export function FaceLoginPage() {
     };
   }, [stage, cameraStatus, landmarkerStatus, username, stopCamera]);
 
-  // Liveness detection loop.
-  useEffect(() => {
-    if (stage !== 'liveness' || actionIndex >= actions.length) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      if (capturingRef.current || !videoRef.current) {
-        return;
+  // Liveness detection loop — shared with FaceEnrollmentStep.tsx/
+  // FaceEnrollmentPage.tsx via useLivenessCapture.ts.
+  useLivenessActionDetector({
+    active: stage === 'liveness' && actionIndex < actions.length,
+    videoRef,
+    detect,
+    action: actions[actionIndex],
+    onDiagnostics: setDiagnostics,
+    onReady: async () => {
+      const blob = await captureFrame();
+      if (!blob) {
+        return false;
       }
-      const result = detect(videoRef.current, performance.now());
-      if (isActionComplete(result, actions[actionIndex])) {
-        capturingRef.current = true;
-        void captureFrame().then((blob) => {
-          if (blob) {
-            framesRef.current = [...framesRef.current, blob];
-            setActionIndex((prev) => prev + 1);
-          }
-          capturingRef.current = false;
-        });
-      }
-    }, DETECTION_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [stage, actionIndex, actions, videoRef, captureFrame, detect]);
+      framesRef.current = [...framesRef.current, blob];
+      setActionIndex((prev) => prev + 1);
+      return true;
+    },
+  });
 
   // All frames captured — submit for verification.
   useEffect(() => {
@@ -164,6 +177,7 @@ export function FaceLoginPage() {
     setActionIndex(0);
     framesRef.current = [];
     setChallengeToken(null);
+    setDiagnostics(null);
     setStage('username');
   }
 
@@ -195,11 +209,28 @@ export function FaceLoginPage() {
               onChange={(event) => setUsername(event.target.value)}
             />
             <BiometricConsent checked={consentChecked} onChange={setConsentChecked} />
+            {readinessStatus === 'LOADING' && (
+              <p className="face-login-page__readiness-notice" role="status">
+                Preparing secure Face Recognition. This may take a moment.
+              </p>
+            )}
+            {readinessStatus === 'UNAVAILABLE' && (
+              <div className="face-login-page__readiness-notice face-login-page__readiness-notice--error">
+                <p role="alert">Face Recognition is temporarily unavailable. Please try again in a moment.</p>
+                <button type="button" className="button button--outline" onClick={retryReadiness}>
+                  Check Again
+                </button>
+              </div>
+            )}
             <div className="face-login-page__actions">
               <button type="button" className="button button--outline" onClick={handleUsePassword}>
                 Cancel
               </button>
-              <button type="submit" className="button button--primary" disabled={!username.trim() || !consentChecked}>
+              <button
+                type="submit"
+                className="button button--primary"
+                disabled={!username.trim() || !consentChecked || readinessStatus !== 'READY'}
+              >
                 Verify My Face →
               </button>
             </div>
@@ -214,8 +245,12 @@ export function FaceLoginPage() {
             )}
             {stage === 'liveness' && actions.length > 0 && (
               <>
-                <LivenessChallenge action={actions[actionIndex] ?? actions[actions.length - 1]} isComplete={false} />
+                <LivenessChallenge
+                  action={actions[actionIndex] ?? actions[actions.length - 1]}
+                  diagnostics={diagnostics}
+                />
                 <CaptureProgress actions={actions} completedCount={actionIndex} />
+                <LivenessDiagnosticsPanel diagnostics={diagnostics} />
               </>
             )}
             <div className="face-login-page__actions">

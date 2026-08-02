@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useCamera } from './useCamera';
+import { isFrameQualityAcceptable, useCamera } from './useCamera';
 
 function mockStream() {
   const stopTrack = vi.fn();
@@ -49,7 +49,10 @@ describe('useCamera', () => {
     });
 
     expect(result.current.status).toBe('ready');
-    expect(getUserMedia).toHaveBeenCalledWith({ video: { facingMode: 'user' }, audio: false });
+    expect(getUserMedia).toHaveBeenCalledWith({
+      video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+      audio: false,
+    });
   });
 
   it('sets status to denied on NotAllowedError', async () => {
@@ -145,5 +148,72 @@ describe('useCamera', () => {
     unmount();
 
     expect(stopTrack).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('isFrameQualityAcceptable', () => {
+  let getContextSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+  function fakeVideo(readyState = 4, videoWidth = 640) {
+    const video = document.createElement('video');
+    Object.defineProperty(video, 'readyState', { value: readyState, configurable: true });
+    Object.defineProperty(video, 'videoWidth', { value: videoWidth, configurable: true });
+    return video;
+  }
+
+  function mockCanvasWithLuma(fillValue: (x: number, y: number) => number) {
+    getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => {
+      return {
+        drawImage: vi.fn(),
+        getImageData: (_x: number, _y: number, w: number, h: number) => {
+          const data = new Uint8ClampedArray(w * h * 4);
+          for (let y = 0; y < h; y += 1) {
+            for (let x = 0; x < w; x += 1) {
+              const value = fillValue(x, y);
+              const idx = (y * w + x) * 4;
+              data[idx] = value;
+              data[idx + 1] = value;
+              data[idx + 2] = value;
+              data[idx + 3] = 255;
+            }
+          }
+          return { data };
+        },
+      } as unknown as CanvasRenderingContext2D;
+    });
+  }
+
+  afterEach(() => {
+    getContextSpy?.mockRestore();
+    getContextSpy = undefined;
+  });
+
+  it('returns false when the video has no dimensions yet', () => {
+    expect(isFrameQualityAcceptable(fakeVideo(0, 0))).toBe(false);
+  });
+
+  it('accepts a well-lit, sharp (high-contrast checkerboard) frame', () => {
+    mockCanvasWithLuma((x, y) => ((x + y) % 2 === 0 ? 220 : 30));
+    expect(isFrameQualityAcceptable(fakeVideo())).toBe(true);
+  });
+
+  it('rejects an all-black (too dark) frame', () => {
+    mockCanvasWithLuma(() => 0);
+    expect(isFrameQualityAcceptable(fakeVideo())).toBe(false);
+  });
+
+  it('rejects an all-white (too bright) frame', () => {
+    mockCanvasWithLuma(() => 255);
+    expect(isFrameQualityAcceptable(fakeVideo())).toBe(false);
+  });
+
+  it('rejects a uniform mid-tone (blurry/blank) frame', () => {
+    mockCanvasWithLuma(() => 128);
+    expect(isFrameQualityAcceptable(fakeVideo())).toBe(false);
+  });
+
+  it('returns false when a 2D canvas context is unavailable', () => {
+    getContextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    expect(isFrameQualityAcceptable(fakeVideo())).toBe(false);
   });
 });
