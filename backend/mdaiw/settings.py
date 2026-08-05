@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     'employees',
     'faceauth',
     'yukti',
+    'landingpages',
 ]
 
 MIDDLEWARE = [
@@ -97,6 +98,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    'EXCEPTION_HANDLER': 'mdaiw.exceptions.mdaiw_exception_handler',
 }
 
 CORS_ALLOWED_ORIGINS = [
@@ -256,3 +258,21 @@ YUKTI_AI_WINDOW_SECONDS = int(os.environ.get('YUKTI_AI_WINDOW_SECONDS', '60'))
 # Server-only. Never exposed to Vite/frontend JavaScript, never returned in
 # any API response, never committed with a real value (see .env.example).
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+
+# Module 3 — LP Validator & Fixer (Sprint 1A foundation). 'local' is the
+# only implemented provider; see landingpages/storage/registry.py for how
+# a future S3/Azure Blob/MinIO/GCS provider would be added without any
+# caller-visible change.
+LP_STORAGE_PROVIDER = os.environ.get('LP_STORAGE_PROVIDER', 'local')
+# Kept inside the repo's already-gitignored media/ directory (see
+# backend/.gitignore's "backend/media/" rule) rather than a new top-level
+# path, so no .gitignore change was needed for this sprint.
+LP_STORAGE_ROOT = BASE_DIR / 'media' / 'landing_pages'
+
+# CSS validation (Sprint 1D) — controlled Node subprocess bridge, see
+# backend/landingpages/validation/node_bridge.py. LP_NODE_EXECUTABLE is
+# resolved via shutil.which() at call time, never accepted from a request.
+LP_NODE_EXECUTABLE = os.environ.get('LP_NODE_EXECUTABLE', 'node')
+LP_CSS_VALIDATION_TIMEOUT_SECONDS = float(os.environ.get('LP_CSS_VALIDATION_TIMEOUT_SECONDS', '5'))
+LP_CSS_VALIDATION_MAX_OUTPUT_BYTES = int(os.environ.get('LP_CSS_VALIDATION_MAX_OUTPUT_BYTES', str(2_000_000)))
+LP_CSS_VALIDATION_MAX_ISSUES = int(os.environ.get('LP_CSS_VALIDATION_MAX_ISSUES', '500'))

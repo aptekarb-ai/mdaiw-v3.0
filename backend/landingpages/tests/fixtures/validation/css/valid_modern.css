@@ -1,0 +1,23 @@
+:root {
+  --brand-color: #0082ad;
+  --spacing: clamp(1rem, 2vw, 2rem);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  padding: 1rem;
+  color: var(--brand-color);
+  transition: transform 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+}

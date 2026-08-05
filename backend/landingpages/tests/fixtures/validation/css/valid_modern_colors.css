@@ -1,0 +1,5 @@
+.swatch {
+  color: color-mix(in srgb, #0082ad 80%, white);
+  background-color: oklch(70% 0.15 200deg);
+  border-color: rgb(0 130 173 / 50%);
+}

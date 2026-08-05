@@ -1,0 +1,32 @@
+.validator-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+}
+
+.validator-toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.validator-toolbar .button {
+  height: 38px;
+  padding: 0 var(--space-4);
+  font-size: 13px;
+}
+
+@media (max-width: 767px) {
+  .validator-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .validator-toolbar__group {
+    justify-content: flex-start;
+  }
+}

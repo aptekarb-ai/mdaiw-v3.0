@@ -1,0 +1,11 @@
+.card-wrapper {
+  container-type: inline-size;
+  container-name: card;
+}
+
+@container card (min-width: 30rem) {
+  .card {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+}

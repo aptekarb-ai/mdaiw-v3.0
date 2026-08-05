@@ -1,0 +1,67 @@
+.code-editor {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  overflow: hidden;
+  height: 100%;
+  min-height: 320px;
+}
+
+.code-editor > section,
+.code-editor > div:not(.code-editor__loading) {
+  flex: 1;
+  min-height: 0;
+}
+
+.code-editor__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 320px;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.code-editor--load-failed {
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.code-editor--load-failed p {
+  color: var(--color-error);
+  text-align: center;
+}
+
+/* Whole-line background tints — Monaco's marker system already renders
+   the squiggle/glyph-margin dot/overview-ruler mark for each severity;
+   these decorations add the light whole-line tint on top. */
+.code-editor__line-error {
+  background: rgba(180, 35, 24, 0.08);
+}
+
+.code-editor__line-warning {
+  background: rgba(181, 71, 8, 0.08);
+}
+
+.code-editor__line-info {
+  background: rgba(0, 130, 173, 0.08);
+}
+
+.code-editor__line-resolved {
+  background: rgba(34, 160, 107, 0.16);
+}
+
+.code-editor__glyph-resolved {
+  background: var(--color-accent-green);
+  width: 8px !important;
+  margin-left: 5px;
+  border-radius: var(--radius-pill);
+}
+
+.code-editor__line-emphasis {
+  background: rgba(0, 130, 173, 0.18);
+}

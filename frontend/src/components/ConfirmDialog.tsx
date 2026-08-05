@@ -21,6 +21,7 @@ export function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (open) {
@@ -33,6 +34,27 @@ export function ConfirmDialog({
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
         onCancel();
+        return;
+      }
+      // Minimal focus trap — only two focusable elements exist in this
+      // dialog, so cycling between them on Tab/Shift+Tab is sufficient;
+      // no need for a full focusable-element query.
+      if (event.key === 'Tab') {
+        const forward = !event.shiftKey;
+        const active = document.activeElement;
+        if (forward && active === confirmButtonRef.current) {
+          event.preventDefault();
+          cancelButtonRef.current?.focus();
+        } else if (!forward && active === cancelButtonRef.current) {
+          event.preventDefault();
+          confirmButtonRef.current?.focus();
+        } else if (forward && active === cancelButtonRef.current) {
+          event.preventDefault();
+          confirmButtonRef.current?.focus();
+        } else if (!forward && active === confirmButtonRef.current) {
+          event.preventDefault();
+          cancelButtonRef.current?.focus();
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -56,7 +78,7 @@ export function ConfirmDialog({
         <h2 id="confirm-dialog-heading">{heading}</h2>
         <p id="confirm-dialog-body">{body}</p>
         <div className="confirm-dialog__actions">
-          <button type="button" className="button button--outline" onClick={onCancel}>
+          <button type="button" className="button button--outline" ref={cancelButtonRef} onClick={onCancel}>
             {cancelLabel}
           </button>
           <button

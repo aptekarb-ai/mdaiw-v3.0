@@ -1,0 +1,13 @@
+@layer reset, base, components, utilities;
+
+@layer base {
+  body {
+    margin: 0;
+  }
+}
+
+@layer components {
+  .button {
+    padding: 0.5rem 1rem;
+  }
+}

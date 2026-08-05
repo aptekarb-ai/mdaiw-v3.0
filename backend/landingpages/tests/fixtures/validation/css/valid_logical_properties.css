@@ -1,0 +1,7 @@
+.panel {
+  margin-inline: auto;
+  padding-block: 1rem;
+  padding-inline: 1.5rem;
+  border-inline-start: 2px solid #0082ad;
+  inset-block-start: 0;
+}

@@ -1,0 +1,10 @@
+.outer {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.inner {
+  display: grid;
+  grid-column: 1 / 4;
+  grid-template-columns: subgrid;
+}

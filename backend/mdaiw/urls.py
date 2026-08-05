@@ -15,6 +15,7 @@ urlpatterns = [
     path('api/v1/auth/', include('accounts.urls')),
     path('api/v1/auth/face/', include('faceauth.urls')),
     path('api/v1/yukti/', include('yukti.urls')),
+    path('api/v1/lp/', include('landingpages.urls')),
 ]
 
 if settings.DEBUG:

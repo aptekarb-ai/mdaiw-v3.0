@@ -1,0 +1,188 @@
+/* .app-frame__content (Module 1's shell) has no definite height of its own
+   — it's `flex: 1` inside a `min-height: 100vh` column, which never
+   resolves to a fixed number, so a plain `height: 100%` here previously
+   resolved to `auto` and every descendant just grew with its content
+   instead of scrolling internally. Anchoring directly to the viewport
+   (with the shell's own existing --app-header-height/--app-footer-height
+   tokens and this page's own content padding) gives the workspace a real,
+   definite height without touching any Module 1 file. `100dvh` is used
+   with a `100vh` fallback for browsers/older WebViews without dvh support
+   — the fallback rule is overwritten by the dvh rule wherever it's
+   understood. */
+.validator-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: calc(100vh - var(--app-header-height) - var(--app-footer-height) - (var(--space-6) * 2));
+  height: calc(100dvh - var(--app-header-height) - var(--app-footer-height) - (var(--space-6) * 2));
+}
+
+.validator-page__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+  margin-bottom: var(--space-4);
+}
+
+.validator-page__header h1 {
+  margin: 0;
+  font-size: 24px;
+  color: var(--color-primary-dark);
+}
+
+.validator-page__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--color-primary-dark);
+}
+
+.validator-page__back:hover {
+  background: var(--color-background-light);
+}
+
+.validator-page__workspace {
+  display: flex;
+  gap: var(--space-5);
+  flex: 1;
+  /* Safety floor: below this, the workspace stops shrinking and the page
+     falls back to normal document scrolling (via the unbroken, un-clipped
+     ancestor chain up through .app-frame__content) rather than crushing
+     the editor/issues panels to an unusable size. This is the only place
+     that floor is set — the two panels below inherit it via flex stretch,
+     so the number isn't duplicated per panel. */
+  min-height: 480px;
+}
+
+.validator-page__editor,
+.validator-page__results {
+  flex: 3;
+  min-width: 0;
+  /* The default flex min-height is `auto` (= "never shrink below content"),
+     which is exactly what let these panels grow past the available space
+     before. min-height: 0 overrides that so each panel's own
+     overflow-handling child (CodeEditorTabs / ValidationIssuesPanel) can
+     actually receive a bounded height to scroll within. */
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.validator-page__results {
+  flex: 2;
+}
+
+.validator-empty-state,
+.validator-error-banner {
+  height: 100%;
+}
+
+.validator-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  min-height: 0;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: var(--space-6);
+}
+
+.validator-empty-state .mdaiw-icon {
+  width: 2rem;
+  height: 2rem;
+}
+
+.validator-empty-state__spinner {
+  animation: validator-spin 1s linear infinite;
+}
+
+@keyframes validator-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.validator-error-banner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--color-error);
+  background: var(--color-error-bg);
+  border-radius: var(--radius-sm);
+  color: var(--color-error);
+}
+
+.validator-error-banner p {
+  margin: 0;
+}
+
+.validator-stale-banner {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-6);
+  border: 1px solid var(--color-warning);
+  background: var(--color-warning-bg);
+  border-radius: var(--radius-sm);
+  color: var(--color-warning);
+  text-align: center;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 1023px) {
+  /* Stacked panels don't share one row's height the way side-by-side
+     columns do — each gets its own viewport-relative range instead, and
+     the page itself switches from a hard `height` to `min-height` so it
+     can grow past one viewport and let the document scroll when the two
+     stacked panels genuinely need more room than that (matches
+     .app-frame__content's own padding change at this breakpoint). */
+  .validator-page {
+    height: auto;
+    min-height: calc(100vh - var(--app-header-height) - var(--app-footer-height) - (var(--space-4) * 2));
+    min-height: calc(100dvh - var(--app-header-height) - var(--app-footer-height) - (var(--space-4) * 2));
+  }
+
+  .validator-page__workspace {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .validator-page__editor,
+  .validator-page__results {
+    flex: none;
+    height: clamp(360px, 45vh, 620px);
+    height: clamp(360px, 45dvh, 620px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .validator-empty-state__spinner {
+    animation: none;
+  }
+}

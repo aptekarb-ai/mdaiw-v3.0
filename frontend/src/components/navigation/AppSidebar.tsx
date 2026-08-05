@@ -1,16 +1,39 @@
 import { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router';
+import { NavLink, useLocation, useNavigate } from 'react-router';
 import { useAuth } from '../../hooks/useAuth';
 import { useYukti } from '../../hooks/useYukti';
 import { ConfirmDialog } from '../ConfirmDialog';
 import './AppSidebar.css';
 
-const APP_NAV = [
+interface NavLeaf {
+  to: string;
+  label: string;
+}
+
+interface NavGroup {
+  label: string;
+  children: NavLeaf[];
+}
+
+type NavEntry = NavLeaf | NavGroup;
+
+function isGroup(entry: NavEntry): entry is NavGroup {
+  return 'children' in entry;
+}
+
+const APP_NAV: NavEntry[] = [
   { to: '/dashboard', label: 'Dashboard' },
   { to: '/employees', label: 'Employees' },
   { to: '/performance', label: 'Performance' },
   { to: '/recognition', label: 'Recognition' },
-  { to: '/landing-pages', label: 'Landing Pages Builder' },
+  {
+    label: 'Landing Pages Builder',
+    children: [
+      { to: '/module-3/validator', label: 'LP Validator & AI Fixer' },
+      { to: '/module-3/builder', label: 'LP Builder' },
+      { to: '/module-3/generator', label: 'AI LP Generator' },
+    ],
+  },
   { to: '/email-builder', label: 'Email Builder' },
   { to: '/personal-finance', label: 'Personal Finance' },
   { to: '/ai-assistants', label: 'AI Assistants' },
@@ -23,7 +46,9 @@ export function AppSidebar() {
   const { logout } = useAuth();
   const { open: openYukti } = useYukti();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const [manuallyExpanded, setManuallyExpanded] = useState<Record<string, boolean>>({});
 
   async function handleConfirmLogout() {
     setConfirmingLogout(false);
@@ -47,19 +72,71 @@ export function AppSidebar() {
       </a>
 
       <nav className="app-sidebar__nav" aria-label="Application navigation">
-        {APP_NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            className={({ isActive }) =>
-              isActive
-                ? 'app-sidebar__link app-sidebar__link--active'
-                : 'app-sidebar__link'
-            }
-          >
-            {item.label}
-          </NavLink>
-        ))}
+        {APP_NAV.map((item) => {
+          if (isGroup(item)) {
+            const groupId = item.label.toLowerCase().replace(/\s+/g, '-');
+            const childIsActive = item.children.some((child) => pathname.startsWith(child.to));
+            const expanded = childIsActive || Boolean(manuallyExpanded[groupId]);
+            return (
+              <div key={groupId} className="app-sidebar__group">
+                <button
+                  type="button"
+                  className={
+                    childIsActive
+                      ? 'app-sidebar__link app-sidebar__link--active app-sidebar__group-toggle'
+                      : 'app-sidebar__link app-sidebar__group-toggle'
+                  }
+                  aria-expanded={expanded}
+                  aria-controls={`app-sidebar-group-${groupId}`}
+                  onClick={() =>
+                    setManuallyExpanded((previous) => ({ ...previous, [groupId]: !expanded }))
+                  }
+                >
+                  <span
+                    className={
+                      expanded
+                        ? 'mdaiw-icon mdaiw-icon--chevron-down app-sidebar__group-chevron'
+                        : 'mdaiw-icon mdaiw-icon--chevron-right app-sidebar__group-chevron'
+                    }
+                    aria-hidden="true"
+                  />
+                  {item.label}
+                </button>
+                {expanded && (
+                  <div id={`app-sidebar-group-${groupId}`} className="app-sidebar__group-children">
+                    {item.children.map((child) => (
+                      <NavLink
+                        key={child.to}
+                        to={child.to}
+                        className={({ isActive }) =>
+                          isActive
+                            ? 'app-sidebar__link app-sidebar__link--active app-sidebar__link--child'
+                            : 'app-sidebar__link app-sidebar__link--child'
+                        }
+                      >
+                        {child.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              className={({ isActive }) =>
+                isActive
+                  ? 'app-sidebar__link app-sidebar__link--active'
+                  : 'app-sidebar__link'
+              }
+            >
+              {item.label}
+            </NavLink>
+          );
+        })}
         <button
           type="button"
           className="app-sidebar__link app-sidebar__logout"

@@ -15,6 +15,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ModulePlaceholderPage } from './pages/ModulePlaceholderPage';
+import { LandingPageValidatorPage } from './pages/LandingPageValidatorPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -28,6 +29,12 @@ const MODULE_ROUTES = [
   '/reports',
   '/administration',
 ];
+
+// Module 3's own "Coming Soon" placeholders — not part of the generic
+// Module 1 MODULE_ROUTES list above since their copy is Module-3-specific
+// (see ModulePlaceholderPage's BODIES map), not the generic
+// "implemented in a future phase" text.
+const MODULE_3_PLACEHOLDER_ROUTES = ['/module-3/builder', '/module-3/generator'];
 
 function App() {
   return (
@@ -50,6 +57,10 @@ function App() {
                 <Route path="/dashboard" element={<DashboardPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/module-3/validator" element={<LandingPageValidatorPage />} />
+                {MODULE_3_PLACEHOLDER_ROUTES.map((path) => (
+                  <Route key={path} path={path} element={<ModulePlaceholderPage />} />
+                ))}
                 {MODULE_ROUTES.map((path) => (
                   <Route key={path} path={path} element={<ModulePlaceholderPage />} />
                 ))}
