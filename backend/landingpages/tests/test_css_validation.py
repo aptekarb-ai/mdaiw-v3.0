@@ -29,7 +29,15 @@ def _make_user(username='alice', password='pw12345!'):
 
 
 def _css_issues(result):
-    return [issue for issue in result.issues if issue.language == 'css']
+    # Tool-Grounded AI Engineer sprint — excludes the Complete-LP cross-
+    # language CSS-selector-to-HTML check (source_engine=
+    # 'cross-language-html-css'): a real, independent finding, but not
+    # something the CSS ENGINE itself produced, which is what every
+    # caller of this helper actually means to isolate.
+    return [
+        issue for issue in result.issues
+        if issue.language == 'css' and issue.source_engine != 'cross-language-html-css'
+    ]
 
 
 CASE_A_CSS = '.hero {\n  color red;\n  margin: 0px;\n}\n'
@@ -300,7 +308,15 @@ class CssAdapterFailureIsolationTests(TestCase):
         self.assertNotIn('Traceback', css_status.message)
 
 
+@override_settings(LP_VALIDATOR_WORKER_ENABLED=False)
 class NodeBridgeTests(TestCase):
+    """Validator Worker sprint — these tests simulate SUBPROCESS-level
+    transport failures directly (mocking `subprocess.run`), so the
+    persistent worker pool (which never calls `subprocess.run` per
+    request — see node_worker_pool.py) is disabled class-wide to force
+    every call through the subprocess fallback path these tests are
+    actually exercising."""
+
     def test_missing_node_executable_raises_safe_error(self):
         with override_settings(LP_NODE_EXECUTABLE='definitely-not-a-real-node-binary-xyz'):
             with self.assertRaises(NodeBridgeError) as ctx:
@@ -404,13 +420,24 @@ class CssApiTests(TestCase):
 
     def test_css_engine_unavailable_returns_partial_success_not_500(self):
         html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>T</title></head><body><img src="x.png"></body></html>'
-        with override_settings(LP_NODE_EXECUTABLE='definitely-not-a-real-node-binary-xyz'):
+        # Validator Worker sprint — the worker pool is a process-lifetime
+        # singleton (see node_worker_pool.get_worker_pool()) that does not
+        # re-resolve LP_NODE_EXECUTABLE once already started by an earlier
+        # test in this run; disabling it here forces this specific
+        # request through the subprocess fallback the override is meant
+        # to simulate failing.
+        with override_settings(LP_NODE_EXECUTABLE='definitely-not-a-real-node-binary-xyz', LP_VALIDATOR_WORKER_ENABLED=False):
             response = self.client.post(
                 '/api/v1/lp/validate/', {'html': html, 'css': CASE_A_CSS}, format='json',
             )
         self.assertEqual(response.status_code, 201, response.content)
         body = response.json()
-        languages = {i['language'] for i in body['issues']}
+        # Tool-Grounded AI Engineer sprint — excludes the independent
+        # Complete-LP cross-language CSS-selector check, which needs no
+        # working CSS engine at all (it's a plain-text scan) and so can
+        # legitimately still fire here; every OTHER css-language finding
+        # must be absent since the CSS engine itself is unavailable.
+        languages = {i['language'] for i in body['issues'] if not i['rule_id'].startswith('cross-language:')}
         self.assertIn('html', languages)
         self.assertNotIn('css', languages)
         css_status = next(s for s in body['engine_status'] if s['engine_name'] == 'css-conformance')

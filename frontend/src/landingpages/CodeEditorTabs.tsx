@@ -10,7 +10,6 @@ import { CodeEditor, type CodeEditorHandle, type CodeEditorMarker } from './Code
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import {
   EDITOR_LANGUAGES,
-  LANGUAGE_DISPLAY_NAME,
   MONACO_LANGUAGE_FOR,
   SCOPE_TO_EDITOR_LANGUAGE,
   type EditorLanguage,
@@ -36,16 +35,42 @@ export interface CodeEditorTabsProps {
   // matching every pre-existing caller/test that never had a concept of
   // scope-gated tabs.
   scope?: ValidationScope;
+  // Sprint CSS-E — overrides the css tab's Monaco language (e.g. 'scss',
+  // 'less') when the stylesheet source type isn't plain CSS. Falls back to
+  // MONACO_LANGUAGE_FOR.css when omitted.
+  cssMonacoLanguage?: string;
+  // Sprint CSS-E — overrides the css tab's DISPLAY label (tab text, Clear
+  // button, clear-confirmation heading) to 'SCSS'/'Sass'/'LESS' when that
+  // source type is selected. Deliberately does NOT affect the editor's own
+  // `aria-label` (stays "CSS code") — it is still the same tab/field,
+  // just interpreting different syntax; existing Go to Line/marker wiring
+  // keyed on the 'css' editor language is unaffected either way.
+  cssTabLabel?: string;
+  // Sprint CSS-E — the parent needs to know which tab is active (not just
+  // imperatively via the ref) to decide whether to show the stylesheet
+  // source-type selector, which only appears while the css tab is active
+  // under Complete LP scope.
+  onActiveLanguageChange?: (language: EditorLanguage) => void;
 }
 
 const ALL_LANGUAGE_KEYS = EDITOR_LANGUAGES.map((entry) => entry.key);
 
 export const CodeEditorTabs = forwardRef<CodeEditorTabsHandle, CodeEditorTabsProps>(
   function CodeEditorTabs(
-    { values, onChange, onClear, disabled, markersByLanguage = {}, resolvedLinesByLanguage = {}, scope = 'complete' },
+    {
+      values, onChange, onClear, disabled, markersByLanguage = {}, resolvedLinesByLanguage = {}, scope = 'complete',
+      cssMonacoLanguage, cssTabLabel, onActiveLanguageChange,
+    },
     ref,
   ) {
-    const [active, setActive] = useState<EditorLanguage>('html');
+    const [active, setActiveRaw] = useState<EditorLanguage>('html');
+    function setActive(next: EditorLanguage | ((current: EditorLanguage) => EditorLanguage)) {
+      setActiveRaw((current) => {
+        const resolved = typeof next === 'function' ? next(current) : next;
+        if (resolved !== current) onActiveLanguageChange?.(resolved);
+        return resolved;
+      });
+    }
     const [confirmingClear, setConfirmingClear] = useState(false);
     const editorRefs = useRef<Partial<Record<EditorLanguage, CodeEditorHandle | null>>>({});
     const tabRefs = useRef<Partial<Record<EditorLanguage, HTMLButtonElement | null>>>({});
@@ -114,7 +139,11 @@ export const CodeEditorTabs = forwardRef<CodeEditorTabsHandle, CodeEditorTabsPro
       }
     }
 
-    const activeLabel = EDITOR_LANGUAGES.find((entry) => entry.key === active)?.label ?? active;
+    function displayLabel(language: EditorLanguage): string {
+      if (language === 'css' && cssTabLabel) return cssTabLabel;
+      return EDITOR_LANGUAGES.find((entry) => entry.key === language)?.label ?? language;
+    }
+    const activeLabel = displayLabel(active);
     const activeIsEmpty = !values[active]?.trim();
 
     function handleClearConfirmed() {
@@ -156,7 +185,7 @@ export const CodeEditorTabs = forwardRef<CodeEditorTabsHandle, CodeEditorTabsPro
                 onClick={() => setActive(entry.key)}
                 onKeyDown={(event) => handleTabKeyDown(event, entry.key)}
               >
-                {entry.label}
+                {displayLabel(entry.key)}
               </button>
             ))}
           </div>
@@ -189,7 +218,7 @@ export const CodeEditorTabs = forwardRef<CodeEditorTabsHandle, CodeEditorTabsPro
                 ref={(el) => {
                   editorRefs.current[entry.key] = el;
                 }}
-                language={MONACO_LANGUAGE_FOR[entry.key]}
+                language={entry.key === 'css' && cssMonacoLanguage ? cssMonacoLanguage : MONACO_LANGUAGE_FOR[entry.key]}
                 value={values[entry.key]}
                 onChange={(value) => onChange(entry.key, value)}
                 ariaLabel={`${entry.label} code`}
@@ -203,7 +232,7 @@ export const CodeEditorTabs = forwardRef<CodeEditorTabsHandle, CodeEditorTabsPro
 
         <ConfirmDialog
           open={confirmingClear}
-          heading={`Clear ${LANGUAGE_DISPLAY_NAME[EDITOR_LANGUAGES.find((e) => e.key === active)!.file]} code?`}
+          heading={`Clear ${activeLabel} code?`}
           body="This removes all code from the active tab. Code in the other tabs will not be changed."
           confirmLabel="Clear Code"
           onConfirm={handleClearConfirmed}

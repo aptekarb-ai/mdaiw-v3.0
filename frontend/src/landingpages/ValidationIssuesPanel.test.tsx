@@ -27,14 +27,27 @@ const COUNTS = { error: 1, warning: 1, info: 0 };
 
 describe('ValidationIssuesPanel', () => {
   it('renders the total issue count and all issues by default', () => {
-    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} />);
+    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
     expect(screen.getByText('Validation Issues (2)')).toBeInTheDocument();
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 
+  it('maps issueStatuses to the matching card by fingerprint, not list position', () => {
+    render(<ValidationIssuesPanel
+      issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}}
+      issueStatuses={{ fp2: 'resolved' }}
+    />);
+    // fp2 (second issue, "missing alt") is resolved; fp1 (first issue,
+    // "never closed") has no status — proving the lookup is keyed by
+    // fingerprint, not array index.
+    expect(screen.getByText('✓ Fixed')).toBeInTheDocument();
+    expect(screen.getByText('"<div>" is never closed.').closest('li')).not.toHaveClass('validation-issue-card--status-resolved');
+    expect(screen.getByText('Image is missing an alt attribute.').closest('li')).toHaveClass('validation-issue-card--status-resolved');
+  });
+
   it('filters issues by severity', async () => {
     const user = userEvent.setup();
-    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} />);
+    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
 
     await user.click(screen.getByRole('tab', { name: 'Errors (1)' }));
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
@@ -42,22 +55,31 @@ describe('ValidationIssuesPanel', () => {
   });
 
   it('shows the no-issues empty state when total is zero', () => {
-    render(<ValidationIssuesPanel issues={[]} counts={{ error: 0, warning: 0, info: 0 }} onGoToLine={() => {}} />);
+    render(<ValidationIssuesPanel issues={[]} counts={{ error: 0, warning: 0, info: 0 }} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
     expect(screen.getByText('No issues found. This code passed all current checks.')).toBeInTheDocument();
   });
 
   it('calls onGoToLine with the selected issue', async () => {
     const user = userEvent.setup();
     const onGoToLine = vi.fn();
-    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={onGoToLine} />);
+    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={onGoToLine} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
 
     await user.click(screen.getAllByRole('button', { name: 'Go to Line' })[0]);
     expect(onGoToLine).toHaveBeenCalledWith(HTML_ISSUES[0]);
   });
 
+  it('calls onFixThisIssue with the selected issue', async () => {
+    const user = userEvent.setup();
+    const onFixThisIssue = vi.fn();
+    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={onFixThisIssue} onAskYukti={() => {}} />);
+
+    await user.click(screen.getAllByRole('button', { name: 'AI Fix This Issue' })[0]);
+    expect(onFixThisIssue).toHaveBeenCalledWith(HTML_ISSUES[0]);
+  });
+
   it('supports arrow-key navigation between severity filter tabs', async () => {
     const user = userEvent.setup();
-    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} />);
+    render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
 
     screen.getByRole('tab', { name: 'All (2)' }).focus();
     await user.keyboard('{ArrowRight}');
@@ -66,7 +88,7 @@ describe('ValidationIssuesPanel', () => {
 
   describe('language and severity labels', () => {
     it('displays "HTML Error" for an HTML error issue', () => {
-      render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} />);
+      render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
       expect(screen.getByText('HTML Error')).toBeInTheDocument();
     });
 
@@ -76,6 +98,8 @@ describe('ValidationIssuesPanel', () => {
           issues={[HTML_ISSUES[0], CSS_ISSUE]}
           counts={{ error: 2, warning: 0, info: 0 }}
           onGoToLine={() => {}}
+          onFixThisIssue={() => {}}
+          onAskYukti={() => {}}
         />,
       );
       expect(screen.getByText('HTML Error')).toBeInTheDocument();
@@ -83,16 +107,16 @@ describe('ValidationIssuesPanel', () => {
     });
 
     it('never shows raw internal engine codes as the primary label', () => {
-      render(<ValidationIssuesPanel issues={[CSS_ISSUE]} counts={{ error: 1, warning: 0, info: 0 }} onGoToLine={() => {}} />);
+      render(<ValidationIssuesPanel issues={[CSS_ISSUE]} counts={{ error: 1, warning: 0, info: 0 }} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
       expect(screen.queryByText('css', { selector: '.validation-issue-card__severity' })).not.toBeInTheDocument();
       // Technical engine metadata is allowed as *secondary* detail.
-      expect(screen.getByText('PostCSS 8.5.25')).toBeInTheDocument();
+      expect(screen.getByText('Detected by: PostCSS 8.5.25')).toBeInTheDocument();
     });
   });
 
   describe('language filter', () => {
     it('is hidden when only one language is present in the report', () => {
-      render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} />);
+      render(<ValidationIssuesPanel issues={HTML_ISSUES} counts={COUNTS} onGoToLine={() => {}} onFixThisIssue={() => {}} onAskYukti={() => {}} />);
       expect(screen.queryByRole('tablist', { name: 'Filter issues by language' })).not.toBeInTheDocument();
     });
 
@@ -103,6 +127,8 @@ describe('ValidationIssuesPanel', () => {
           issues={[...HTML_ISSUES, CSS_ISSUE]}
           counts={{ error: 2, warning: 1, info: 0 }}
           onGoToLine={() => {}}
+          onFixThisIssue={() => {}}
+          onAskYukti={() => {}}
         />,
       );
 
@@ -125,6 +151,8 @@ describe('ValidationIssuesPanel', () => {
           issues={[...HTML_ISSUES, CSS_ISSUE]}
           counts={{ error: 2, warning: 1, info: 0 }}
           onGoToLine={() => {}}
+          onFixThisIssue={() => {}}
+          onAskYukti={() => {}}
         />,
       );
       await user.click(screen.getByRole('tab', { name: 'Errors (2)' }));

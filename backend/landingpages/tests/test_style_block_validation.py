@@ -182,7 +182,7 @@ class DedupIsolationTests(TestCase):
         html = '<html><head><style>.a { color red; }</style></head></html>'
         css = '.b { color red; }'  # same shape of defect, so both land at their own document's line 1
         result = run(html=html, css=css, validation_scope='complete')
-        standalone = [i for i in result.issues if i.language == 'css' and i.source_context == '']
+        standalone = [i for i in result.issues if i.language == 'css' and i.source_context == 'standalone-css']
         embedded = _style_block_issues(result)
         self.assertTrue(standalone, result.issues)
         self.assertTrue(embedded, result.issues)

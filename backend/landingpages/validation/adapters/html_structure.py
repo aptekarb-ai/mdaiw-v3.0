@@ -21,6 +21,7 @@ from ..schema import (
     CONFIDENCE_DEFINITE,
     FIX_TYPE_INSERT_CLOSING_TAG,
     FIX_TYPE_NONE,
+    FIX_TYPE_REMOVE_CLOSING_TAG,
     SEVERITY_ERROR,
     SEVERITY_WARNING,
     ValidationIssueData,
@@ -132,6 +133,11 @@ class _StructureChecker(HTMLParser):
                 del self._open_stack[index:]
                 return
         # No matching opener anywhere on the stack — a stray closing tag.
+        # Repair-architecture closure sprint, spec section 4 — this is
+        # ALWAYS unambiguous (there is no "which orphan" choice to make,
+        # unlike the unclosed-tag case above): the tag-stack has already
+        # PROVEN no opener exists anywhere, so removing exactly this
+        # closing tag is always safe and never a business decision.
         line, column = self.getpos()
         self.issues.append(_issue(
             rule_id='unexpected-closing-tag',
@@ -139,7 +145,10 @@ class _StructureChecker(HTMLParser):
             message=f'Unexpected closing tag "</{tag}>" has no matching opening tag.',
             start_line=line,
             start_column=column + 1,
-            requires_manual_review=True,
+            fixable=True,
+            fix_type=FIX_TYPE_REMOVE_CLOSING_TAG,
+            deterministic_fix={'action': 'remove_closing_tag', 'tag': tag, 'start_line': line, 'start_column': column + 1},
+            requires_manual_review=False,
             related_element=tag,
         ))
 

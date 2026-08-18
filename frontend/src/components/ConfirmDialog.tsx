@@ -22,10 +22,15 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (open) {
+      previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       confirmButtonRef.current?.focus();
+    } else {
+      previouslyFocusedElementRef.current?.focus();
+      previouslyFocusedElementRef.current = null;
     }
   }, [open]);
 

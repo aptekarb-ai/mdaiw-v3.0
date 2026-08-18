@@ -1,0 +1,12 @@
+%%[
+  VAR @firstName, @score
+  SET @firstName = AttributeValue("FirstName")
+  IF @firstName == "" THEN
+    SET @firstName = "Friend"
+  SET @score = Add(@undeclaredCounter, 1)
+]%%
+<p>Hello %%=v(@firstName)=%%!</p>
+%%[
+  SET @rawHtml = RequestParameter("redirect")
+  Output(Concat("<a href='", @rawHtml, "'>Continue</a>"))
+]%%

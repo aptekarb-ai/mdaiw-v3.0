@@ -8,13 +8,28 @@
    definite height without touching any Module 1 file. `100dvh` is used
    with a `100vh` fallback for browsers/older WebViews without dvh support
    — the fallback rule is overwritten by the dvh rule wherever it's
-   understood. */
+   understood.
+
+   `overflow-y: auto` is load-bearing, not decorative: this box has a
+   FIXED height, and any child stack taller than that (editor+issues row
+   at its min-height floor, plus the Generated CSS panel, plus any future
+   Fix Review/AI Review section) must scroll *inside* this box rather than
+   spill past its bottom edge. Without it, `overflow` defaults to
+   `visible` — the box's own layout height stays at the fixed `height`
+   value regardless of how much content overflows it, so the app shell's
+   Footer (a normal-flow sibling of this page, positioned right after it)
+   ends up sitting in the middle of that visually-overflowing content
+   instead of after it. This was invisible before Generated CSS existed
+   as a second stacked section — a single editor+issues row was designed
+   to exactly fill the fixed height, never exceed it. */
 .validator-page {
   display: flex;
   flex-direction: column;
   min-height: 0;
   height: calc(100vh - var(--app-header-height) - var(--app-footer-height) - (var(--space-6) * 2));
   height: calc(100dvh - var(--app-header-height) - var(--app-footer-height) - (var(--space-6) * 2));
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .validator-page__header {
@@ -43,6 +58,58 @@
 
 .validator-page__back:hover {
   background: var(--color-background-light);
+}
+
+.validator-page__stylesheet-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.validator-page__compile-status {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  background: var(--color-background-light);
+}
+
+.validator-page__compile-status-helper {
+  font-size: 11px;
+  font-weight: 400;
+  color: inherit;
+  opacity: 0.85;
+}
+
+.validator-page__compile-status--compiled {
+  color: var(--color-primary-dark);
+  background: var(--color-success-bg);
+}
+
+.validator-page__compile-status--blocked-by-source-errors,
+.validator-page__compile-status--failed-internally,
+.validator-page__compile-status--output-limit-exceeded {
+  color: var(--color-error);
+  background: var(--color-error-bg);
+}
+
+.validator-page__compile-status--compiler-unavailable,
+.validator-page__compile-status--timed-out {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
+}
+
+.validator-page__compile-status--stale,
+.validator-page__compile-status--compiling {
+  color: var(--color-warning);
+  background: var(--color-warning-bg);
 }
 
 .validator-page__workspace {
@@ -125,6 +192,58 @@
 
 .validator-error-banner p {
   margin: 0;
+}
+
+.validator-page__fix-failed-actions {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.validator-page__preview-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--color-error);
+  background: var(--color-error-bg);
+  border-radius: var(--radius-sm);
+  color: var(--color-error);
+}
+
+.validator-page__preview-error p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.validator-page__fix-applied-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--color-accent-green);
+  background: var(--color-success-bg);
+  border-radius: var(--radius-sm);
+  color: var(--color-primary-dark);
+}
+
+.validator-page__fix-applied-banner p {
+  margin: 0;
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Repair-architecture closure sprint, spec section 19 — the green
+   success styling above is only accurate when the run actually
+   converged; anything else (errors still remaining, structural
+   recovery failed) uses this warning presentation instead. */
+.validator-page__fix-applied-banner--attention {
+  border-color: var(--color-warning);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
 }
 
 .validator-stale-banner {

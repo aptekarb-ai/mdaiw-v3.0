@@ -61,6 +61,18 @@ export function buildMonacoEditorReactMock() {
   }) {
     const valueRef = useRef(value);
     valueRef.current = value;
+    // Real @monaco-editor/react syncs a controlled `value` prop by calling
+    // the underlying model's setValue() — which fires the SAME
+    // onDidChangeModelContent event a real keystroke does, so a caller
+    // that changes `value` programmatically (not via this component's own
+    // onChange) sees an onChange callback it never typed. A plain
+    // controlled <textarea> can't reproduce that (React never fires a DOM
+    // onChange from a prop-only update), so this mock replicates it
+    // deliberately: `lastEmittedRef` tracks the value WE last reported via
+    // onChange; if the `value` prop changes to something else, that change
+    // came from outside (a programmatic setValues()), so it's echoed back
+    // through onChange exactly like real Monaco does.
+    const lastEmittedRef = useRef(value);
 
     useEffect(() => {
       const fakeEditor: FakeMonacoEditorInstance = {
@@ -79,12 +91,23 @@ export function buildMonacoEditorReactMock() {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    useEffect(() => {
+      if (value !== lastEmittedRef.current) {
+        lastEmittedRef.current = value;
+        onChange?.(value);
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value]);
+
     return (
       <textarea
         aria-label={options?.ariaLabel}
         value={value}
         readOnly={options?.readOnly}
-        onChange={(event) => onChange?.(event.target.value)}
+        onChange={(event) => {
+          lastEmittedRef.current = event.target.value;
+          onChange?.(event.target.value);
+        }}
       />
     );
   }

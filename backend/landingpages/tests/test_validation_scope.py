@@ -51,12 +51,12 @@ class EngineScopeTests(TestCase):
         result = run(html='<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>T</title></head><body><h1>Hi</h1></body></html>', css='', validation_scope='complete')
         self.assertFalse(any(i.language == 'css' for i in result.issues))
 
-    def test_javascript_scope_reports_unavailable_engine_not_html(self):
+    def test_javascript_scope_runs_only_javascript_not_html_or_css(self):
         result = run(html=BROKEN_HTML, css=BROKEN_CSS, js='const x = 1', validation_scope='javascript')
-        self.assertEqual(result.issues, [])
+        languages = {i.language for i in result.issues}
+        self.assertEqual(languages, {'javascript'})
         status = next(s for s in result.engine_status if s.engine_name == 'javascript-conformance')
-        self.assertFalse(status.success)
-        self.assertIn('not available', status.message)
+        self.assertTrue(status.success)
 
     def test_typescript_scope_reports_unavailable_engine_not_html(self):
         result = run(html=BROKEN_HTML, ts='const x: number = 1', validation_scope='typescript')
@@ -143,12 +143,12 @@ class ValidateApiScopeTests(TestCase):
         )
         self.assertIn(response.status_code, (401, 403))
 
-    def test_javascript_scope_returns_201_with_unavailable_status_not_500(self):
+    def test_javascript_scope_returns_201_with_real_findings(self):
         response = self.client.post(
             '/api/v1/lp/validate/', {'html': '', 'js': 'const x = 1;', 'validation_scope': 'javascript'}, format='json',
         )
         self.assertEqual(response.status_code, 201, response.content)
         body = response.json()
-        self.assertEqual(body['issues'], [])
+        self.assertTrue(any(issue['rule_id'] == 'no-unused-vars' for issue in body['issues']), body['issues'])
         status_entry = next(s for s in body['engine_status'] if s['engine_name'] == 'javascript-conformance')
-        self.assertFalse(status_entry['success'])
+        self.assertTrue(status_entry['success'])

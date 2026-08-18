@@ -39,6 +39,11 @@ class CssConformanceAdapter(ValidatorAdapter):
             severity = raw.get('severity') if raw.get('severity') in ('error', 'warning', 'info') else 'warning'
             issues.append(ValidationIssueData(
                 language='css',
+                # Sprint CSS-C: explicit context, matching
+                # standalone-scss/standalone-sass, so Complete LP's
+                # "every finding identifies its source context" holds
+                # for plain CSS too (see spec section 7's context list).
+                source_context='standalone-css',
                 source_engine=source_engine,
                 engine_version=engine_version,
                 rule_id=rule_id,

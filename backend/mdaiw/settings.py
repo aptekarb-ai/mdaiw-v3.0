@@ -276,3 +276,230 @@ LP_NODE_EXECUTABLE = os.environ.get('LP_NODE_EXECUTABLE', 'node')
 LP_CSS_VALIDATION_TIMEOUT_SECONDS = float(os.environ.get('LP_CSS_VALIDATION_TIMEOUT_SECONDS', '5'))
 LP_CSS_VALIDATION_MAX_OUTPUT_BYTES = int(os.environ.get('LP_CSS_VALIDATION_MAX_OUTPUT_BYTES', str(2_000_000)))
 LP_CSS_VALIDATION_MAX_ISSUES = int(os.environ.get('LP_CSS_VALIDATION_MAX_ISSUES', '500'))
+
+# SCSS/Sass compilation (Sprint CSS-C) — same controlled Node subprocess
+# bridge, separate timeout since Dart Sass compilation is slower than
+# plain CSS parsing. LP_CSS_VALIDATION_MAX_OUTPUT_BYTES/MAX_ISSUES above
+# are shared with this path.
+LP_SCSS_COMPILATION_TIMEOUT_SECONDS = float(os.environ.get('LP_SCSS_COMPILATION_TIMEOUT_SECONDS', '8'))
+
+# LESS compilation (Sprint CSS-D) — same controlled Node subprocess bridge.
+LP_LESS_COMPILATION_TIMEOUT_SECONDS = float(os.environ.get('LP_LESS_COMPILATION_TIMEOUT_SECONDS', '8'))
+
+# JavaScript validation (Module 3 — LP Validator, JS engine sprint) — same
+# controlled Node subprocess bridge, see
+# backend/landingpages/validation/node_bridge.py::run_js_validation.
+# 8s (not 5s), same reasoning as SCSS/LESS above: ESLint's own cold-start
+# (loading the Linter class, @eslint/js, and this project's custom rule
+# modules) measured 4.4-4.5s on a cold Node process vs ~0.4s once the
+# OS/AV file cache is warm — directly measured as the cause of an
+# intermittent full-suite-only failure in
+# test_javascript_validation.AcceptanceCaseTests.test_case_a_javascript_only
+# (passed standalone every time; the flake only appeared once across
+# many full-suite runs, right when a cold-start coincided with
+# contention from the hundreds of other Node subprocesses the full suite
+# spawns). 5s left under 15% margin above the measured worst case —
+# not enough headroom under load. 8s matches the already-proven-safe
+# SCSS/LESS value for the same class of cold-start cost.
+LP_JS_VALIDATION_TIMEOUT_SECONDS = float(os.environ.get('LP_JS_VALIDATION_TIMEOUT_SECONDS', '8'))
+
+# Nu Html Checker (Hybrid Validator + AI Engineer architecture sprint) —
+# controlled Java subprocess bridge, see
+# backend/landingpages/validation/java_bridge.py. LP_JAVA_EXECUTABLE is
+# resolved via shutil.which() at call time, never accepted from a request.
+# vnu.jar requires a Java 11+ runtime; override this only if the `java`
+# resolved via PATH is older (this adapter reports itself cleanly
+# unavailable rather than crashing when no suitable Java is found).
+LP_JAVA_EXECUTABLE = os.environ.get('LP_JAVA_EXECUTABLE', 'java')
+LP_NU_HTML_TIMEOUT_SECONDS = float(os.environ.get('LP_NU_HTML_TIMEOUT_SECONDS', '10'))
+LP_NU_HTML_MAX_OUTPUT_BYTES = int(os.environ.get('LP_NU_HTML_MAX_OUTPUT_BYTES', str(2_000_000)))
+LP_JS_VALIDATION_MAX_OUTPUT_BYTES = int(os.environ.get('LP_JS_VALIDATION_MAX_OUTPUT_BYTES', str(2_000_000)))
+LP_JS_VALIDATION_MAX_ISSUES = int(os.environ.get('LP_JS_VALIDATION_MAX_ISSUES', '500'))
+
+# AI Review & Fix (Module 3 — LP Validator, AI Review sprint) — same
+# provider-availability pattern as YUKTI_AI_PROVIDER above (see
+# yukti/providers.py::get_default_provider): empty/unset
+# LP_AI_REVIEW_PROVIDER (the default) or a missing OPENAI_API_KEY means
+# "Review & Fix with AI" reports AI_REVIEW_UNAVAILABLE — never a crash,
+# never a silently-broken feature. Reuses the same OPENAI_API_KEY value
+# as Yukti (one key, two independent optional features) rather than
+# introducing a second secret to manage. Independent rate limit/timeout/
+# token settings from Yukti's own, since a code-review call is a larger,
+# slower, more expensive request than a chat turn.
+LP_AI_REVIEW_PROVIDER = os.environ.get('LP_AI_REVIEW_PROVIDER', '')
+LP_AI_REVIEW_MODEL = os.environ.get('LP_AI_REVIEW_MODEL', 'gpt-4o-mini')
+LP_AI_REVIEW_TIMEOUT_SECONDS = float(os.environ.get('LP_AI_REVIEW_TIMEOUT_SECONDS', '30'))
+LP_AI_REVIEW_MAX_OUTPUT_TOKENS = int(os.environ.get('LP_AI_REVIEW_MAX_OUTPUT_TOKENS', '4000'))
+LP_AI_REVIEW_MAX_REQUESTS_PER_WINDOW = int(os.environ.get('LP_AI_REVIEW_MAX_REQUESTS_PER_WINDOW', '10'))
+LP_AI_REVIEW_WINDOW_SECONDS = int(os.environ.get('LP_AI_REVIEW_WINDOW_SECONDS', '300'))
+
+# AI Engineer Autonomous Repair sprint — the detect-fix-revalidate loop
+# (fixes/iterative.py::run_autonomous_repair) repeats up to this many full
+# validate+repair rounds in ONE "AI Fix Issues" click, so a root defect
+# that was hiding secondary ones (a malformed <html>/<head>, a JS syntax
+# error blocking ESLint, ...) gets a real chance to expose and fix them
+# too, with no manual re-click and no per-issue approval step. Each round
+# is a full deterministic-engines-plus-AI-Engineer revalidation plus (when
+# issues remain that only an AI-assisted fix can address) an AI Review
+# call, so this is a real cost/latency multiplier, not a free knob.
+# Consistent Validation Counts sprint, section 9 — raised from 5: the loop
+# ALREADY stops as soon as genuinely no more progress is possible
+# (stopped_reason 'no_actionable'/'no_progress'/'all_resolved' — see
+# below), so a higher ceiling costs nothing extra for an ordinary fixture
+# that finishes early; it only matters for a deeply-layered malformed
+# document where each round exposes one more real layer and 5 rounds cut
+# the loop off mid-progress. Still configurable via the environment.
+LP_AI_FIX_MAX_ITERATIONS = int(os.environ.get('LP_AI_FIX_MAX_ITERATIONS', '8'))
+
+# Deep Validation + Autonomous Repair sprint, Checkpoint 6 — Whole-Source
+# AI Repair mode (fixes/iterative.py::_attempt_whole_source_repair). Only
+# ever attempted by "AI Fix Issues" (never "AI Fix This Issue" — spec
+# section 12), and only as a fallback when regional patching has already
+# failed to make progress on a structurally malformed file. A whole-file
+# rewrite needs to both receive and RETURN the complete source, so it
+# needs its own, larger output budget than a bounded per-issue patch list
+# — and its own input-size ceiling, since a very large file makes a
+# single-shot full rewrite both expensive and harder to safely diff.
+LP_AI_REPAIR_WHOLE_SOURCE_MAX_INPUT_LENGTH = int(
+    os.environ.get('LP_AI_REPAIR_WHOLE_SOURCE_MAX_INPUT_LENGTH', '12000'),
+)
+LP_AI_REPAIR_WHOLE_SOURCE_MAX_OUTPUT_TOKENS = int(
+    os.environ.get('LP_AI_REPAIR_WHOLE_SOURCE_MAX_OUTPUT_TOKENS', '8000'),
+)
+
+# Yukti explains validation issues (Module 3 — LP Validator, Master AI
+# Yukti sprint). Gated by the SAME LP_AI_REVIEW_PROVIDER/OPENAI_API_KEY
+# switch as AI Review & Fix (see yukti_explain/provider.py) — one
+# AI-availability toggle for the whole LP Validator. Independent rate
+# limit/timeout/token settings, since an explanation call is smaller and
+# faster than a fix-generation call.
+LP_YUKTI_EXPLAIN_MODEL = os.environ.get('LP_YUKTI_EXPLAIN_MODEL', 'gpt-4o-mini')
+LP_YUKTI_EXPLAIN_TIMEOUT_SECONDS = float(os.environ.get('LP_YUKTI_EXPLAIN_TIMEOUT_SECONDS', '20'))
+LP_YUKTI_EXPLAIN_MAX_OUTPUT_TOKENS = int(os.environ.get('LP_YUKTI_EXPLAIN_MAX_OUTPUT_TOKENS', '1200'))
+LP_YUKTI_EXPLAIN_MAX_REQUESTS_PER_WINDOW = int(os.environ.get('LP_YUKTI_EXPLAIN_MAX_REQUESTS_PER_WINDOW', '20'))
+LP_YUKTI_EXPLAIN_WINDOW_SECONDS = int(os.environ.get('LP_YUKTI_EXPLAIN_WINDOW_SECONDS', '300'))
+
+# AI Engineer full-source analysis (Module 3 — LP Validator, AI Engineer
+# sprint). Deliberately its OWN provider toggle — NOT a reuse of
+# LP_AI_REVIEW_PROVIDER like AI Review & Fix/Yukti explain share — because,
+# unlike those two (separate, opt-in endpoints), this runs AUTOMATICALLY
+# inside ValidateView on every AI Validate Code call, the single hottest
+# endpoint in the whole app. Sharing the toggle would mean any test (or
+# environment) that enables AI Review & Fix for its own purposes also
+# silently makes every /validate/ call attempt a real, slow AI Engineer
+# network round-trip — exactly what a live-verification run of this sprint
+# caught. Uses the same OPENAI_API_KEY value as the other two features.
+LP_AI_ENGINEER_PROVIDER = os.environ.get('LP_AI_ENGINEER_PROVIDER', '')
+LP_AI_ENGINEER_MODEL = os.environ.get('LP_AI_ENGINEER_MODEL', 'gpt-4o-mini')
+LP_AI_ENGINEER_TIMEOUT_SECONDS = float(os.environ.get('LP_AI_ENGINEER_TIMEOUT_SECONDS', '25'))
+LP_AI_ENGINEER_MAX_OUTPUT_TOKENS = int(os.environ.get('LP_AI_ENGINEER_MAX_OUTPUT_TOKENS', '2000'))
+LP_AI_ENGINEER_MAX_REQUESTS_PER_WINDOW = int(os.environ.get('LP_AI_ENGINEER_MAX_REQUESTS_PER_WINDOW', '10'))
+LP_AI_ENGINEER_WINDOW_SECONDS = int(os.environ.get('LP_AI_ENGINEER_WINDOW_SECONDS', '300'))
+# Per-language source cap — a source longer than this is not sent to the AI
+# Engineer at all for that language (coverage reports 'skipped-too-large');
+# deterministic engines still run and still cover it fully.
+LP_AI_ENGINEER_MAX_SOURCE_CHARS = int(os.environ.get('LP_AI_ENGINEER_MAX_SOURCE_CHARS', '60000'))
+# Structural-chunk target size and the hard per-language chunk cap — a
+# language needing more chunks than this has its remainder marked
+# 'partial' in analysis_coverage rather than silently scanning only the
+# first N chunks and calling it complete.
+LP_AI_ENGINEER_MAX_CHUNK_CHARS = int(os.environ.get('LP_AI_ENGINEER_MAX_CHUNK_CHARS', '6000'))
+LP_AI_ENGINEER_MAX_CHUNKS_PER_LANGUAGE = int(os.environ.get('LP_AI_ENGINEER_MAX_CHUNKS_PER_LANGUAGE', '4'))
+# Hard ceiling on total OpenAI calls for ONE validate request (every
+# language's chunks plus the optional Complete-LP cross-language pass) —
+# the real backstop against a pathological multi-language, multi-chunk
+# request generating an unbounded number of provider calls.
+LP_AI_ENGINEER_MAX_REQUESTS_PER_VALIDATION = int(os.environ.get('LP_AI_ENGINEER_MAX_REQUESTS_PER_VALIDATION', '8'))
+# Cached per (language, source hash, validation_scope, css_source_type,
+# profile, model) — see ai_engineer/__init__.py::_cached_language_result.
+# Reused whenever the same source is re-validated unchanged, so clicking
+# "AI Validate Code" again after only editing one tab never re-calls the
+# provider for the other, unchanged tabs.
+LP_AI_ENGINEER_CACHE_TTL_SECONDS = int(os.environ.get('LP_AI_ENGINEER_CACHE_TTL_SECONDS', '3600'))
+
+# Controlled Self-Learning AI Engineer sprint (Module 3) — landingpages/
+# knowledge/. Defaults OFF: online research is a genuine outbound network
+# call to a third-party domain, and this project's default posture (like
+# every other AI feature here) is "no network call unless explicitly
+# configured." The Rule Knowledge Registry (validation/rules/) already
+# covers the common case with zero network dependency; this only ever
+# supplements it for a rule the registry has nothing for.
+LP_KNOWLEDGE_ONLINE_RESEARCH_ENABLED = os.environ.get('LP_KNOWLEDGE_ONLINE_RESEARCH_ENABLED', '') == 'true'
+LP_KNOWLEDGE_FETCH_TIMEOUT_SECONDS = float(os.environ.get('LP_KNOWLEDGE_FETCH_TIMEOUT_SECONDS', '5'))
+LP_KNOWLEDGE_MAX_RESPONSE_BYTES = int(os.environ.get('LP_KNOWLEDGE_MAX_RESPONSE_BYTES', str(2 * 1024 * 1024)))
+LP_KNOWLEDGE_MAX_EXCERPT_CHARS = int(os.environ.get('LP_KNOWLEDGE_MAX_EXCERPT_CHARS', '2000'))
+# A cached/verified record older than this is treated as stale — a fresh
+# research attempt is allowed again rather than trusting a possibly
+# outdated excerpt indefinitely (spec section 10 — "version-aware/
+# freshness-aware knowledge").
+LP_KNOWLEDGE_FRESHNESS_DAYS = int(os.environ.get('LP_KNOWLEDGE_FRESHNESS_DAYS', '30'))
+# Per (language, rule_id) research-attempt rate limit window — prevents a
+# run with many distinct uncatalogued rule_ids from firing a burst of
+# outbound requests at the same source in a short span.
+LP_KNOWLEDGE_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get('LP_KNOWLEDGE_RATE_LIMIT_WINDOW_SECONDS', '600'))
+
+# Low-Latency AI Engineer Performance Optimization sprint — caches every
+# validator/compiler subprocess call's result by a hash of its own
+# arguments (see validation/bridge_cache.py). Each of those functions is
+# a pure function of its arguments (verified per-function — none reads
+# `project`/a timestamp/anything else that would make caching unsound),
+# so this is safe to enable by default, unlike the online-knowledge
+# fetch (a real network call, defaults OFF). TTL is short — long enough
+# to cover "the same source re-validated unchanged within one repair
+# operation" and "an identical repeated fixture shortly after," short
+# enough that a validator/compiler upgrade in a redeployed environment
+# is never stuck serving a stale cached result for long.
+LP_VALIDATOR_CACHE_ENABLED = os.environ.get('LP_VALIDATOR_CACHE_ENABLED', 'true') == 'true'
+LP_VALIDATOR_CACHE_TTL_SECONDS = int(os.environ.get('LP_VALIDATOR_CACHE_TTL_SECONDS', '900'))
+# spec section 36/37 — "AI Fix Issues" clicked twice in a row against
+# UNCHANGED source returns the first click's result immediately, no new
+# AI request/rate-limit slot spent. Short on purpose: this only ever
+# protects against an accidental double-click/immediate re-check, never
+# a deliberate later retry (see fixes/iterative.py::run_autonomous_repair).
+LP_AI_FIX_NOOP_CACHE_TTL_SECONDS = int(os.environ.get('LP_AI_FIX_NOOP_CACHE_TTL_SECONDS', '120'))
+
+# Validator Worker + Subprocess Latency sprint — a small pool of
+# long-lived Node worker processes that keep ESLint/Stylelint/PostCSS/
+# Dart-Sass/Less loaded in memory across requests (profiled at ~85-95%
+# of total wall-clock being module-load, not actual validation work —
+# see validators_node/worker_server.mjs's docstring and this sprint's
+# final report). Always falls back safely to the existing one-shot
+# subprocess path (node_bridge.py) on any worker failure, so disabling
+# this can never make validation itself unavailable — only slower.
+LP_VALIDATOR_WORKER_ENABLED = os.environ.get('LP_VALIDATOR_WORKER_ENABLED', 'true') == 'true'
+# Small on purpose (spec section 6) — each worker handles ONE request at
+# a time, strictly sequentially; concurrency comes from having a FEW
+# such processes, not from letting requests race inside one. 2 covers
+# Complete LP's common case (CSS and JS validating at once, on separate
+# Python threads since the prior Low-Latency sprint) without the memory
+# cost of a large pool sitting mostly idle.
+LP_VALIDATOR_WORKER_POOL_SIZE = int(os.environ.get('LP_VALIDATOR_WORKER_POOL_SIZE', '2'))
+LP_VALIDATOR_WORKER_STARTUP_TIMEOUT_SECONDS = float(os.environ.get('LP_VALIDATOR_WORKER_STARTUP_TIMEOUT_SECONDS', '15'))
+LP_VALIDATOR_WORKER_REQUEST_TIMEOUT_SECONDS = float(os.environ.get('LP_VALIDATOR_WORKER_REQUEST_TIMEOUT_SECONDS', '10'))
+
+# Secure Preview (Module 3 — LP Validator). A snapshot is a full assembled
+# HTML document stored directly in the database (models.
+# LandingPagePreviewSnapshot) — small, ephemeral, TTL-bound, never a
+# durable project asset. Size limits bound the assembled document itself
+# (after HTML+CSS+JS are combined), independent of any per-field limit the
+# validator already enforces on the editor tabs individually.
+LP_PREVIEW_TTL_SECONDS = int(os.environ.get('LP_PREVIEW_TTL_SECONDS', str(30 * 60)))
+LP_PREVIEW_MAX_HTML_BYTES = int(os.environ.get('LP_PREVIEW_MAX_HTML_BYTES', str(500_000)))
+LP_PREVIEW_MAX_CSS_BYTES = int(os.environ.get('LP_PREVIEW_MAX_CSS_BYTES', str(500_000)))
+LP_PREVIEW_MAX_JS_BYTES = int(os.environ.get('LP_PREVIEW_MAX_JS_BYTES', str(500_000)))
+LP_PREVIEW_MAX_DOCUMENT_BYTES = int(os.environ.get('LP_PREVIEW_MAX_DOCUMENT_BYTES', str(2_000_000)))
+LP_PREVIEW_MAX_REQUESTS_PER_WINDOW = int(os.environ.get('LP_PREVIEW_MAX_REQUESTS_PER_WINDOW', '20'))
+LP_PREVIEW_WINDOW_SECONDS = int(os.environ.get('LP_PREVIEW_WINDOW_SECONDS', '300'))
+
+# Cross-browser Check (Module 3 — Secure Preview). Renders the current
+# preview snapshot through a REAL Chromium/Firefox/WebKit engine, in an
+# isolated subprocess (see landingpages/cross_browser/runner.py) — never
+# inside this Django worker, never with application cookies/auth state.
+# The outer subprocess.run() timeout (LP_CROSS_BROWSER_TIMEOUT_SECONDS) is
+# the hard wall-clock cap; LP_CROSS_BROWSER_NAV_TIMEOUT_SECONDS is the
+# inner Playwright per-navigation timeout, always kept below it.
+LP_CROSS_BROWSER_TIMEOUT_SECONDS = float(os.environ.get('LP_CROSS_BROWSER_TIMEOUT_SECONDS', '30'))
+LP_CROSS_BROWSER_NAV_TIMEOUT_SECONDS = float(os.environ.get('LP_CROSS_BROWSER_NAV_TIMEOUT_SECONDS', '15'))
+LP_CROSS_BROWSER_MAX_OUTPUT_BYTES = int(os.environ.get('LP_CROSS_BROWSER_MAX_OUTPUT_BYTES', str(8_000_000)))
+LP_CROSS_BROWSER_MAX_REQUESTS_PER_WINDOW = int(os.environ.get('LP_CROSS_BROWSER_MAX_REQUESTS_PER_WINDOW', '10'))
+LP_CROSS_BROWSER_WINDOW_SECONDS = int(os.environ.get('LP_CROSS_BROWSER_WINDOW_SECONDS', '300'))

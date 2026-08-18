@@ -1,12 +1,19 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
 import { ValidationIssueCard } from './ValidationIssueCard';
-import { LANGUAGE_DISPLAY_NAME, type IssueFile, type IssueFilter, type ValidationIssue } from '../types/landingpages';
+import { LANGUAGE_DISPLAY_NAME, type IssueCardStatus, type IssueFile, type IssueFilter, type ValidationIssue } from '../types/landingpages';
 import './ValidationIssuesPanel.css';
 
 export interface ValidationIssuesPanelProps {
   issues: ValidationIssue[];
   counts: { error: number; warning: number; info: number };
   onGoToLine: (issue: ValidationIssue) => void;
+  onFixThisIssue: (issue: ValidationIssue) => void;
+  onAskYukti: (issue: ValidationIssue) => void;
+  // Live per-card status during an active AI Validate/AI Fix operation,
+  // keyed by the issue's stable fingerprint (never a DB id — see
+  // RepairOperationStatus.issue_updates). Absent/undefined outside an
+  // active operation, in which case every card renders with no status.
+  issueStatuses?: Record<string, IssueCardStatus>;
 }
 
 const FILTERS: { key: IssueFilter; label: string }[] = [
@@ -27,7 +34,7 @@ function severityCounts(scopedIssues: ValidationIssue[]) {
   };
 }
 
-export function ValidationIssuesPanel({ issues, counts, onGoToLine }: ValidationIssuesPanelProps) {
+export function ValidationIssuesPanel({ issues, counts, onGoToLine, onFixThisIssue, onAskYukti, issueStatuses }: ValidationIssuesPanelProps) {
   const [severityFilter, setSeverityFilter] = useState<IssueFilter>('all');
   const [languageFilter, setLanguageFilter] = useState<LanguageFilterKey>('all');
   const filterRefs = useRef<Partial<Record<IssueFilter, HTMLButtonElement | null>>>({});
@@ -170,7 +177,10 @@ export function ValidationIssuesPanel({ issues, counts, onGoToLine }: Validation
       ) : (
         <ul className="validation-issues-panel__list" aria-label="Validation issues list">
           {filtered.map((issue) => (
-            <ValidationIssueCard key={issue.id} issue={issue} onGoToLine={onGoToLine} />
+            <ValidationIssueCard
+              key={issue.id} issue={issue} onGoToLine={onGoToLine} onFixThisIssue={onFixThisIssue}
+              onAskYukti={onAskYukti} cardStatus={issueStatuses?.[issue.fingerprint]}
+            />
           ))}
         </ul>
       )}

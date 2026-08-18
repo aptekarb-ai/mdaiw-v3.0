@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { validateCode } from './landingpages';
+import { getValidateStatus, startValidate, validateCode } from './landingpages';
 
 function mockFetchOnce(body: unknown, init: { ok?: boolean; status?: number } = {}) {
   const { ok = true, status = 200 } = init;
@@ -35,14 +35,14 @@ describe('landingpages api', () => {
     const fetchMock = mockFetchOnce(report);
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await validateCode({ html: '<p>hi</p>', css: '', js: '', ts: '' });
+    const result = await validateCode({ html: '<p>hi</p>', css: '', js: '', ampscript: '' });
 
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('/api/v1/lp/validate/'),
       expect.objectContaining({ method: 'POST', credentials: 'include' }),
     );
     const [, options] = fetchMock.mock.calls[0];
-    expect(JSON.parse(options.body as string)).toEqual({ html: '<p>hi</p>', css: '', js: '', ts: '' });
+    expect(JSON.parse(options.body as string)).toEqual({ html: '<p>hi</p>', css: '', js: '', ampscript: '' });
     expect(result).toEqual(report);
   });
 
@@ -138,6 +138,68 @@ describe('landingpages api', () => {
       code: 'VALIDATION_FAILED',
       status: 500,
       message: 'Validation could not be completed. Please try again.',
+    });
+  });
+
+  describe('AI Validate Code Live Progress', () => {
+    it('posts to the validate/start endpoint with the payload and operation_id', async () => {
+      const fetchMock = mockFetchOnce({ operation_id: 'op-1', status: 'running' }, { status: 202 });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await startValidate({ html: '<p>hi</p>', css: '', js: '', ampscript: '', operation_id: 'op-1' });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/lp/validate/start/'),
+        expect.objectContaining({ method: 'POST', credentials: 'include' }),
+      );
+      const [, options] = fetchMock.mock.calls[0];
+      expect(JSON.parse(options.body as string)).toEqual({
+        html: '<p>hi</p>', css: '', js: '', ampscript: '', operation_id: 'op-1',
+      });
+      expect(result).toEqual({ operation_id: 'op-1', status: 'running' });
+    });
+
+    it('gets the validate/status endpoint for the given operation_id', async () => {
+      const operation = {
+        operation_id: 'op-1', status: 'completed', stage: 'finalizing',
+        stage_label: 'Finalizing validation report…', percent: 100,
+        total_stages: 8, completed_stages: 8, stage_checklist: {},
+        response_body: null, response_status: 201, failure_reason: null,
+      };
+      const fetchMock = mockFetchOnce(operation);
+      vi.stubGlobal('fetch', fetchMock);
+
+      const result = await getValidateStatus('op-1');
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/lp/validate/status/op-1/'),
+        expect.anything(),
+      );
+      expect(result).toEqual(operation);
+    });
+
+    it('URL-encodes the operation_id in the status request', async () => {
+      const fetchMock = mockFetchOnce({ operation_id: 'a/b c', status: 'running' });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await getValidateStatus('a/b c');
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/v1/lp/validate/status/a%2Fb%20c/'),
+        expect.anything(),
+      );
+    });
+
+    it('throws an ApiError with OPERATION_ID_REQUIRED shape when the backend rejects a missing id', async () => {
+      const fetchMock = mockFetchOnce(
+        { success: false, code: 'OPERATION_ID_REQUIRED', message: 'operation_id is required to start a trackable validation.' },
+        { ok: false, status: 400 },
+      );
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(startValidate({ html: '<p>hi</p>', operation_id: '' })).rejects.toMatchObject({
+        code: 'OPERATION_ID_REQUIRED', status: 400,
+      });
     });
   });
 });

@@ -12,7 +12,7 @@ class ValidatorAdapter(ABC):
     engine_name: str = ''
     #: version string of the underlying engine/library, or '' if not applicable
     engine_version: str = ''
-    #: language this adapter validates — 'html' | 'css' | 'javascript' | 'typescript'
+    #: language this adapter validates — 'html' | 'css' | 'javascript' | 'ampscript'
     language: str = ''
     #: profile keys (see validation/profiles.py) this adapter runs under
     supported_profiles: tuple[str, ...] = ()

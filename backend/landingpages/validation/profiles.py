@@ -32,7 +32,12 @@ class ValidationScope(models.TextChoices):
     HTML = 'html', 'HTML Only'
     CSS = 'css', 'CSS Only'
     JAVASCRIPT = 'javascript', 'JavaScript Only'
+    # Deprecated — replaced by AMPSCRIPT below. Kept only so existing rows/
+    # migration history stay valid and legacy API callers get a stable
+    # (if unavailable) response rather than a 400. New frontend code never
+    # sends this scope; see AmpscriptConformanceAdapter for the real engine.
     TYPESCRIPT = 'typescript', 'TypeScript Only'
+    AMPSCRIPT = 'ampscript', 'AMPscript Only'
 
 
 DEFAULT_SCOPE = ValidationScope.COMPLETE
@@ -40,6 +45,27 @@ DEFAULT_SCOPE = ValidationScope.COMPLETE
 
 def is_known_scope(scope: str) -> bool:
     return scope in ValidationScope.values
+
+
+class CssSourceType(models.TextChoices):
+    """Which syntax the standalone CSS-tab source is written in (Sprint
+    CSS-C). 'css' needs no compilation. 'scss'/'sass' compile via Dart
+    Sass (see adapters/css_scss_sass.py). 'less' is accepted by the API
+    contract now for forward stability but has no engine yet (Sprint
+    CSS-D) — engine.py reports it honestly unavailable rather than
+    silently validating it as plain CSS."""
+
+    CSS = 'css', 'CSS'
+    SCSS = 'scss', 'SCSS'
+    SASS = 'sass', 'Sass'
+    LESS = 'less', 'LESS'
+
+
+DEFAULT_CSS_SOURCE_TYPE = CssSourceType.CSS
+
+
+def is_known_css_source_type(value: str) -> bool:
+    return value in CssSourceType.values
 
 # rule_id -> severity override, applied after every adapter has produced its
 # issues (see engine.py::_apply_profile_overrides). A rule not listed here

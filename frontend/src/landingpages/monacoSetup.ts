@@ -13,6 +13,7 @@
 // and works under both.
 import { loader } from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
+import { registerAmpscriptLanguage } from './monacoAmpscript';
 
 declare global {
   interface Window {
@@ -40,7 +41,10 @@ export function ensureMonacoConfigured() {
       if (label === 'css' || label === 'scss' || label === 'less') {
         return new Worker(workerUrl('language/css/css.worker.js'), { type: 'module' });
       }
-      if (label === 'typescript' || label === 'javascript') {
+      if (label === 'javascript') {
+        // Monaco's JavaScript language support is itself built on the
+        // TypeScript language service — this worker is required for JS
+        // even though the LP source model no longer has a TypeScript tab.
         return new Worker(workerUrl('language/typescript/ts.worker.js'), { type: 'module' });
       }
       return new Worker(workerUrl('editor/editor.worker.js'), { type: 'module' });
@@ -48,4 +52,5 @@ export function ensureMonacoConfigured() {
   };
 
   loader.config({ monaco });
+  registerAmpscriptLanguage(monaco);
 }

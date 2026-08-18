@@ -25,6 +25,12 @@ FIX_TYPE_NONE = ''
 FIX_TYPE_INSERT_CLOSING_TAG = 'insert-closing-tag'
 FIX_TYPE_ADD_ATTRIBUTE = 'add-attribute'
 FIX_TYPE_REMOVE_DUPLICATE = 'remove-duplicate'
+# AI Fix Issues repair-architecture closure sprint, spec section 4 — a
+# closing tag proven (by the tag-stack) to have NO matching opener
+# anywhere is unambiguous by construction (there is no "which orphan"
+# choice to make, unlike FIX_TYPE_INSERT_CLOSING_TAG's unclosed-tag
+# case) — always safely auto-fixable.
+FIX_TYPE_REMOVE_CLOSING_TAG = 'remove-closing-tag'
 
 
 def severity_rank(severity: str) -> int:
@@ -70,7 +76,7 @@ def compute_fingerprint(
 
 @dataclass(frozen=True)
 class ValidationIssueData:
-    language: str  # 'html' | 'css' | 'javascript' | 'typescript' | 'cdn'
+    language: str  # 'html' | 'css' | 'javascript' | 'ampscript' | 'typescript' (deprecated) | 'cdn'
     source_engine: str  # e.g. 'html5lib', 'html-structure', 'html-accessibility'
     engine_version: str
     rule_id: str
@@ -93,6 +99,14 @@ class ValidationIssueData:
     related_attribute: str = ''
     risk: str = 'low'  # kept for Sprint 1A/1B API compatibility — see serializers.py
 
+    # Tool-Grounded AI Engineer sprint, spec section 4/5 — structured
+    # diagnostics contract. Empty string means "no known root-cause
+    # grouping" (never null-vs-empty ambiguity downstream). Populated by
+    # validation/engine.py's _tag_html_shell_corruption_root_cause();
+    # issues sharing the same non-empty value are part of one cascade
+    # from a single underlying defect, not independent findings.
+    root_cause_id: str = ''
+
     # Sprint CSS-A additions. `editor_target` overrides which editor tab a
     # finding belongs to (via the `file` property below) when it differs
     # from `language` — an inline `style="..."` attribute or an internal
@@ -107,6 +121,32 @@ class ValidationIssueData:
     editor_target: str = ''
     source_context: str = ''
     source_block_index: int | None = None
+    # Sprint CSS-B addition — the storage-relative path of the local
+    # project asset a finding came from, when one was actually resolved
+    # and read (see adapters/html_external_stylesheet.py). Blank for
+    # every issue that isn't about a resolved local stylesheet asset.
+    source_asset_id: str = ''
+    # Sprint CSS-C additions — for a finding produced against SCSS/Sass's
+    # *generated* CSS, the position in that generated CSS before it was
+    # mapped back to the original source (start_line/start_column above
+    # are always the original-source position, or the generated position
+    # itself when no mapping was available — see
+    # adapters/css_scss_sass.py). None for every non-preprocessor issue.
+    generated_start_line: int | None = None
+    generated_start_column: int | None = None
+
+    # AI Engineer full-source-analysis sprint. None for every deterministic
+    # adapter's own issue. Set by ai_engineer/__init__.py either on a new
+    # AI-only issue (source_engine='ai-engineer' or
+    # 'ai-engineer-cross-language') or merged onto an EXISTING deterministic
+    # issue (via dataclasses.replace, source_engine becomes
+    # '<engine>+ai-engineer') when the AI Engineer independently corroborates
+    # it. Shape: {'reasoning': str, 'evidence': str, 'cross_language': bool,
+    # 'verifiable': bool, 'chunk_index': int, 'total_chunks': int}. Never
+    # trusted as authoritative location data — only explanatory context; see
+    # ai_engineer/location.py for how the real start_line/start_column above
+    # are server-verified before this issue is ever constructed.
+    ai_metadata: dict | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -160,3 +200,14 @@ class ValidationRunResult:
     truncated: bool = False
     truncated_issue_count: int = 0
     validation_scope: str = 'complete'
+    css_source_type: str = 'css'
+    # Sprint CSS-E — the compiled CSS output for a scss/sass/less source,
+    # when compilation actually succeeded (compile_scss.mjs/compile_less.mjs
+    # already produce this; only the Python layer previously discarded it —
+    # see adapters/css_scss_sass.py, adapters/css_less.py). None for plain
+    # 'css' and for any failed compilation. Never persisted — returned only
+    # on the validate response, exactly like every other transient field.
+    generated_css: str | None = None
+    generated_css_compiled: bool = False
+    generated_css_engine: str = ''
+    generated_css_engine_version: str = ''

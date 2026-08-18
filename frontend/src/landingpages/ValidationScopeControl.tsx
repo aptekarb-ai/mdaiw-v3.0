@@ -7,10 +7,14 @@ export interface ValidationScopeControlProps {
   disabled?: boolean;
 }
 
-const UNAVAILABLE_REASON: Partial<Record<ValidationScope, string>> = {
-  javascript: 'Available after JavaScript validation is installed',
-  typescript: 'Available after TypeScript validation is installed',
-};
+// Every scope currently has a real engine — kept as an (empty) map rather
+// than removed outright so a future scope without an engine yet has an
+// established place to add its reason, matching how ENGINE_AVAILABILITY
+// itself stays a full map rather than a partial one.
+const UNAVAILABLE_REASON: Partial<Record<ValidationScope, string>> = {};
+
+const COMPLETE_LP_TOOLTIP = 'Validate HTML, stylesheets, JavaScript and AMPscript together.';
+const INDIVIDUAL_SCOPE_TOOLTIP = 'Validate only this code type.';
 
 export function ValidationScopeControl({ value, onChange, disabled }: ValidationScopeControlProps) {
   return (
@@ -31,7 +35,7 @@ export function ValidationScopeControl({ value, onChange, disabled }: Validation
                   ? 'validation-scope-control__option validation-scope-control__option--active'
                   : 'validation-scope-control__option'
               }
-              title={!available ? unavailableReason : undefined}
+              title={!available ? unavailableReason : (entry.key === 'complete' ? COMPLETE_LP_TOOLTIP : INDIVIDUAL_SCOPE_TOOLTIP)}
             >
               <input
                 type="radio"

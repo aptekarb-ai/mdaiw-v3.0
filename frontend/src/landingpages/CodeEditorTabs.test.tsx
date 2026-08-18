@@ -10,7 +10,7 @@ vi.mock('@monaco-editor/react', async () => {
 });
 vi.mock('./monacoSetup', () => ({ ensureMonacoConfigured: vi.fn() }));
 
-const EMPTY_VALUES = { html: '<p>html</p>', css: '.x{}', js: 'const x=1;', ts: 'const x: number = 1;' };
+const EMPTY_VALUES = { html: '<p>html</p>', css: '.x{}', js: 'const x=1;', ampscript: '%%[ VAR @x ]%%' };
 
 describe('CodeEditorTabs', () => {
   it('shows the HTML tab by default and retains separate content per tab', async () => {

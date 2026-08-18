@@ -38,8 +38,10 @@ class _SeoChecker(HTMLParser):
         self._all_ids: set[str] = set()
         self._fragment_refs: list[tuple[str, int, int]] = []
         self._has_lang = False
+        self._html_position: tuple[int, int] | None = None
         self._has_charset = False
         self._charset_head_child_index: int | None = None
+        self._charset_position: tuple[int, int] | None = None
         self._head_child_count = 0
         self._in_head = False
         self._description_positions: list[tuple[int, int]] = []
@@ -66,6 +68,8 @@ class _SeoChecker(HTMLParser):
             self._fragment_refs.append((attr_dict['href'][1:], line, column + 1))
 
         if tag == 'html':
+            if self._html_position is None:
+                self._html_position = (line, column + 1)
             lang = attr_dict.get('lang')
             if lang:
                 self._has_lang = True
@@ -92,6 +96,7 @@ class _SeoChecker(HTMLParser):
                 self._has_charset = True
                 if self._charset_head_child_index is None:
                     self._charset_head_child_index = self._head_child_count
+                    self._charset_position = (line, column + 1)
             name = attr_dict.get('name', '').lower()
             if name == 'viewport':
                 self._viewport_positions.append((line, column + 1))
@@ -115,11 +120,12 @@ class _SeoChecker(HTMLParser):
 
     def finish(self):
         if not self._has_lang:
+            html_line, html_column = self._html_position or (1, 1)
             self.issues.append(_issue(
                 rule_id='missing-lang',
                 message='"<html>" is missing a lang attribute.',
-                start_line=1,
-                start_column=1,
+                start_line=html_line,
+                start_column=html_column,
                 suggestion='Add lang="en" (or the document\'s actual language) to <html>.',
                 related_element='html',
                 related_attribute='lang',
@@ -136,11 +142,12 @@ class _SeoChecker(HTMLParser):
                 related_attribute='charset',
             ))
         elif self._charset_head_child_index and self._charset_head_child_index > 2:
+            charset_line, charset_column = self._charset_position or (1, 1)
             self.issues.append(_issue(
                 rule_id='charset-declared-late',
                 message='The character-encoding declaration is not among the first elements in <head>.',
-                start_line=1,
-                start_column=1,
+                start_line=charset_line,
+                start_column=charset_column,
                 suggestion='Move <meta charset="..."> to be the first child of <head>.',
                 confidence='likely',
                 related_element='meta',

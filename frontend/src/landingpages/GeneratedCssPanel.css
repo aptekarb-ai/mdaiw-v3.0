@@ -1,0 +1,102 @@
+.generated-css-panel {
+  /* Never grows/shrinks with the flex column above it (`.validator-page`)
+     — takes exactly its own content height, and that column's own
+     overflow-y:auto is what handles the case where this plus the
+     editor/issues row don't both fit. Any future stacked section (Fix
+     Review, AI Review) should use the same `flex: 0 0 auto; min-height: 0`
+     pair rather than a one-off pixel height. */
+  flex: 0 0 auto;
+  min-height: 0;
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+}
+
+.generated-css-panel--collapsed {
+  margin-top: var(--space-4);
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.generated-css-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.generated-css-panel__heading {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.generated-css-panel__stale-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.generated-css-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.generated-css-panel__meta {
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.generated-css-panel__code {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  max-width: 100%;
+  max-height: 260px;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: var(--color-background-light);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+
+.generated-css-panel__code:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.generated-css-panel__visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 1023px) {
+  .generated-css-panel__code {
+    max-height: 200px;
+  }
+}

@@ -1,0 +1,19 @@
+.hero {
+  background: url(javascript:alert(1));
+  color: #zzz
+  padding: 10px
+}
+
+.card {
+  colr: red;
+  width: -50px;
+}
+
+.cta-button {
+  font-size: 14px;
+  font-size: 16px;
+}
+
+.footer-links a {
+  color: blue !important;
+}
