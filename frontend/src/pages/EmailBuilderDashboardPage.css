@@ -1,0 +1,181 @@
+.email-builder-dashboard__header h1 {
+  margin: 0 0 var(--space-2);
+  color: var(--color-primary-dark);
+  font-size: 28px;
+}
+
+.email-builder-dashboard__header p {
+  margin: 0 0 var(--space-8);
+  color: var(--color-text-muted);
+  font-size: 15px;
+  max-width: 640px;
+  line-height: 1.6;
+}
+
+.email-builder-dashboard__actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--space-5);
+  margin-bottom: var(--space-8);
+}
+
+.email-builder-dashboard__action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+  text-align: left;
+  cursor: not-allowed;
+}
+
+.email-builder-dashboard__action:disabled {
+  opacity: 0.72;
+}
+
+.email-builder-dashboard__action .mdaiw-icon {
+  width: 32px;
+  height: 32px;
+  background-color: var(--color-primary-blue);
+  margin-bottom: var(--space-2);
+}
+
+.email-builder-dashboard__action-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+}
+
+.email-builder-dashboard__action-description {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.email-builder-dashboard__action-status {
+  margin-top: var(--space-1);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-subtle);
+  background: var(--color-background-light);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+}
+
+.email-builder-dashboard__body {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+.email-builder-dashboard__recent,
+.email-builder-dashboard__getting-started {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5) var(--space-6);
+}
+
+.email-builder-dashboard__recent h2,
+.email-builder-dashboard__getting-started h2 {
+  margin: 0 0 var(--space-4);
+  font-size: 18px;
+  color: var(--color-primary-dark);
+}
+
+.email-builder-dashboard__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-muted);
+}
+
+.email-builder-dashboard__empty .mdaiw-icon {
+  width: 40px;
+  height: 40px;
+  background-color: var(--color-text-subtle);
+  margin-bottom: var(--space-2);
+}
+
+.email-builder-dashboard__empty p {
+  margin: 0;
+}
+
+.email-builder-dashboard__empty-hint {
+  font-size: 13px;
+  color: var(--color-text-subtle);
+}
+
+.email-builder-dashboard__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.email-builder-dashboard__list-item {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 14px;
+}
+
+.email-builder-dashboard__list-item:last-child {
+  border-bottom: none;
+}
+
+.email-builder-dashboard__list-platform {
+  color: var(--color-text-muted);
+  text-transform: capitalize;
+}
+
+.email-builder-dashboard__list-updated {
+  color: var(--color-text-subtle);
+  font-size: 13px;
+}
+
+.email-builder-dashboard__steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.email-builder-dashboard__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: 14px;
+  color: var(--color-text-dark);
+}
+
+.email-builder-dashboard__step-number {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  background: var(--color-info-bg);
+  color: var(--color-primary-blue);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .email-builder-dashboard__body {
+    grid-template-columns: 1fr;
+  }
+}

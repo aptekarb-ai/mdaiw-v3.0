@@ -6,7 +6,6 @@ const TITLES: Record<string, string> = {
   '/performance': 'Performance',
   '/recognition': 'Recognition',
   '/landing-pages': 'Landing Pages Builder',
-  '/email-builder': 'Email Builder',
   '/personal-finance': 'Personal Finance',
   '/ai-assistants': 'AI Assistants',
   '/reports': 'Reports',

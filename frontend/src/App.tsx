@@ -16,6 +16,7 @@ import { ProfilePage } from './pages/ProfilePage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ModulePlaceholderPage } from './pages/ModulePlaceholderPage';
 import { LandingPageValidatorPage } from './pages/LandingPageValidatorPage';
+import { EmailBuilderDashboardPage } from './pages/EmailBuilderDashboardPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -23,7 +24,6 @@ const MODULE_ROUTES = [
   '/performance',
   '/recognition',
   '/landing-pages',
-  '/email-builder',
   '/personal-finance',
   '/ai-assistants',
   '/reports',
@@ -58,6 +58,7 @@ function App() {
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/module-3/validator" element={<LandingPageValidatorPage />} />
+                <Route path="/email-builder" element={<EmailBuilderDashboardPage />} />
                 {MODULE_3_PLACEHOLDER_ROUTES.map((path) => (
                   <Route key={path} path={path} element={<ModulePlaceholderPage />} />
                 ))}

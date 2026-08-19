@@ -43,7 +43,7 @@ describe('App routing', () => {
     window.history.pushState({}, '', '/');
   });
 
-  it.each(['/module-3/builder', '/module-3/generator'])(
+  it.each(['/module-3/builder', '/module-3/generator', '/email-builder'])(
     'redirects unauthenticated access to %s to /login',
     async (path) => {
       renderAppAt(path);

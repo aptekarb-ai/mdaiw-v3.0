@@ -1,34 +1,135 @@
+/* One shared navigation-row design system. Every row type (top-level link,
+   NavGroup toggle, NavGroup child, Logout) is the SAME .app-sidebar__link
+   base — only modifiers (--child for indentation, --active, --disabled)
+   and the collapsed-rail override vary. No row type defines its own
+   height/font-size/icon-size; they all read from these tokens. */
 .app-sidebar {
+  --sidebar-row-height: 36px;
+  --sidebar-row-height-collapsed: 40px;
+  --sidebar-icon-box: 20px;
+  --sidebar-icon-size: 18px;
+  --sidebar-icon-gap: 10px;
+  --sidebar-row-gap: 0px;
+  --sidebar-subnav-edge-gap: 6px;
+  --sidebar-subnav-row-gap: 0px;
+  --sidebar-item-radius: var(--radius-sm);
+  --sidebar-row-font-size: 13px;
+  --sidebar-row-line-height: 20px;
+  --sidebar-row-padding-inline: 12px;
+  --sidebar-child-indent: 28px;
+
   width: var(--app-sidebar-width);
   flex-shrink: 0;
   background: var(--color-primary-dark);
   color: var(--color-white);
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  height: 100vh;
+  position: sticky;
+  top: 0;
   padding: var(--space-5) var(--space-3);
+  overflow: hidden;
+  transition: width 180ms ease;
+}
+
+.app-sidebar[data-collapsed="true"] {
+  width: 68px;
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+.app-sidebar__brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  flex-shrink: 0;
+  padding: 0 var(--space-2) var(--space-5);
+}
+
+.app-sidebar[data-collapsed="true"] .app-sidebar__brand-row {
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-4);
 }
 
 .app-sidebar__logo {
   display: inline-block;
-  padding: 0 var(--space-2) var(--space-5);
+  line-height: 0;
+}
+
+.app-sidebar__collapse-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--sidebar-item-radius);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-white);
+  cursor: pointer;
+}
+
+.app-sidebar__collapse-toggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.app-sidebar__collapse-toggle .mdaiw-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .app-sidebar__nav {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--sidebar-row-gap);
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* Fallback-only scroll for extremely short viewports — chrome fully
+     hidden cross-browser. Scrolling itself (wheel/trackpad/keyboard/touch)
+     keeps working; only the scrollbar's own visuals are suppressed. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
+.app-sidebar__nav::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+/* --- Shared row base: every navigation row (top-level link, NavGroup
+   toggle, NavGroup child, Logout) resolves to exactly these dimensions. -- */
 .app-sidebar__link {
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  height: 42px;
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-sm);
+  gap: var(--sidebar-icon-gap);
+  width: 100%;
+  height: var(--sidebar-row-height);
+  min-height: var(--sidebar-row-height);
+  margin: 0;
+  /* padding-block explicitly 0: <button> rows (NavGroup toggle, Logout)
+     otherwise keep the browser's default UA button vertical padding since
+     nothing else in this app resets it, while <a> rows (Dashboard, ...)
+     have no such default — that mismatch was the actual misalignment. */
+  padding-block: 0;
+  padding-inline: var(--sidebar-row-padding-inline);
+  border: none;
+  border-radius: var(--sidebar-item-radius);
+  background: transparent;
   color: var(--color-white);
   text-decoration: none;
-  font-size: 14px;
+  font-family: inherit;
+  font-size: var(--sidebar-row-font-size);
+  font-weight: 400;
+  line-height: var(--sidebar-row-line-height);
+  text-align: left;
+  cursor: pointer;
 }
 
 .app-sidebar__link:hover {
@@ -39,42 +140,67 @@
   background: var(--color-primary-blue);
 }
 
+.app-sidebar__link-icon {
+  flex: 0 0 var(--sidebar-icon-box);
+  width: var(--sidebar-icon-box);
+  height: var(--sidebar-icon-box);
+  /* Fixed 20px hit-box for grid alignment; the mask glyph itself renders
+     at 18px, centered, so every icon shares one box AND one visual size. */
+  -webkit-mask-size: var(--sidebar-icon-size) var(--sidebar-icon-size);
+  mask-size: var(--sidebar-icon-size) var(--sidebar-icon-size);
+}
+
+.app-sidebar__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* NavGroup toggle is the shared row base plus a fixed-width chevron column
+   on the right — text alignment stays stable whether the chevron points
+   right (collapsed group) or down (expanded group). */
 .app-sidebar__group-toggle {
-  width: 100%;
-  border: none;
-  background: transparent;
   cursor: pointer;
-  font-family: inherit;
-  font-size: 14px;
-  text-align: left;
-  gap: var(--space-2);
 }
 
 .app-sidebar__group-chevron {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
 }
+
+/* .app-sidebar__group itself carries no spacing (req 8): with nothing
+   expanded, a group row sits in the plain nav flow like any other
+   top-level row (0 gap, same as Dashboard/Employees/...). All
+   expand/collapse spacing lives on the child container below, so it
+   appears/disappears with the children instead of permanently offsetting
+   the parent row. */
 
 .app-sidebar__group-children {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--sidebar-subnav-row-gap);
+  /* Single token, both edges — guarantees top and bottom stay identical
+     by construction rather than by coincidentally-equal separate values. */
+  padding-block: var(--sidebar-subnav-edge-gap);
 }
 
+/* Child rows: the ONLY structural difference from a top-level row is the
+   extra left indent. Height, icon size, gap, typography and active/hover
+   treatment are all inherited from .app-sidebar__link unchanged. */
 .app-sidebar__link--child {
-  height: 38px;
-  padding-left: var(--space-8);
-  font-size: 13px;
+  padding-left: var(--sidebar-child-indent);
 }
 
-.app-sidebar__logout {
-  border: none;
+.app-sidebar__link--disabled {
+  color: var(--color-text-subtle);
+  cursor: not-allowed;
+}
+
+.app-sidebar__link--disabled:hover {
   background: transparent;
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  font-family: inherit;
 }
 
 .app-sidebar__spacer {
@@ -84,9 +210,9 @@
 .app-sidebar__yukti {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  font-size: 13px;
+  gap: var(--sidebar-icon-gap);
+  padding: var(--space-3) var(--sidebar-row-padding-inline);
+  font-size: var(--sidebar-row-font-size);
   color: var(--color-text-subtle);
   background: transparent;
   border: none;
@@ -99,9 +225,192 @@
   color: var(--color-white);
 }
 
+.app-sidebar__yukti img {
+  flex: 0 0 24px;
+}
+
+.app-sidebar__yukti-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.app-sidebar__yukti-sublabel {
+  font-size: 11px;
+  color: var(--color-text-subtle);
+}
+
+/* --- Collapsed / icon-only rail ------------------------------------- */
+
+.app-sidebar[data-collapsed="true"] .app-sidebar__link,
+.app-sidebar[data-collapsed="true"] .app-sidebar__yukti {
+  height: var(--sidebar-row-height-collapsed);
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.app-sidebar[data-collapsed="true"] .app-sidebar__link--child {
+  padding-left: 0;
+}
+
+/* Labels stay in the DOM (accessible name for screen readers / tests) but
+   are visually hidden — the same pattern used elsewhere in this app
+   (.visually-hidden) — while a native title attribute supplies the
+   mouse-hover tooltip. */
+.app-sidebar[data-collapsed="true"] .app-sidebar__label,
+.app-sidebar[data-collapsed="true"] .app-sidebar__group-chevron {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.app-sidebar[data-collapsed="true"] .app-sidebar__group-children {
+  display: none;
+}
+
+/* --- Collapsed module-group flyout (portalled to document.body) ----- */
+
+.app-sidebar__flyout {
+  position: fixed;
+  z-index: 1000;
+  min-width: 232px;
+  background: var(--color-primary-dark);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: var(--space-2);
+}
+
+.app-sidebar__flyout-heading {
+  padding: var(--space-2) var(--sidebar-row-padding-inline) var(--space-1);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.app-sidebar__flyout-children {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sidebar-row-gap);
+}
+
+.app-sidebar__flyout .app-sidebar__link--child {
+  padding-left: var(--sidebar-row-padding-inline);
+}
+
+/* Height-responsive density: viewport-height media queries, independent of
+   width, so common laptop screens (900px/832px/800px/768px tall) fit every
+   nav row without clipping global items below the expanded module group.
+   Every row still shares one set of tokens per tier — only the tokens
+   themselves shrink, so the design stays internally consistent. */
+@media (max-height: 900px) and (min-width: 1024px) {
+  .app-sidebar {
+    --sidebar-row-height: 32px;
+    --sidebar-row-height-collapsed: 36px;
+    --sidebar-subnav-edge-gap: 5px;
+    padding: var(--space-3) var(--space-3);
+  }
+
+  .app-sidebar__brand-row {
+    padding-bottom: var(--space-3);
+  }
+
+  .app-sidebar__logo img {
+    height: 24px;
+  }
+
+  .app-sidebar__yukti img {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+@media (max-height: 800px) and (min-width: 1024px) {
+  .app-sidebar {
+    --sidebar-row-height: 30px;
+    --sidebar-row-height-collapsed: 34px;
+    --sidebar-subnav-edge-gap: 4px;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .app-sidebar__brand-row {
+    padding-bottom: var(--space-2);
+  }
+
+  .app-sidebar__logo img {
+    height: 22px;
+  }
+
+  .app-sidebar__yukti {
+    padding: var(--space-1) var(--sidebar-row-padding-inline);
+  }
+
+  .app-sidebar__yukti img {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+/* Tablet/mobile keeps the existing drawer behaviour untouched — the
+   collapsed icon-only rail is a desktop-only affordance. */
 @media (max-width: 1023px) {
   .app-sidebar {
     width: 100%;
-    min-height: auto;
+    height: auto;
+    position: static;
+    overflow: visible;
+    transition: none;
+  }
+
+  .app-sidebar[data-collapsed="true"] {
+    width: 100%;
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  .app-sidebar[data-collapsed="true"] .app-sidebar__label,
+  .app-sidebar[data-collapsed="true"] .app-sidebar__group-chevron {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: 0;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .app-sidebar[data-collapsed="true"] .app-sidebar__group-children {
+    display: flex;
+  }
+
+  .app-sidebar[data-collapsed="true"] .app-sidebar__link,
+  .app-sidebar[data-collapsed="true"] .app-sidebar__yukti {
+    height: var(--sidebar-row-height);
+    justify-content: flex-start;
+    padding-left: var(--sidebar-row-padding-inline);
+  }
+
+  .app-sidebar[data-collapsed="true"] .app-sidebar__link--child {
+    padding-left: var(--sidebar-child-indent);
+  }
+
+  .app-sidebar__collapse-toggle {
+    display: none;
+  }
+
+  .app-sidebar__nav {
+    flex: initial;
+    overflow: visible;
   }
 }
