@@ -1,6 +1,15 @@
+import { Link } from 'react-router';
 import { QUICK_ACTIONS, GETTING_STARTED_STEPS } from '../emailbuilder/dashboardData';
 import { useRecentEmails } from '../emailbuilder/useRecentEmails';
 import './EmailBuilderDashboardPage.css';
+
+// Only 'create' has a real, implemented next step (Feature 02). The other
+// three quick actions stay disabled until their own starting-point flow
+// exists — see startTypeOptions.ts for the same "available" gate used in
+// the Create Email wizard's Start From cards.
+const ACTION_ROUTES: Partial<Record<(typeof QUICK_ACTIONS)[number]['key'], string>> = {
+  create: '/email-builder/create',
+};
 
 function formatUpdatedAt(iso: string): string {
   return new Date(iso).toLocaleString();
@@ -20,25 +29,38 @@ export function EmailBuilderDashboardPage() {
       </header>
 
       <div className="email-builder-dashboard__actions" role="group" aria-label="Quick actions">
-        {QUICK_ACTIONS.map((action) => (
-          <button
-            key={action.key}
-            type="button"
-            className="email-builder-dashboard__action"
-            disabled
-            aria-describedby={`email-builder-action-status-${action.key}`}
-          >
-            <span className={`mdaiw-icon mdaiw-icon--${action.icon}`} aria-hidden="true" />
-            <span className="email-builder-dashboard__action-title">{action.title}</span>
-            <span className="email-builder-dashboard__action-description">{action.description}</span>
-            <span
-              id={`email-builder-action-status-${action.key}`}
-              className="email-builder-dashboard__action-status"
+        {QUICK_ACTIONS.map((action) => {
+          const route = ACTION_ROUTES[action.key];
+          if (route) {
+            return (
+              <Link key={action.key} to={route} className="email-builder-dashboard__action">
+                <span className={`mdaiw-icon mdaiw-icon--${action.icon}`} aria-hidden="true" />
+                <span className="email-builder-dashboard__action-title">{action.title}</span>
+                <span className="email-builder-dashboard__action-description">{action.description}</span>
+              </Link>
+            );
+          }
+
+          return (
+            <button
+              key={action.key}
+              type="button"
+              className="email-builder-dashboard__action"
+              disabled
+              aria-describedby={`email-builder-action-status-${action.key}`}
             >
-              Coming soon
-            </span>
-          </button>
-        ))}
+              <span className={`mdaiw-icon mdaiw-icon--${action.icon}`} aria-hidden="true" />
+              <span className="email-builder-dashboard__action-title">{action.title}</span>
+              <span className="email-builder-dashboard__action-description">{action.description}</span>
+              <span
+                id={`email-builder-action-status-${action.key}`}
+                className="email-builder-dashboard__action-status"
+              >
+                Coming soon
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="email-builder-dashboard__body">
@@ -63,6 +85,8 @@ export function EmailBuilderDashboardPage() {
                 <li key={email.id} className="email-builder-dashboard__list-item">
                   <span className="email-builder-dashboard__list-name">{email.name}</span>
                   <span className="email-builder-dashboard__list-platform">{email.platform}</span>
+                  <span className="email-builder-dashboard__list-width">{email.width}px</span>
+                  <span className="email-builder-dashboard__list-status">{email.status}</span>
                   <span className="email-builder-dashboard__list-updated">
                     {formatUpdatedAt(email.updatedAt)}
                   </span>

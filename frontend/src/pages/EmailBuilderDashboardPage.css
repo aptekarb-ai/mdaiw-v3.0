@@ -29,11 +29,27 @@
   border-radius: var(--radius-md);
   padding: var(--space-5);
   text-align: left;
+  text-decoration: none;
   cursor: not-allowed;
 }
 
 .email-builder-dashboard__action:disabled {
   opacity: 0.72;
+}
+
+/* A Link (real next step) rather than a disabled <button> — enabled,
+   interactive, matches the rest of the app's card hover treatment. */
+a.email-builder-dashboard__action {
+  cursor: pointer;
+}
+
+a.email-builder-dashboard__action:hover {
+  border-color: var(--color-primary-blue);
+}
+
+a.email-builder-dashboard__action:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
 }
 
 .email-builder-dashboard__action .mdaiw-icon {
@@ -136,6 +152,21 @@
 .email-builder-dashboard__list-platform {
   color: var(--color-text-muted);
   text-transform: capitalize;
+}
+
+.email-builder-dashboard__list-width {
+  color: var(--color-text-muted);
+}
+
+.email-builder-dashboard__list-status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-primary-blue);
+  background: var(--color-info-bg);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
 }
 
 .email-builder-dashboard__list-updated {

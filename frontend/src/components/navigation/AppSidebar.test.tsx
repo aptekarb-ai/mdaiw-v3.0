@@ -193,7 +193,7 @@ describe('AppSidebar AI Email Builder navigation', () => {
     await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
 
     const futureLabels = [
-      'Create Email', 'My Emails', 'Templates', 'Module Library',
+      'My Emails', 'Templates', 'Module Library',
       'Assets / Brand Kit', 'Preview & Validation', 'AI Engineer',
     ];
     for (const label of futureLabels) {
@@ -202,6 +202,31 @@ describe('AppSidebar AI Email Builder navigation', () => {
       expect(entry).toHaveAttribute('aria-disabled', 'true');
       expect(entry).toHaveAttribute('title', 'Coming soon');
     }
+  });
+
+  it('renders Create Email as a real, enabled link with the correct route', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    renderSidebarAt('/dashboard');
+
+    await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
+    expect(screen.getByRole('link', { name: 'Create Email' })).toHaveAttribute(
+      'href', '/email-builder/create',
+    );
+  });
+
+  it('keeps the group expanded and marks only Create Email active when /email-builder/create is current', () => {
+    mockAuthenticated();
+    renderSidebarAt('/email-builder/create');
+
+    const toggle = screen.getByRole('button', { name: 'AI Email Builder' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('link', { name: 'Create Email' }).className).toContain(
+      'app-sidebar__link--active',
+    );
+    expect(screen.getByRole('link', { name: 'Email Dashboard' }).className).not.toContain(
+      'app-sidebar__link--active',
+    );
   });
 });
 
@@ -319,8 +344,11 @@ describe('AppSidebar collapsed icon-only rail', () => {
     await user.click(screen.getByRole('button', { name: 'Collapse navigation' }));
     await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
 
-    expect(screen.queryByRole('link', { name: 'Create Email' })).not.toBeInTheDocument();
-    const entry = screen.getByText('Create Email').closest('span');
+    expect(screen.getByRole('link', { name: 'Create Email' })).toHaveAttribute(
+      'href', '/email-builder/create',
+    );
+    expect(screen.queryByRole('link', { name: 'My Emails' })).not.toBeInTheDocument();
+    const entry = screen.getByText('My Emails').closest('span');
     expect(entry).toHaveAttribute('aria-disabled', 'true');
     expect(entry).toHaveAttribute('title', 'Coming soon');
   });

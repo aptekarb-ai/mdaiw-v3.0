@@ -5,6 +5,7 @@ import type {
   LoginSuccessResponse,
 } from '../types/auth';
 import type { RegistrationResponse } from '../types/registration';
+import type { CreateEmailDocumentInput, EmailDocument } from '../emailbuilder/types';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -114,4 +115,15 @@ export async function registerEmployee(formData: FormData): Promise<Registration
     method: 'POST',
     body: formData,
   });
+}
+
+export async function createEmailDocument(input: CreateEmailDocumentInput): Promise<EmailDocument> {
+  return apiRequest<EmailDocument>('/api/v1/email-builder/emails/', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function listEmailDocuments(): Promise<EmailDocument[]> {
+  return apiRequest<EmailDocument[]>('/api/v1/email-builder/emails/');
 }

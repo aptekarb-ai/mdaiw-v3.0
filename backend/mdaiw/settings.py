@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'faceauth',
     'yukti',
     'landingpages',
+    'emailbuilder',
 ]
 
 MIDDLEWARE = [

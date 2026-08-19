@@ -63,7 +63,7 @@ const APP_NAV: NavEntry[] = [
     icon: 'email',
     children: [
       { to: '/email-builder', label: 'Email Dashboard', icon: 'dashboard' },
-      { to: '/email-builder/create', label: 'Create Email', icon: 'file', disabled: true },
+      { to: '/email-builder/create', label: 'Create Email', icon: 'file' },
       { to: '/email-builder/emails', label: 'My Emails', icon: 'email', disabled: true },
       { to: '/email-builder/templates', label: 'Templates', icon: 'landing-page', disabled: true },
       { to: '/email-builder/modules', label: 'Module Library', icon: 'department', disabled: true },
@@ -149,7 +149,7 @@ function CollapsedFlyout({ group, groupId, pathname, position, onClose, triggerR
                   ? 'app-sidebar__link app-sidebar__link--active app-sidebar__link--child'
                   : 'app-sidebar__link app-sidebar__link--child'
               }
-              aria-current={pathname.startsWith(child.to) ? 'page' : undefined}
+              aria-current={pathname === child.to ? 'page' : undefined}
             >
               <span className={iconClass(child.icon)} aria-hidden="true" />
               {child.label}
@@ -332,7 +332,7 @@ export function AppSidebar() {
                           key={child.to}
                           to={child.to}
                           end
-                          aria-current={pathname.startsWith(child.to) ? 'page' : undefined}
+                          aria-current={pathname === child.to ? 'page' : undefined}
                           className={({ isActive }) =>
                             isActive
                               ? 'app-sidebar__link app-sidebar__link--active app-sidebar__link--child'

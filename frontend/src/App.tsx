@@ -17,6 +17,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ModulePlaceholderPage } from './pages/ModulePlaceholderPage';
 import { LandingPageValidatorPage } from './pages/LandingPageValidatorPage';
 import { EmailBuilderDashboardPage } from './pages/EmailBuilderDashboardPage';
+import { CreateEmailPage } from './pages/CreateEmailPage';
+import { EmailBuilderPendingPage } from './pages/EmailBuilderPendingPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -59,6 +61,8 @@ function App() {
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="/module-3/validator" element={<LandingPageValidatorPage />} />
                 <Route path="/email-builder" element={<EmailBuilderDashboardPage />} />
+                <Route path="/email-builder/create" element={<CreateEmailPage />} />
+                <Route path="/email-builder/builder/:id" element={<EmailBuilderPendingPage />} />
                 {MODULE_3_PLACEHOLDER_ROUTES.map((path) => (
                   <Route key={path} path={path} element={<ModulePlaceholderPage />} />
                 ))}
