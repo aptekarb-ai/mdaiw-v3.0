@@ -157,3 +157,117 @@ class EmailDocumentListTests(TestCase):
         self.client.force_login(self.user)
         response = self.client.get(f'{self.url}{other_document.id}/')
         self.assertEqual(response.status_code, 404)
+
+
+def _module(module_id='m1', module_type='text', order=0, props=None, settings=None):
+    return {
+        'id': module_id,
+        'type': module_type,
+        'order': order,
+        'props': props if props is not None else {'text': 'Welcome'},
+        'settings': settings if settings is not None else {
+            'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20,
+        },
+    }
+
+
+class EmailDocumentBuilderPatchTests(TestCase):
+    """Feature 03 — builder persistence (GET one / PATCH content)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='john.roe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='August Newsletter', platform='sfmc', width=750, start_type='blank',
+        )
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_owner_can_retrieve_email(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['id'], self.document.id)
+        self.assertEqual(response.json()['content'], {'version': 1, 'modules': []})
+
+    def test_non_owner_cannot_retrieve(self):
+        self.client.force_login(self.other_user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_anonymous_retrieve_rejected(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_owner_can_patch_builder_content(self):
+        self.client.force_login(self.user)
+        content = {'version': 1, 'modules': [_module()]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['content'], content)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.content, content)
+
+    def test_anonymous_update_rejected(self):
+        response = self._patch_json({'content': {'version': 1, 'modules': [_module()]}})
+        self.assertEqual(response.status_code, 403)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.content, {'version': 1, 'modules': []})
+
+    def test_non_owner_update_rejected(self):
+        self.client.force_login(self.other_user)
+        response = self._patch_json({'content': {'version': 1, 'modules': [_module()]}})
+        self.assertEqual(response.status_code, 404)
+
+    def test_invalid_document_schema_rejected_missing_modules(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'content': {'version': 1}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_invalid_document_schema_rejected_wrong_version(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'content': {'version': 2, 'modules': []}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_invalid_module_type_rejected(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'content': {'version': 1, 'modules': [_module(module_type='carousel')]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_invalid_module_data_rejected_bad_padding(self):
+        self.client.force_login(self.user)
+        bad_module = _module(settings={
+            'paddingTop': -5, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20,
+        })
+        response = self._patch_json({'content': {'version': 1, 'modules': [bad_module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_invalid_module_data_rejected_missing_id(self):
+        self.client.force_login(self.user)
+        module = _module()
+        del module['id']
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_email_width_remains_validated_on_patch(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'width': 5000})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('width', response.json()['errors'])
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.width, 750)
+
+    def test_platform_preserved_when_patching_only_content(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'content': {'version': 1, 'modules': [_module()]}})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['platform'], 'sfmc')
+        self.assertEqual(response.json()['width'], 750)

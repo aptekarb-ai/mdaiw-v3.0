@@ -9,13 +9,15 @@ class EmailDocumentViewSet(
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
     viewsets.GenericViewSet,
 ):
-    """List/create/retrieve a user's own email drafts. Same ownership
-    boundary as landingpages.LandingPageProjectViewSet: another user's
-    document id is filtered out before lookup, so it 404s rather than
-    403s. Update and delete aren't exposed yet — rename/duplicate/delete
-    belong to the later "My Emails" feature, not this setup wizard."""
+    """List/create/retrieve/update a user's own email drafts. Same
+    ownership boundary as landingpages.LandingPageProjectViewSet: another
+    user's document id is filtered out before lookup, so it 404s rather
+    than 403s. Update (PATCH) exists for Feature 03's builder to persist
+    `content` — delete still isn't exposed; that belongs to the later "My
+    Emails" feature, not the builder."""
 
     serializer_class = EmailDocumentSerializer
     permission_classes = [IsAuthenticated]

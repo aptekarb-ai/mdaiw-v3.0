@@ -1,0 +1,53 @@
+/* AppLayout renders this route's <main> as app-frame__content--full
+   (padding 0, flex column, no footer) — this component fills exactly
+   that space, so no page scroll happens; only the panels/canvas inside
+   scroll internally. */
+.email-builder-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.email-builder-workspace__status {
+  flex: 1;
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.email-builder-workspace__save-error {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.email-builder-workspace__save-error .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-error);
+  flex-shrink: 0;
+}
+
+.email-builder-workspace__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+@media (max-width: 1023px) {
+  .email-builder-workspace__body {
+    flex-direction: column;
+    overflow: visible;
+  }
+}

@@ -95,6 +95,7 @@ describe('EmailBuilderDashboardPage', () => {
         width: 700,
         start_type: 'blank',
         status: 'draft',
+        content: { version: 1, modules: [] },
         created_at: '2026-08-20T10:00:00Z',
         updated_at: '2026-08-20T10:00:00Z',
       },

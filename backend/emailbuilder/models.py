@@ -32,6 +32,12 @@ class EmailDocumentStatus(models.TextChoices):
     DRAFT = 'draft', 'Draft'
 
 
+def default_content():
+    # Mutable defaults on a JSONField must be a callable — this is the
+    # empty Email Document Model (EDM), see edm.py for the validated shape.
+    return {'version': 1, 'modules': []}
+
+
 class EmailDocument(models.Model):
     """A Module-4 email's setup metadata (Feature 02 — the setup wizard).
     Ownership is direct (`user`), never inferred — every view in this app
@@ -61,6 +67,12 @@ class EmailDocument(models.Model):
     status = models.CharField(
         max_length=20, choices=EmailDocumentStatus.choices, default=EmailDocumentStatus.DRAFT,
     )
+    # The Email Document Model (EDM) — structured module tree, never raw
+    # DOM/HTML. Shape is validated by serializers.validate_content /
+    # edm.py, not by the database. Feature 03's builder reads/writes this;
+    # the table-first HTML renderer (frontend/src/emailbuilder/htmlRenderer.ts)
+    # is a pure function of this data, never stored itself.
+    content = models.JSONField(default=default_content)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

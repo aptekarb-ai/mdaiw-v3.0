@@ -5,7 +5,7 @@ import type {
   LoginSuccessResponse,
 } from '../types/auth';
 import type { RegistrationResponse } from '../types/registration';
-import type { CreateEmailDocumentInput, EmailDocument } from '../emailbuilder/types';
+import type { CreateEmailDocumentInput, EmailDocument, UpdateEmailDocumentInput } from '../emailbuilder/types';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -126,4 +126,17 @@ export async function createEmailDocument(input: CreateEmailDocumentInput): Prom
 
 export async function listEmailDocuments(): Promise<EmailDocument[]> {
   return apiRequest<EmailDocument[]>('/api/v1/email-builder/emails/');
+}
+
+export async function getEmailDocument(id: number | string): Promise<EmailDocument> {
+  return apiRequest<EmailDocument>(`/api/v1/email-builder/emails/${id}/`);
+}
+
+export async function updateEmailDocument(
+  id: number | string, input: UpdateEmailDocumentInput,
+): Promise<EmailDocument> {
+  return apiRequest<EmailDocument>(`/api/v1/email-builder/emails/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
 }

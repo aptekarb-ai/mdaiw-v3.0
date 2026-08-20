@@ -1,0 +1,222 @@
+.email-canvas {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 28px var(--space-6) var(--space-8);
+  background: var(--color-background-light);
+  overflow-y: auto;
+  overflow-x: auto;
+  /* This is the ONE scroll region that keeps visible (subtle) scrollbar
+     chrome — a long email needs a clear scroll affordance — unlike the
+     Modules/Properties panels, which fully hide theirs. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.email-canvas::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.email-canvas::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.email-canvas::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 4px;
+}
+
+.email-canvas::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-subtle);
+}
+
+.email-canvas__surface {
+  position: relative;
+  flex-shrink: 0;
+  max-width: 100%;
+  min-height: 440px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 2px 8px rgba(0, 45, 56, 0.06);
+  transition: width 180ms ease;
+}
+
+.email-canvas__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: 56px var(--space-8) var(--space-8);
+  color: var(--color-text-muted);
+}
+
+.email-canvas__empty .mdaiw-icon {
+  width: 36px;
+  height: 36px;
+  background-color: var(--color-text-subtle);
+  margin-bottom: var(--space-1);
+}
+
+.email-canvas__empty p {
+  margin: 0;
+}
+
+.email-canvas__empty-hint {
+  font-size: 13px;
+  color: var(--color-text-subtle);
+}
+
+.email-canvas__empty-cta {
+  margin-top: var(--space-4);
+  height: 36px;
+  padding: 0 var(--space-4);
+  border: 1px dashed var(--color-primary-blue);
+  border-radius: var(--radius-sm);
+  background: var(--color-info-bg);
+  color: var(--color-primary-blue);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.email-canvas__empty-cta:hover {
+  background: var(--color-white);
+}
+
+.email-canvas__row {
+  position: relative;
+}
+
+.email-canvas__drop-indicator {
+  height: 3px;
+  margin: -1px 0;
+  background: var(--color-primary-blue);
+  border-radius: var(--radius-pill);
+  position: relative;
+  z-index: 6;
+}
+
+.email-canvas__module {
+  position: relative;
+  cursor: pointer;
+  outline: 1px dashed transparent;
+}
+
+.email-canvas__module:hover {
+  outline-color: var(--color-border-strong);
+}
+
+.email-canvas__module--selected {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: -2px;
+}
+
+.email-canvas__module-toolbar {
+  position: absolute;
+  top: -32px;
+  right: 4px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--color-primary-dark);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+}
+
+.email-canvas__module-toolbar button,
+.email-canvas__module-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.email-canvas__module-handle {
+  cursor: grab;
+}
+
+.email-canvas__module-toolbar button:hover,
+.email-canvas__module-handle:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.email-canvas__module-toolbar .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-white);
+}
+
+/* --- Layout-module empty column state (builder-only) ----------------- */
+
+.email-canvas__layout-columns {
+  display: flex;
+  gap: 4px;
+}
+
+.email-canvas__layout-column {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-light);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-subtle);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.email-canvas__layout-column:hover {
+  border-color: var(--color-primary-blue);
+  border-style: dashed;
+  color: var(--color-primary-blue);
+  background: var(--color-info-bg);
+}
+
+/* --- Image placeholder (builder-only, never in exported HTML) -------- */
+
+.email-canvas__image-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: var(--space-6) var(--space-4);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-light);
+}
+
+.email-canvas__image-placeholder .mdaiw-icon {
+  width: 26px;
+  height: 26px;
+  background-color: var(--color-text-subtle);
+}
+
+.email-canvas__image-placeholder-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.email-canvas__image-placeholder-hint {
+  font-size: 11px;
+  color: var(--color-text-subtle);
+}
+
+@media (max-width: 1023px) {
+  .email-canvas {
+    padding: var(--space-4);
+  }
+}
