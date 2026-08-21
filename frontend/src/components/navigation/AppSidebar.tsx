@@ -163,12 +163,19 @@ function CollapsedFlyout({ group, groupId, pathname, position, onClose, triggerR
   );
 }
 
-export function AppSidebar() {
+interface AppSidebarProps {
+  mobileOpen: boolean;
+  onMobileClose: () => void;
+  menuButtonRef: RefObject<HTMLButtonElement | null>;
+}
+
+export function AppSidebar({ mobileOpen, onMobileClose, menuButtonRef }: AppSidebarProps) {
   const { logout } = useAuth();
   const { open: openYukti } = useYukti();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [confirmingLogout, setConfirmingLogout] = useState(false);
+  const asideRef = useRef<HTMLElement>(null);
   // Only one major module NavGroup (Landing Pages Builder, AI Email Builder)
   // is ever open at once — a single id, not a per-group record, is what
   // makes that an accordion rather than independent toggles.
@@ -205,12 +212,46 @@ export function AppSidebar() {
   }, []);
 
   const effectiveCollapsed = collapsed && isDesktop;
+  // Only mount the drawer's own backdrop/focus-trap/Escape/scroll-lock
+  // behaviour below 1024px — `mobileOpen` can still be true from a prior
+  // narrow layout if the window grows past the breakpoint without the
+  // drawer having closed, and none of that machinery applies once the
+  // sidebar is back to being the normal static desktop rail.
+  const showDrawer = mobileOpen && !isDesktop;
 
   useEffect(() => {
     const matched = routeGroupId(pathname);
     if (matched) setExpandedGroup(matched);
     setFlyoutGroup(null);
   }, [pathname]);
+
+  useEffect(() => {
+    if (!showDrawer) return undefined;
+    const firstFocusable = asideRef.current?.querySelector<HTMLElement>('a, button');
+    firstFocusable?.focus();
+    // Captured once per open, not read fresh in the cleanup below — the
+    // button that opened THIS instance of the drawer is what focus should
+    // return to, and reading `.current` again at cleanup time is the
+    // pattern the exhaustive-deps rule warns about (it could have changed
+    // out from under the effect by then).
+    const openedFromButton = menuButtonRef.current;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onMobileClose();
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      // Runs on every path out of the drawer — Escape, backdrop click, or
+      // a route change closing it via AppLayout — so focus always lands
+      // back on the button that opened it, not just the Escape branch.
+      openedFromButton?.focus();
+    };
+  }, [showDrawer, onMobileClose, menuButtonRef]);
 
   useEffect(() => {
     try {
@@ -249,7 +290,23 @@ export function AppSidebar() {
     : undefined;
 
   return (
-    <aside className="app-sidebar" data-collapsed={effectiveCollapsed}>
+    <>
+      {showDrawer && (
+        <div className="app-sidebar__backdrop" aria-hidden="true" onClick={onMobileClose} />
+      )}
+      <aside
+        ref={asideRef}
+        id="app-sidebar-nav"
+        className="app-sidebar"
+        data-collapsed={effectiveCollapsed}
+        data-mobile-open={showDrawer}
+        // Off-screen-but-still-in-the-DOM is the closed-drawer state at
+        // mobile widths (translateX in CSS) — `inert` is what actually
+        // keeps Tab/AT from reaching it while hidden, on top of the CSS
+        // transform; on desktop, or while the drawer is open, it's never
+        // set.
+        inert={!isDesktop && !mobileOpen ? true : undefined}
+      >
       <div className="app-sidebar__brand-row">
         <a
           href="https://www.marketone.com/"
@@ -418,6 +475,7 @@ export function AppSidebar() {
         onConfirm={handleConfirmLogout}
         onCancel={() => setConfirmingLogout(false)}
       />
-    </aside>
+      </aside>
+    </>
   );
 }

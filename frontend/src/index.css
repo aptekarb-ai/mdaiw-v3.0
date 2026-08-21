@@ -20,6 +20,10 @@ body {
   background: var(--color-background-light);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Defensive page-level guard: nothing in the app is meant to be wider
+     than the viewport, so a layout regression clips instead of adding a
+     horizontal scrollbar to the whole document. */
+  overflow-x: hidden;
 }
 
 a {

@@ -1,11 +1,30 @@
+import type { RefObject } from 'react';
 import { useYukti } from '../../hooks/useYukti';
 import './AppHeader.css';
 
-export function AppHeader() {
+interface AppHeaderProps {
+  mobileNavOpen: boolean;
+  onOpenMobileNav: () => void;
+  menuButtonRef: RefObject<HTMLButtonElement | null>;
+}
+
+export function AppHeader({ mobileNavOpen, onOpenMobileNav, menuButtonRef }: AppHeaderProps) {
   const { open } = useYukti();
 
   return (
     <header className="app-header">
+      <button
+        type="button"
+        ref={menuButtonRef}
+        className="app-header__menu-toggle"
+        aria-label="Open navigation menu"
+        aria-expanded={mobileNavOpen}
+        aria-controls="app-sidebar-nav"
+        onClick={onOpenMobileNav}
+      >
+        <span className="mdaiw-icon mdaiw-icon--menu" aria-hidden="true" />
+      </button>
+
       <div className="app-header__search">
         <span className="mdaiw-icon mdaiw-icon--search" aria-hidden="true" />
         <input

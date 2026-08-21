@@ -154,6 +154,14 @@ export function EmailBuilderDashboardPage() {
                 <span className={`mdaiw-icon mdaiw-icon--${action.icon}`} aria-hidden="true" />
                 <span className="email-builder-dashboard__action-title">{action.title}</span>
                 <span className="email-builder-dashboard__action-description">{action.description}</span>
+                {/* Invisible same-size placeholder — the only real
+                    difference from a "Coming soon" card, so every card
+                    reserves identical vertical space at 1-column width
+                    where each is its own grid row (desktop/tablet rows
+                    hold multiple cards and stretch to match regardless). */}
+                <span className="email-builder-dashboard__action-status" aria-hidden="true" style={{ visibility: 'hidden' }}>
+                  Coming soon
+                </span>
               </Link>
             );
           }

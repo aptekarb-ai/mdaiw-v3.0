@@ -360,57 +360,41 @@
   }
 }
 
-/* Tablet/mobile keeps the existing drawer behaviour untouched — the
-   collapsed icon-only rail is a desktop-only affordance. */
+/* Tablet/mobile: the pinned icon-only rail is a desktop-only affordance
+   (req 14/2) — below 1024px the sidebar is always the full nav (never
+   `data-collapsed`, see `effectiveCollapsed` in the component) and is an
+   off-canvas drawer instead of a permanent column, so it never competes
+   with page content for width. AppHeader's hamburger toggles it open. */
 @media (max-width: 1023px) {
   .app-sidebar {
-    width: 100%;
-    height: auto;
-    position: static;
-    overflow: visible;
-    transition: none;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 1100;
+    width: min(85vw, 300px);
+    height: 100vh;
+    height: 100dvh;
+    transform: translateX(-100%);
+    transition: transform var(--transition-panel);
+    box-shadow: var(--shadow-modal);
+    /* The drawer frame itself doesn't scroll — only `.app-sidebar__nav`
+       does (it already carries flex:1/min-height:0/overflow-y:auto from
+       the shared desktop rule), so the brand row and the Ask Yukti card
+       stay pinned top/bottom while the nav list scrolls between them. */
+    overflow: hidden;
   }
 
-  .app-sidebar[data-collapsed="true"] {
-    width: 100%;
-    padding-left: var(--space-3);
-    padding-right: var(--space-3);
-  }
-
-  .app-sidebar[data-collapsed="true"] .app-sidebar__label,
-  .app-sidebar[data-collapsed="true"] .app-sidebar__group-chevron {
-    position: static;
-    width: auto;
-    height: auto;
-    padding: 0;
-    margin: 0;
-    overflow: visible;
-    clip: auto;
-    white-space: nowrap;
-    border: 0;
-  }
-
-  .app-sidebar[data-collapsed="true"] .app-sidebar__group-children {
-    display: flex;
-  }
-
-  .app-sidebar[data-collapsed="true"] .app-sidebar__link,
-  .app-sidebar[data-collapsed="true"] .app-sidebar__yukti {
-    height: var(--sidebar-row-height);
-    justify-content: flex-start;
-    padding-left: var(--sidebar-row-padding-inline);
-  }
-
-  .app-sidebar[data-collapsed="true"] .app-sidebar__link--child {
-    padding-left: var(--sidebar-child-indent);
+  .app-sidebar[data-mobile-open="true"] {
+    transform: translateX(0);
   }
 
   .app-sidebar__collapse-toggle {
     display: none;
   }
 
-  .app-sidebar__nav {
-    flex: initial;
-    overflow: visible;
+  .app-sidebar__backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1090;
+    background: rgba(0, 45, 56, 0.55);
   }
 }

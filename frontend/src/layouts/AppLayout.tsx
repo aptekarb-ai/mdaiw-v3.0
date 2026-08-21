@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation } from 'react-router';
 import { AppSidebar } from '../components/navigation/AppSidebar';
 import { AppHeader } from '../components/navigation/AppHeader';
@@ -11,12 +12,30 @@ export function AppLayout() {
   // and doesn't need the app footer competing for vertical space. Scoped
   // to this one route rather than a general AppLayout redesign.
   const isFullWorkspace = pathname.startsWith('/email-builder/builder/');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+
+  // A route change is "selecting a navigation item" from inside the
+  // drawer — close it the same way for every nav method (link click,
+  // Yukti voice navigation, browser back/forward), rather than wiring an
+  // onClick to every individual link.
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [pathname]);
 
   return (
     <div className="app-frame">
-      <AppSidebar />
+      <AppSidebar
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
+        menuButtonRef={menuButtonRef}
+      />
       <div className="app-frame__body">
-        <AppHeader />
+        <AppHeader
+          mobileNavOpen={mobileNavOpen}
+          onOpenMobileNav={() => setMobileNavOpen(true)}
+          menuButtonRef={menuButtonRef}
+        />
         <main className={isFullWorkspace ? 'app-frame__content app-frame__content--full' : 'app-frame__content'}>
           <Outlet />
         </main>

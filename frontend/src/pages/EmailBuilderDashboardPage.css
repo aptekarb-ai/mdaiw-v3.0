@@ -58,7 +58,10 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
+  width: 100%;
+  min-width: 0;
   height: 100%;
+  box-sizing: border-box;
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -454,7 +457,12 @@ a.email-builder-dashboard__action:focus-visible {
   font-weight: 700;
 }
 
-/* --- Responsive --------------------------------------------------------- */
+/* --- Responsive ----------------------------------------------------------
+   Three tiers, shared across the whole page:
+     > 1200px  desktop   — Recent Emails + Getting Started side by side
+     561–1200px tablet   — single-column body, 2-up quick actions
+     <= 560px  mobile    — 1-up quick actions, stacked toolbar, card rows
+   -------------------------------------------------------------------- */
 
 @media (max-width: 1200px) {
   .email-builder-dashboard__body {
@@ -473,6 +481,16 @@ a.email-builder-dashboard__action:focus-visible {
 }
 
 @media (max-width: 560px) {
+  .email-builder-dashboard__recent,
+  .email-builder-dashboard__getting-started {
+    padding: var(--space-4);
+  }
+
+  .email-builder-dashboard__header-cta {
+    width: 100%;
+    justify-content: center;
+  }
+
   .email-builder-dashboard__actions {
     grid-template-columns: 1fr;
   }
@@ -483,7 +501,22 @@ a.email-builder-dashboard__action:focus-visible {
 
   .email-builder-dashboard__search {
     min-width: 0;
+    height: 40px;
     flex: 1 1 100%;
+  }
+
+  /* Status / Platform pair up two-to-a-row, Sort wraps to its own row
+     underneath — the "[Status][Platform] / [Sort]" layout from the spec —
+     while staying flex-wrap so it degrades gracefully at any width instead
+     of relying on exactly 3 filters always existing. */
+  .email-builder-dashboard__filter {
+    flex: 1 1 calc(50% - var(--space-2) / 2);
+    min-width: 128px;
+  }
+
+  .email-builder-dashboard__filter select {
+    width: 100%;
+    height: 40px;
   }
 
   /* Responsive row cards — the table stays real markup (thead kept for

@@ -33,11 +33,16 @@
 }
 
 @media (max-width: 1023px) {
-  .app-frame {
-    flex-direction: column;
-  }
-
+  /* The sidebar is position:fixed (off-canvas drawer) below this
+     breakpoint — it's out of normal flow, so .app-frame__body already
+     occupies the full width without a flex-direction change here. */
   .app-frame__content {
     padding: var(--space-4);
+  }
+}
+
+@media (max-width: 560px) {
+  .app-frame__content {
+    padding: var(--space-3);
   }
 }

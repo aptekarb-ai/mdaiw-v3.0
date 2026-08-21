@@ -1,3 +1,4 @@
+import { createRef, useRef, useState } from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
@@ -31,14 +32,35 @@ function mockAuthenticated() {
   vi.mocked(useYukti).mockReturnValue({ open: vi.fn() } as unknown as ReturnType<typeof useYukti>);
 }
 
-function renderSidebarAt(path: string) {
-  return render(
+function renderSidebarAt(
+  path: string,
+  props: { mobileOpen?: boolean; onMobileClose?: () => void } = {},
+) {
+  const menuButtonRef = createRef<HTMLButtonElement>();
+  const result = render(
     <MemoryRouter initialEntries={[path]}>
       <Routes>
-        <Route path={path} element={<AppSidebar />} />
+        <Route
+          path={path}
+          element={
+            <>
+              <button type="button">Open navigation menu</button>
+              <AppSidebar
+                mobileOpen={props.mobileOpen ?? false}
+                onMobileClose={props.onMobileClose ?? vi.fn()}
+                menuButtonRef={menuButtonRef}
+              />
+            </>
+          }
+        />
       </Routes>
     </MemoryRouter>,
   );
+  // The real menu button lives in AppHeader; a stand-in here lets tests
+  // assert focus returns to "the button that opened the drawer" without
+  // wiring the ref through a second real component.
+  menuButtonRef.current = screen.getByRole('button', { name: 'Open navigation menu' });
+  return result;
 }
 
 describe('AppSidebar navigation', () => {
@@ -402,6 +424,109 @@ describe('AppSidebar collapsed icon-only rail', () => {
 
     await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
     expect(screen.getByRole('link', { name: 'Email Dashboard' })).toBeInTheDocument();
+  });
+});
+
+function DrawerHarness({ path }: { path: string }) {
+  const [open, setOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  return (
+    <MemoryRouter initialEntries={[path]}>
+      <button type="button" ref={menuButtonRef} aria-label="Open navigation menu" onClick={() => setOpen(true)} />
+      <Routes>
+        <Route
+          path={path}
+          element={<AppSidebar mobileOpen={open} onMobileClose={() => setOpen(false)} menuButtonRef={menuButtonRef} />}
+        />
+      </Routes>
+    </MemoryRouter>
+  );
+}
+
+describe('AppSidebar mobile drawer', () => {
+  beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 480 });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
+    document.body.style.overflow = '';
+  });
+
+  it('is closed by default — no backdrop, drawer inert', () => {
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    expect(document.querySelector('.app-sidebar__backdrop')).not.toBeInTheDocument();
+    expect(document.querySelector('.app-sidebar')).toHaveAttribute('inert');
+  });
+
+  it('opens as an overlay with a backdrop when the menu button is clicked', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+    expect(document.querySelector('.app-sidebar__backdrop')).toBeInTheDocument();
+    expect(document.querySelector('.app-sidebar')).not.toHaveAttribute('inert');
+    expect(screen.getByRole('link', { name: 'Dashboard' })).toBeInTheDocument();
+  });
+
+  it('clicking the backdrop closes the drawer and returns focus to the menu button', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    const menuButton = screen.getByRole('button', { name: 'Open navigation menu' });
+    await user.click(menuButton);
+    await user.click(document.querySelector('.app-sidebar__backdrop') as HTMLElement);
+
+    expect(document.querySelector('.app-sidebar__backdrop')).not.toBeInTheDocument();
+    expect(menuButton).toHaveFocus();
+  });
+
+  it('Escape closes the drawer and returns focus to the menu button', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    const menuButton = screen.getByRole('button', { name: 'Open navigation menu' });
+    await user.click(menuButton);
+    await user.keyboard('{Escape}');
+
+    expect(document.querySelector('.app-sidebar__backdrop')).not.toBeInTheDocument();
+    expect(menuButton).toHaveFocus();
+  });
+
+  it('moves focus into the drawer on open', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+    expect(document.activeElement?.closest('.app-sidebar')).not.toBeNull();
+  });
+
+  it('locks page scroll while open and restores it on close', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    expect(document.body.style.overflow).not.toBe('hidden');
+    await user.click(screen.getByRole('button', { name: 'Open navigation menu' }));
+    expect(document.body.style.overflow).toBe('hidden');
+
+    await user.keyboard('{Escape}');
+    expect(document.body.style.overflow).not.toBe('hidden');
+  });
+
+  it('does not apply the drawer/backdrop machinery on a desktop-width viewport', () => {
+    Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1280 });
+    mockAuthenticated();
+    render(<DrawerHarness path="/dashboard" />);
+
+    expect(document.querySelector('.app-sidebar')).not.toHaveAttribute('inert');
+    expect(document.querySelector('.app-sidebar__backdrop')).not.toBeInTheDocument();
   });
 });
 
