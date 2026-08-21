@@ -1,0 +1,54 @@
+.face-enrollment-page {
+  max-width: 640px;
+  margin: var(--space-8) auto;
+}
+
+.face-enrollment-page__card {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  box-shadow: var(--shadow-card);
+}
+
+.face-enrollment-page__heading {
+  margin: 0 0 var(--space-2);
+  font-size: 26px;
+  color: var(--color-primary-dark);
+}
+
+.face-enrollment-page__supporting {
+  margin: 0 0 var(--space-6);
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.face-enrollment-page__actions {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-6);
+}
+
+.face-enrollment-page__resume-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.face-enrollment-page__readiness-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  font-size: 13px;
+  color: var(--color-primary-blue);
+  background: var(--color-info-bg);
+  border-radius: var(--radius-md);
+}
+
+.face-enrollment-page__readiness-notice--error {
+  color: var(--color-error);
+  background: var(--color-error-bg);
+}

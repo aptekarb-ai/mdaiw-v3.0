@@ -1,0 +1,206 @@
+.builder-toolbar {
+  flex-shrink: 0;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  background: var(--color-primary-dark);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0 var(--space-4);
+  overflow-x: auto;
+}
+
+.builder-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: max-content;
+}
+
+.builder-toolbar__group--center {
+  flex: 1;
+  justify-content: center;
+}
+
+.builder-toolbar__separator {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.14);
+  flex-shrink: 0;
+}
+
+.builder-toolbar__back {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-white);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.builder-toolbar__back:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.builder-toolbar__back .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-white);
+}
+
+.builder-toolbar__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.builder-toolbar__email-name {
+  color: var(--color-white);
+  font-size: 14px;
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.builder-toolbar__chip {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.builder-toolbar__history {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.builder-toolbar__history button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.builder-toolbar__history button:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.builder-toolbar__history button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.builder-toolbar__history .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-white);
+}
+
+.builder-toolbar__view-switch {
+  display: flex;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.builder-toolbar__view-btn {
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.builder-toolbar__view-btn--active {
+  background: var(--color-primary-blue);
+  color: var(--color-white);
+}
+
+.builder-toolbar__future-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.builder-toolbar__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 12px;
+  white-space: nowrap;
+  color: var(--color-text-subtle);
+  flex-shrink: 0;
+}
+
+.builder-toolbar__status--dirty {
+  color: #FFB020;
+}
+
+.builder-toolbar__status--error {
+  color: #FF6B6B;
+}
+
+.builder-toolbar__spinner {
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  animation: builder-toolbar-spin 0.8s linear infinite;
+}
+
+@keyframes builder-toolbar-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .builder-toolbar__spinner {
+    animation: none;
+  }
+}
+
+.builder-toolbar .button {
+  height: 32px;
+  padding: 0 var(--space-3);
+  font-size: 13px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.builder-toolbar .button .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.builder-toolbar .button--outline .mdaiw-icon {
+  background-color: var(--color-primary-blue);
+}
+
+.builder-toolbar .button--primary .mdaiw-icon {
+  background-color: var(--color-primary-dark);
+}

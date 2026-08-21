@@ -1,0 +1,206 @@
+.camera-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  background: var(--color-primary-dark);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.camera-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.camera-preview__overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-preview__overlay img {
+  width: 70%;
+  height: 70%;
+  object-fit: contain;
+  opacity: 0.85;
+}
+
+.camera-preview__placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  height: 100%;
+  color: var(--color-white);
+}
+
+.camera-preview__placeholder .mdaiw-icon {
+  width: 48px;
+  height: 48px;
+}
+
+.liveness-challenge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  text-align: center;
+}
+
+.liveness-challenge__instruction {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+
+.liveness-challenge__status {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.liveness-challenge__status[data-complete='true'] {
+  color: var(--color-accent-green);
+  font-weight: 600;
+}
+
+.capture-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+}
+
+.capture-progress__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 14px;
+  color: var(--color-text-muted);
+}
+
+.capture-progress__step[data-state='complete'] {
+  color: var(--color-accent-green);
+}
+
+.capture-progress__step[data-state='active'] {
+  color: var(--color-primary-blue);
+  font-weight: 600;
+}
+
+.face-processing-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+}
+
+.face-processing-state__spinner {
+  width: 40px;
+  height: 40px;
+  animation: face-processing-spin 1s linear infinite;
+}
+
+@keyframes face-processing-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.face-processing-state__checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  text-align: left;
+}
+
+.face-processing-state__checklist li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 14px;
+  color: var(--color-text-subtle);
+}
+
+.face-processing-state__checklist li[data-state='complete'] {
+  color: var(--color-accent-green);
+}
+
+.face-processing-state__checklist li[data-state='active'] {
+  color: var(--color-primary-blue);
+  font-weight: 600;
+}
+
+.face-auth-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-error-bg);
+  border-radius: var(--radius-md);
+  text-align: center;
+}
+
+.face-auth-error__message {
+  margin: 0;
+  color: var(--color-error);
+  font-size: 14px;
+}
+
+.face-auth-error__actions {
+  display: flex;
+  gap: var(--space-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.biometric-consent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.biometric-consent__explanation {
+  font-size: 14px;
+  color: var(--color-text-muted);
+  background: var(--color-info-bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+}
+
+.liveness-diagnostics {
+  display: grid;
+  grid-template-columns: repeat(5, auto);
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-primary-dark);
+  color: var(--color-white);
+  border-radius: var(--radius-sm);
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.liveness-diagnostics dt {
+  opacity: 0.6;
+  text-transform: uppercase;
+}
+
+.liveness-diagnostics dd {
+  margin: 0;
+  font-weight: 600;
+}

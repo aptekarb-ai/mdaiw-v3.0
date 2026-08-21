@@ -1,0 +1,628 @@
+.properties-panel {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  flex-shrink: 0;
+  background: var(--color-white);
+  border-left: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+.properties-panel--collapsed {
+  width: 40px;
+  align-items: center;
+  padding-top: var(--space-3);
+}
+
+.properties-panel__expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  cursor: pointer;
+}
+
+.properties-panel__expand:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.properties-panel__expand .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-primary-blue);
+}
+
+.properties-panel__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.properties-panel__header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+}
+
+.properties-panel__collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.properties-panel__collapse:hover {
+  background: var(--color-background-light);
+}
+
+.properties-panel__collapse .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-text-muted);
+}
+
+.properties-panel__empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: 40px var(--space-6) var(--space-6);
+}
+
+.properties-panel__empty .mdaiw-icon {
+  width: 30px;
+  height: 30px;
+  background-color: var(--color-text-subtle);
+  margin-bottom: var(--space-1);
+}
+
+.properties-panel__empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.properties-panel__empty-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__tabs {
+  flex-shrink: 0;
+  display: flex;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.properties-panel__tab {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: var(--space-3) var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.properties-panel__tab--active {
+  color: var(--color-primary-blue);
+  border-bottom-color: var(--color-primary-blue);
+}
+
+.properties-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  /* Fields directly in the body (unsectioned Content-tab fields) get
+     their own margin-bottom below — no flex gap here, so a sectioned
+     tab (Style/Settings) doesn't double up spacing with
+     .properties-panel__section's own top padding/border. */
+  gap: 0;
+  padding: var(--space-4);
+  /* Same hidden-scrollbar treatment as the global MDAIW sidebar nav —
+     scroll stays functional, chrome is invisible. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.properties-panel__body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.properties-panel__section + .properties-panel__section {
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-border);
+}
+
+.properties-panel__section-title {
+  margin: 0 0 var(--space-3);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__section-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.properties-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-dark);
+}
+
+/* Fields rendered directly in the body (Content-tab editors are not
+   wrapped in a PropertySection) need their own field-group spacing since
+   the body itself no longer applies a flex gap. */
+.properties-panel__body > .properties-panel__field {
+  margin-bottom: var(--space-4);
+}
+
+.properties-panel__body > .properties-panel__field:last-child {
+  margin-bottom: 0;
+}
+
+.properties-panel__field span {
+  font-weight: 600;
+}
+
+.properties-panel__field input[type='text'],
+.properties-panel__field input[type='number'],
+.properties-panel__field select,
+.properties-panel__field textarea {
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--color-white);
+  color: var(--color-text-dark);
+}
+
+.properties-panel__field textarea {
+  height: auto;
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+
+.properties-panel__field input:focus-visible,
+.properties-panel__field select:focus-visible,
+.properties-panel__field textarea:focus-visible {
+  border-color: var(--color-primary-blue);
+  outline: none;
+}
+
+.properties-panel__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__field-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.properties-panel__field-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.properties-panel__padding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.properties-panel__padding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.properties-panel__padding-field input {
+  height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.dimension-control {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.dimension-control__value {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.dimension-control__unit {
+  flex-shrink: 0;
+  width: 56px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: center;
+  background: var(--color-white);
+  color: var(--color-text-dark);
+}
+
+.dimension-control__unit--fixed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-subtle);
+  background: var(--color-background-light);
+}
+
+.properties-panel__inherit-hint {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__inherit-reset {
+  align-self: flex-start;
+  height: 26px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-primary-blue);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-primary-blue);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.properties-panel__inherit-reset:hover {
+  background: var(--color-info-bg);
+}
+
+.properties-panel__link-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  color: var(--color-text-dark);
+}
+
+@media (max-width: 1279px) {
+  .properties-panel {
+    width: 260px;
+  }
+}
+
+/* --- Feature 05 — Layout Builder ---------------------------------------- */
+
+.properties-panel__breadcrumb {
+  flex-shrink: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-4) 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__breadcrumb-link {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-primary-blue);
+  cursor: pointer;
+}
+
+.properties-panel__breadcrumb-link:hover {
+  text-decoration: underline;
+}
+
+.properties-panel__column-overview {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.properties-panel__column-overview button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  cursor: pointer;
+}
+
+.properties-panel__column-overview button:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.properties-panel__column-overview-count {
+  font-weight: 500;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__column-widths {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.properties-panel__column-width-input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.properties-panel__column-width-input input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.properties-panel__validation {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.properties-panel__validation--error {
+  color: var(--color-error);
+}
+
+.properties-panel__validation--warning {
+  color: var(--color-warning);
+}
+
+.properties-panel__checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.properties-panel__mobile-order {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.properties-panel__mobile-order ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.properties-panel__mobile-order li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.properties-panel__mobile-order-controls {
+  display: flex;
+  gap: 2px;
+}
+
+.properties-panel__mobile-order-controls button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  cursor: pointer;
+}
+
+.properties-panel__mobile-order-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.properties-panel__mobile-order-controls .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-text-dark);
+}
+
+.properties-panel__mobile-order-icon--up {
+  transform: rotate(180deg);
+}
+
+/* --- Feature 06 — Module Element Editor --------------------------------- */
+
+.properties-panel__typography-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.color-control {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.color-control__swatch {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  cursor: pointer;
+}
+
+.color-control__hex {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.color-control__hex:focus-visible {
+  border-color: var(--color-primary-blue);
+  outline: none;
+}
+
+.repeatable-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.repeatable-editor__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.repeatable-editor__item {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.repeatable-editor__item-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 var(--space-3);
+  border: none;
+  background: var(--color-white);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  text-align: left;
+  cursor: pointer;
+}
+
+.repeatable-editor__item-toggle--active {
+  color: var(--color-primary-blue);
+  background: var(--color-info-bg);
+}
+
+.repeatable-editor__item-actions {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--space-2) var(--space-2);
+  background: var(--color-white);
+}
+
+.repeatable-editor__item-actions button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  cursor: pointer;
+}
+
+.repeatable-editor__item-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.repeatable-editor__item-actions .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-text-dark);
+}
+
+.repeatable-editor__item-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-background-light);
+}

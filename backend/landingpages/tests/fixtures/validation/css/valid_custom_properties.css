@@ -1,0 +1,10 @@
+:root {
+  --gap: 1rem;
+  --max-width: 60rem;
+}
+
+.container {
+  max-width: var(--max-width);
+  margin-inline: auto;
+  padding: var(--gap);
+}

@@ -1,0 +1,56 @@
+.registration-wizard {
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+.registration-wizard__card {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-8);
+  box-shadow: var(--shadow-card);
+}
+
+.registration-wizard__eyebrow {
+  margin: 0;
+  color: var(--color-primary-blue);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.registration-wizard__heading {
+  margin: var(--space-2) 0 var(--space-2);
+  font-size: 28px;
+  color: var(--color-primary-dark);
+}
+
+.registration-wizard__supporting {
+  margin: 0 0 var(--space-6);
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.registration-step-heading {
+  margin: 0 0 var(--space-1);
+  font-size: 22px;
+  color: var(--color-primary-dark);
+}
+
+.registration-step-supporting {
+  margin: 0 0 var(--space-6);
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.registration-wizard__actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-8);
+}
+
+@media (max-width: 767px) {
+  .registration-wizard__card {
+    padding: var(--space-5);
+  }
+}

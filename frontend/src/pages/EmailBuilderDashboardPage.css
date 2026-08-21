@@ -1,0 +1,584 @@
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.email-builder-dashboard__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.email-builder-dashboard__header h1 {
+  margin: 0 0 4px;
+  color: var(--color-primary-dark);
+  font-size: 24px;
+}
+
+.email-builder-dashboard__header p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 14px;
+}
+
+.email-builder-dashboard__header-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.email-builder-dashboard__header-cta .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+}
+
+/* --- Quick actions ------------------------------------------------- */
+
+.email-builder-dashboard__actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.email-builder-dashboard__action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  text-align: left;
+  text-decoration: none;
+  cursor: not-allowed;
+}
+
+.email-builder-dashboard__action:disabled {
+  opacity: 0.7;
+}
+
+/* A Link (real next step) rather than a disabled <button> — enabled,
+   interactive, matches the rest of the app's card hover treatment. */
+a.email-builder-dashboard__action {
+  cursor: pointer;
+}
+
+a.email-builder-dashboard__action:hover {
+  border-color: var(--color-primary-blue);
+  box-shadow: var(--shadow-card);
+}
+
+a.email-builder-dashboard__action:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.email-builder-dashboard__action--primary {
+  border-color: var(--color-accent-green);
+}
+
+.email-builder-dashboard__action .mdaiw-icon {
+  width: 22px;
+  height: 22px;
+  background-color: var(--color-primary-blue);
+  margin-bottom: 2px;
+}
+
+.email-builder-dashboard__action-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+}
+
+.email-builder-dashboard__action-description {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+}
+
+.email-builder-dashboard__action-status {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-subtle);
+  background: var(--color-background-light);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+}
+
+/* --- Body grid: Recent Emails ~70% / Getting Started ~30% ---------- */
+
+.email-builder-dashboard__body {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(260px, 3fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.email-builder-dashboard__recent,
+.email-builder-dashboard__getting-started {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-5);
+}
+
+.email-builder-dashboard__recent h2,
+.email-builder-dashboard__getting-started h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+
+/* --- Recent Emails toolbar ------------------------------------------ */
+
+.email-builder-dashboard__recent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.email-builder-dashboard__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.email-builder-dashboard__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 var(--space-2) 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  min-width: 200px;
+}
+
+.email-builder-dashboard__search:focus-within {
+  border-color: var(--color-primary-blue);
+}
+
+.email-builder-dashboard__search .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-text-subtle);
+  flex-shrink: 0;
+}
+
+.email-builder-dashboard__search input {
+  border: none;
+  outline: none;
+  font-size: 13px;
+  width: 100%;
+  background: transparent;
+  color: var(--color-text-dark);
+}
+
+.email-builder-dashboard__filter select {
+  height: 34px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-size: 13px;
+  color: var(--color-text-dark);
+}
+
+.email-builder-dashboard__filter select:focus-visible,
+.email-builder-dashboard__search input:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 1px;
+}
+
+/* --- States: empty / loading / error / inline errors ---------------- */
+
+.email-builder-dashboard__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-muted);
+}
+
+.email-builder-dashboard__empty .mdaiw-icon {
+  width: 36px;
+  height: 36px;
+  background-color: var(--color-text-subtle);
+  margin-bottom: var(--space-1);
+}
+
+.email-builder-dashboard__empty p {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.email-builder-dashboard__empty-hint {
+  font-size: 13px;
+  color: var(--color-text-subtle);
+  font-weight: 400 !important;
+}
+
+.email-builder-dashboard__state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.email-builder-dashboard__inline-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.email-builder-dashboard__inline-error-dismiss {
+  flex-shrink: 0;
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.email-builder-dashboard__inline-error-dismiss .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-error);
+}
+
+.email-builder-dashboard__delete-error {
+  position: fixed;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  box-shadow: var(--shadow-card);
+}
+
+.email-builder-dashboard__skeleton {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.email-builder-dashboard__skeleton li {
+  height: 48px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--color-background-light) 25%, #eef1f3 37%, var(--color-background-light) 63%);
+  background-size: 400% 100%;
+  animation: email-builder-dashboard-skeleton 1.4s ease infinite;
+}
+
+@keyframes email-builder-dashboard-skeleton {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .email-builder-dashboard__skeleton li {
+    animation: none;
+  }
+}
+
+/* --- Table ------------------------------------------------------------ */
+
+.email-builder-dashboard__table-wrap {
+  overflow-x: auto;
+}
+
+.email-builder-dashboard__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.email-builder-dashboard__table thead th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-subtle);
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.email-builder-dashboard__row {
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.email-builder-dashboard__row:last-child {
+  border-bottom: none;
+}
+
+.email-builder-dashboard__row td {
+  padding: var(--space-2) var(--space-3);
+  height: 50px;
+  vertical-align: middle;
+  color: var(--color-text-dark);
+}
+
+.email-builder-dashboard__row:hover {
+  background: var(--color-background-light);
+}
+
+.email-builder-dashboard__row:focus-within {
+  background: var(--color-background-light);
+}
+
+.email-builder-dashboard__row-name {
+  font-weight: 600;
+  color: var(--color-primary-dark);
+  text-decoration: none;
+}
+
+.email-builder-dashboard__row-name:hover {
+  color: var(--color-primary-blue);
+  text-decoration: underline;
+}
+
+.email-builder-dashboard__row-name:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.email-builder-dashboard__muted {
+  color: var(--color-text-muted);
+}
+
+.email-builder-dashboard__badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  background: var(--color-background-light);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--space-2);
+}
+
+.email-builder-dashboard__actions-cell {
+  text-align: right;
+  width: 40px;
+}
+
+.email-builder-dashboard__load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-4);
+}
+
+.email-builder-dashboard__result-count {
+  margin: var(--space-3) 0 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-subtle);
+}
+
+/* --- Getting Started --------------------------------------------------- */
+
+.email-builder-dashboard__steps {
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.email-builder-dashboard__step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-text-dark);
+  min-height: 28px;
+}
+
+.email-builder-dashboard__step-number {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--color-info-bg);
+  color: var(--color-primary-blue);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* --- Responsive ----------------------------------------------------------
+   Three tiers, shared across the whole page:
+     > 1200px  desktop   — Recent Emails + Getting Started side by side
+     561–1200px tablet   — single-column body, 2-up quick actions
+     <= 560px  mobile    — 1-up quick actions, stacked toolbar, card rows
+   -------------------------------------------------------------------- */
+
+@media (max-width: 1200px) {
+  .email-builder-dashboard__body {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .email-builder-dashboard__actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .email-builder-dashboard__header {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 560px) {
+  .email-builder-dashboard__recent,
+  .email-builder-dashboard__getting-started {
+    padding: var(--space-4);
+  }
+
+  .email-builder-dashboard__header-cta {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .email-builder-dashboard__actions {
+    grid-template-columns: 1fr;
+  }
+
+  .email-builder-dashboard__toolbar {
+    width: 100%;
+  }
+
+  .email-builder-dashboard__search {
+    min-width: 0;
+    height: 40px;
+    flex: 1 1 100%;
+  }
+
+  /* Status / Platform pair up two-to-a-row, Sort wraps to its own row
+     underneath — the "[Status][Platform] / [Sort]" layout from the spec —
+     while staying flex-wrap so it degrades gracefully at any width instead
+     of relying on exactly 3 filters always existing. */
+  .email-builder-dashboard__filter {
+    flex: 1 1 calc(50% - var(--space-2) / 2);
+    min-width: 128px;
+  }
+
+  .email-builder-dashboard__filter select {
+    width: 100%;
+    height: 40px;
+  }
+
+  /* Responsive row cards — the table stays real markup (thead kept for
+     screen readers, just visually hidden) but each row lays out as a
+     stacked label/value card instead of six squeezed columns. */
+  .email-builder-dashboard__table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .email-builder-dashboard__table,
+  .email-builder-dashboard__table tbody,
+  .email-builder-dashboard__row {
+    display: block;
+    width: 100%;
+  }
+
+  .email-builder-dashboard__row {
+    padding: var(--space-3);
+    margin-bottom: var(--space-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .email-builder-dashboard__row td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: 4px 0;
+    height: auto;
+    text-align: right;
+  }
+
+  .email-builder-dashboard__row td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--color-text-subtle);
+    text-align: left;
+  }
+
+  .email-builder-dashboard__row td[data-label='Name'] {
+    padding-bottom: var(--space-2);
+    margin-bottom: var(--space-2);
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .email-builder-dashboard__row td[data-label='Name']::before {
+    display: none;
+  }
+
+  .email-builder-dashboard__row-name {
+    font-size: 14px;
+  }
+
+  .email-builder-dashboard__actions-cell {
+    width: auto;
+  }
+}

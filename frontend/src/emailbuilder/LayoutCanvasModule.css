@@ -1,0 +1,148 @@
+/* Feature 05 — interactive layout/column canvas. Builder-UI-only (never
+   part of the exported email HTML — see catalog/layoutCatalog.tsx's
+   renderEmailHtml for the actual table-first output). */
+
+.layout-canvas {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.layout-canvas--stacked {
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.layout-canvas__column {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 72px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  cursor: pointer;
+}
+
+.layout-canvas__column:hover {
+  border-color: var(--color-primary-blue);
+}
+
+/* A nested module's own Outer Spacer Columns preview — a dedicated
+   spacer REGION beside the content (flex row), not a CSS margin. Mirrors
+   EmailCanvas.css's top-level equivalent. */
+.layout-canvas__nested-outer-row {
+  display: flex;
+}
+
+.layout-canvas__nested-spacer-region {
+  flex: 0 0 auto;
+}
+
+.layout-canvas__nested-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.layout-canvas__column:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.layout-canvas__column--active {
+  border-color: var(--color-primary-blue);
+  border-style: solid;
+  background-color: var(--color-info-bg);
+}
+
+.layout-canvas__add-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  min-height: 64px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.layout-canvas__add-content:hover {
+  color: var(--color-primary-blue);
+}
+
+.layout-canvas__add-content .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+}
+
+.layout-canvas__nested-row {
+  position: relative;
+}
+
+.layout-canvas__nested-module {
+  position: relative;
+  outline: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+}
+
+.layout-canvas__nested-module:hover {
+  outline-color: var(--color-border-strong);
+}
+
+.layout-canvas__nested-module--selected {
+  outline: 2px solid var(--color-accent-green);
+  outline-offset: -2px;
+}
+
+.layout-canvas__nested-toolbar {
+  position: absolute;
+  top: -30px;
+  right: 2px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--color-primary-dark);
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+.layout-canvas__nested-toolbar button,
+.layout-canvas__nested-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.layout-canvas__nested-handle {
+  cursor: grab;
+}
+
+.layout-canvas__nested-toolbar button:hover,
+.layout-canvas__nested-handle:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.layout-canvas__nested-toolbar .mdaiw-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--color-white);
+}
+
+.layout-canvas__drop-indicator {
+  height: 3px;
+  margin: 2px 0;
+  background: var(--color-primary-blue);
+  border-radius: var(--radius-pill);
+}

@@ -1,0 +1,114 @@
+.validate-progress-panel {
+  margin: var(--space-3) 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.validate-progress-panel__stage {
+  margin: 0 0 var(--space-2);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+}
+
+.validate-progress-panel__track {
+  width: 100%;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-background-light);
+  overflow: hidden;
+}
+
+.validate-progress-panel__fill {
+  height: 100%;
+  background: var(--color-primary-blue);
+  border-radius: var(--radius-pill);
+  transition: width var(--transition-panel);
+}
+
+.validate-progress-panel__track--indeterminate {
+  position: relative;
+}
+
+.validate-progress-panel__track--indeterminate::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary-blue);
+  animation: validate-progress-indeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes validate-progress-indeterminate {
+  0% { left: -40%; }
+  100% { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .validate-progress-panel__fill {
+    transition: none;
+  }
+  .validate-progress-panel__track--indeterminate::after {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+.validate-progress-panel__percent {
+  margin: var(--space-2) 0 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.validate-progress-panel__checklist {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: 13px;
+}
+
+.validate-progress-panel__checklist-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-subtle);
+}
+
+.validate-progress-panel__checklist-item--done {
+  color: var(--color-primary-dark);
+}
+
+.validate-progress-panel__checklist-item--active {
+  color: var(--color-primary-blue);
+  font-weight: 600;
+}
+
+.validate-progress-panel__checklist-glyph {
+  font-size: 12px;
+}
+
+.validate-progress-panel__current {
+  margin: var(--space-3) 0 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+@media (max-width: 600px) {
+  .validate-progress-panel {
+    padding: var(--space-3);
+  }
+  .validate-progress-panel__checklist {
+    gap: var(--space-2);
+    font-size: 12px;
+  }
+}

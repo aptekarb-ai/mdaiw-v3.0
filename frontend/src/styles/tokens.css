@@ -1,0 +1,50 @@
+:root {
+  --color-primary-dark: #002D38;
+  --color-primary-blue: #0082AD;
+  --color-accent-green: #76C043;
+  --color-background-light: #F4F6F8;
+  --color-white: #FFFFFF;
+  --color-text-dark: #333333;
+
+  --color-border: #D9E2E5;
+  --color-border-strong: #B8C8CD;
+  --color-text-muted: #66777D;
+  --color-text-subtle: #829096;
+  --color-success-bg: #EEF8E8;
+  --color-info-bg: #EAF7FB;
+  --color-error: #B42318;
+  --color-error-bg: #FEF3F2;
+  --color-warning: #B54708;
+  --color-warning-bg: #FFFAEB;
+
+  --shadow-card: 0 8px 24px rgba(0, 45, 56, 0.08);
+  --shadow-modal: 0 20px 48px rgba(0, 45, 56, 0.20);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  --transition-fast: 120ms ease;
+  --transition-standard: 180ms ease;
+  --transition-panel: 240ms ease;
+
+  --font-sans: Inter, "Segoe UI", Roboto, Arial, sans-serif;
+
+  --public-sidebar-width: 248px;
+  --app-sidebar-width: 240px;
+  --app-header-height: 68px;
+  --app-footer-height: 56px;
+}

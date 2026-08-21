@@ -1,0 +1,11 @@
+.card {
+  color: #333;
+
+  & .title {
+    font-weight: 600;
+  }
+
+  &:hover {
+    color: #0082ad;
+  }
+}

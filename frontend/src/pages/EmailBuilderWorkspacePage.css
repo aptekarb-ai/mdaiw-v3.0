@@ -1,0 +1,73 @@
+/* AppLayout renders this route's <main> as app-frame__content--full
+   (padding 0, flex column, no footer) — this component fills exactly
+   that space, so no page scroll happens; only the panels/canvas inside
+   scroll internally. */
+.email-builder-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* AppLayout's .app-frame__body only sets min-height:0 / overflow:visible
+   (deliberately — normal pages should be allowed to grow taller than the
+   viewport and let the browser scroll). That means nothing above this
+   route's content ever gives .app-frame__content--full a bounded height
+   to compute flex:1/min-height:0 against, so .email-builder-workspace
+   (and everything nested in it) would fall back to natural content
+   height instead — and app-frame__body, having a sibling topbar above
+   the <main>, would then exceed the viewport by exactly the topbar's
+   height, scrolling the whole PAGE instead of just the internal panels.
+   :has() scopes a viewport cap to app-frame__body ONLY when it contains
+   this route's workspace, so every other MDAIW page keeps its normal
+   (unbounded, page-scrolling) behavior untouched. Once app-frame__body
+   is bounded, the existing flex:1/min-height:0 chain in AppLayout's
+   <main> and in .email-builder-workspace above resolves correctly with
+   no vh math needed anywhere else. */
+.app-frame__body:has(> .app-frame__content--full > .email-builder-workspace) {
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.email-builder-workspace__status {
+  flex: 1;
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 15px;
+}
+
+.email-builder-workspace__save-error {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.email-builder-workspace__save-error .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-error);
+  flex-shrink: 0;
+}
+
+.email-builder-workspace__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+@media (max-width: 1023px) {
+  .email-builder-workspace__body {
+    flex-direction: column;
+    overflow: visible;
+  }
+}

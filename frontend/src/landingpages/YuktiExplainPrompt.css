@@ -1,0 +1,48 @@
+.yukti-explain-prompt {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-primary-blue);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  margin: var(--space-3) 0;
+  /* Sibling of .validation-issues-panel inside a fixed-height flex column
+     (.validator-page__results) — without this, the default flex-shrink:1
+     lets this content-sized banner compete for shrink space against the
+     list's height:100% basis, and on the mobile clamp(360px,...) height
+     that starves the issue list down to a couple of visible pixels. */
+  flex-shrink: 0;
+}
+
+.yukti-explain-prompt__icon {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  color: var(--color-primary-blue);
+  background-color: currentColor;
+}
+
+.yukti-explain-prompt__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.yukti-explain-prompt__name {
+  margin: 0 0 var(--space-1);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-primary-blue);
+}
+
+.yukti-explain-prompt__message {
+  margin: 0 0 var(--space-3);
+  font-size: 14px;
+  color: var(--color-text-dark);
+}
+
+.yukti-explain-prompt__actions {
+  display: flex;
+  gap: var(--space-3);
+}

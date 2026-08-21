@@ -38,3 +38,6 @@ temp/
 # Face Recognition temporary data
 face-temp/
 biometric-temp/
+backend/.face-models/
+frontend/public/assets/mediapipe/*.task
+frontend/public/assets/mediapipe/wasm/

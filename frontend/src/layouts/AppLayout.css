@@ -1,0 +1,48 @@
+.app-frame {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-frame__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* Without this, a flex column child (app-frame__content--full, which
+     wants to be clipped to exactly the remaining viewport height) can't
+     actually shrink below its content's natural size, so the whole
+     .app-frame grows past 100vh and the BODY scrolls instead of the
+     builder's own internal panels — the bug this fixes. Harmless for
+     every other (non-builder) route: they have no overflow:hidden
+     descendant, so their content still grows the page exactly as before. */
+  min-height: 0;
+}
+
+.app-frame__content {
+  flex: 1;
+  background: var(--color-background-light);
+  padding: var(--space-6) var(--space-8);
+}
+
+.app-frame__content--full {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+@media (max-width: 1023px) {
+  /* The sidebar is position:fixed (off-canvas drawer) below this
+     breakpoint — it's out of normal flow, so .app-frame__body already
+     occupies the full width without a flex-direction change here. */
+  .app-frame__content {
+    padding: var(--space-4);
+  }
+}
+
+@media (max-width: 560px) {
+  .app-frame__content {
+    padding: var(--space-3);
+  }
+}

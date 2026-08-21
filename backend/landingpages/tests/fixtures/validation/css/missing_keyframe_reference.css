@@ -1,0 +1,3 @@
+.hero {
+  animation: fade-in-that-does-not-exist 1s ease-in;
+}

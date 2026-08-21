@@ -1,0 +1,69 @@
+.validator-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+}
+
+.validator-toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.validator-toolbar .button {
+  height: 38px;
+  padding: 0 var(--space-4);
+  font-size: 13px;
+}
+
+.validator-toolbar__project-name {
+  height: 38px;
+  padding: 0 var(--space-3);
+  font-size: 13px;
+  border: 1px solid var(--color-border, #D9E2E5);
+  border-radius: 8px;
+  min-width: 160px;
+}
+
+.validator-toolbar__save-group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.validator-toolbar__save-status {
+  font-size: 12px;
+  color: var(--color-text-muted, #66777D);
+  white-space: nowrap;
+}
+
+.validator-toolbar__save-status--failed {
+  color: var(--color-error, #B42318);
+}
+
+.validator-toolbar__save-status--saved {
+  color: var(--color-primary-dark, #002D38);
+}
+
+@media (max-width: 767px) {
+  .validator-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .validator-toolbar__group {
+    justify-content: flex-start;
+  }
+
+  .validator-toolbar__project-name {
+    width: 100%;
+  }
+
+  .validator-toolbar__save-group {
+    flex-wrap: wrap;
+  }
+}

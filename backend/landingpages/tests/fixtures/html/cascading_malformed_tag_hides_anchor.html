@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cascading Malformed Tag</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A malformed img tag immediately followed by an unclosed anchor.">
+</head>
+<body>
+  <h1>Cascading Malformed Tag</h1>
+  <div>
+    <img src="nonexistent.jpg" alt="Missing Image"
+    <a href="contact.html">Contact Us
+  </div>
+</body>
+</html>

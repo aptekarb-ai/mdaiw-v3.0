@@ -1,0 +1,103 @@
+{
+  "target_path": "C:\\Projects\\MDAIW\\docs\\module-4",
+  "features": [
+    {
+      "number": 1,
+      "slug": "Dashboard",
+      "description": "Email Builder home, recent emails, templates, modules and fast-create actions.",
+      "png": "01_UI_UX_Designs/01_Dashboard.png",
+      "prompt": "02_Claude_Code_Prompts/01_Dashboard_Prompt.md"
+    },
+    {
+      "number": 2,
+      "slug": "Create_New_Email",
+      "description": "Setup wizard for email name, target environment, width and starting source.",
+      "png": "01_UI_UX_Designs/02_Create_New_Email.png",
+      "prompt": "02_Claude_Code_Prompts/02_Create_New_Email_Prompt.md"
+    },
+    {
+      "number": 3,
+      "slug": "Email_Builder_Main_Workspace",
+      "description": "Core drag-and-drop builder with modules, canvas, properties, toolbar and live state.",
+      "png": "01_UI_UX_Designs/03_Email_Builder_Main_Workspace.png",
+      "prompt": "02_Claude_Code_Prompts/03_Email_Builder_Main_Workspace_Prompt.md"
+    },
+    {
+      "number": 4,
+      "slug": "Module_Library",
+      "description": "Searchable reusable module catalog with layout/content categories and 1\u20136 column structures.",
+      "png": "01_UI_UX_Designs/04_Module_Library.png",
+      "prompt": "02_Claude_Code_Prompts/04_Module_Library_Prompt.md"
+    },
+    {
+      "number": 5,
+      "slug": "Layout_Builder",
+      "description": "Column ratios, structure, mobile stacking and content order configuration.",
+      "png": "01_UI_UX_Designs/05_Layout_Builder.png",
+      "prompt": "02_Claude_Code_Prompts/05_Layout_Builder_Prompt.md"
+    },
+    {
+      "number": 6,
+      "slug": "Module_Element_Editor",
+      "description": "Edit module content, typography, spacing, image, CTA, style and advanced properties.",
+      "png": "01_UI_UX_Designs/06_Module_Element_Editor.png",
+      "prompt": "02_Claude_Code_Prompts/06_Module_Element_Editor_Prompt.md"
+    },
+    {
+      "number": 7,
+      "slug": "Responsive_Editor",
+      "description": "Desktop/mobile side-by-side editing, stacking, alignment and mobile-specific overrides.",
+      "png": "01_UI_UX_Designs/07_Responsive_Editor.png",
+      "prompt": "02_Claude_Code_Prompts/07_Responsive_Editor_Prompt.md"
+    },
+    {
+      "number": 8,
+      "slug": "Asset_Manager",
+      "description": "Upload or reference images, logos and icons; maintain alt text and reusable assets.",
+      "png": "01_UI_UX_Designs/08_Asset_Manager.png",
+      "prompt": "02_Claude_Code_Prompts/08_Asset_Manager_Prompt.md"
+    },
+    {
+      "number": 9,
+      "slug": "Code_Editor",
+      "description": "Professional email-safe HTML editor with visual synchronization and compatibility checks.",
+      "png": "01_UI_UX_Designs/09_Code_Editor.png",
+      "prompt": "02_Claude_Code_Prompts/09_Code_Editor_Prompt.md"
+    },
+    {
+      "number": 10,
+      "slug": "Platform_Environment",
+      "description": "Generic, Salesforce, Marketo, HubSpot and Pardot/Account Engagement platform adapters.",
+      "png": "01_UI_UX_Designs/10_Platform_Environment.png",
+      "prompt": "02_Claude_Code_Prompts/10_Platform_Environment_Prompt.md"
+    },
+    {
+      "number": 11,
+      "slug": "Preview_Studio",
+      "description": "Desktop, mobile, dark mode and email-client rendering previews with provider integration hooks.",
+      "png": "01_UI_UX_Designs/11_Preview_Studio.png",
+      "prompt": "02_Claude_Code_Prompts/11_Preview_Studio_Prompt.md"
+    },
+    {
+      "number": 12,
+      "slug": "Validation_Center",
+      "description": "Email health score, HTML/responsive/accessibility/link/image/platform checks and safe fixes.",
+      "png": "01_UI_UX_Designs/12_Validation_Center.png",
+      "prompt": "02_Claude_Code_Prompts/12_Validation_Center_Prompt.md"
+    },
+    {
+      "number": 13,
+      "slug": "Export_Deploy",
+      "description": "Validated export to generic HTML or platform-specific formats and deployment hand-off.",
+      "png": "01_UI_UX_Designs/13_Export_Deploy.png",
+      "prompt": "02_Claude_Code_Prompts/13_Export_Deploy_Prompt.md"
+    },
+    {
+      "number": 14,
+      "slug": "AI_Engineer_Voice",
+      "description": "Natural-language and voice AI engineer for generation, changes, optimization and guided fixes.",
+      "png": "01_UI_UX_Designs/14_AI_Engineer_Voice.png",
+      "prompt": "02_Claude_Code_Prompts/14_AI_Engineer_Voice_Prompt.md"
+    }
+  ]
+}

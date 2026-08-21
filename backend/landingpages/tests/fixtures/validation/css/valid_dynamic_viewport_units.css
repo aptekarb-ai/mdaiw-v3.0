@@ -1,0 +1,5 @@
+.full-screen {
+  height: 100dvh;
+  min-height: 100svh;
+  max-height: 100lvh;
+}

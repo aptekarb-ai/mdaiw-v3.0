@@ -1,0 +1,51 @@
+@import "./styles/tokens.css";
+@import "./components/buttons/Button.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-text-dark);
+  background: var(--color-background-light);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Defensive page-level guard: nothing in the app is meant to be wider
+     than the viewport, so a layout regression clips instead of adding a
+     horizontal scrollbar to the whole document. */
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--color-primary-blue);
+}
+
+button {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

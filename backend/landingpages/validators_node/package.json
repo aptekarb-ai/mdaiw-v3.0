@@ -1,0 +1,26 @@
+{
+  "name": "mdaiw-landingpages-validators",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Isolated, backend-local Node validation scripts for the MDAIW LP Validator. Never installed globally, never shared with frontend/node_modules. No lifecycle scripts — invoked only by landingpages/validation/node_bridge.py.",
+  "type": "module",
+  "dependencies": {
+    "@eslint/js": "10.0.1",
+    "@jridgewell/trace-mapping": "0.3.31",
+    "ampscript-parser": "^0.3.1",
+    "css-tree": "3.2.1",
+    "eslint": "10.8.0",
+    "eslint-plugin-sfmc": "^4.15.0",
+    "js-beautify": "^2.0.3",
+    "less": "4.8.1",
+    "postcss": "8.5.25",
+    "postcss-less": "^6.0.0",
+    "postcss-scss": "^4.0.9",
+    "prettier": "^3.9.6",
+    "prettier-plugin-sfmc": "^1.2.0",
+    "sass": "1.102.0",
+    "stylelint": "17.14.1",
+    "stylelint-config-standard": "40.0.0",
+    "vnu-jar": "26.8.6"
+  }
+}
