@@ -455,3 +455,120 @@ describe('EmailBuilderWorkspacePage', () => {
     expect(screen.queryByText('Start building your email')).not.toBeInTheDocument();
   });
 });
+
+describe('EmailBuilderWorkspacePage — Feature 05 Layout Builder', () => {
+  it('adding a layout module shows real column drop zones ("+ Add content"), not a placeholder message', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+
+    expect(screen.getAllByText('+ Add content')).toHaveLength(2);
+    expect(screen.queryByText(/Layout structure is fixed/)).not.toBeInTheDocument();
+  });
+
+  it('clicking a column then a library module inserts the module INTO that column, not at the top level', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+
+    const addContentButtons = screen.getAllByText('+ Add content');
+    await user.click(addContentButtons[0]);
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    // Only ONE column still shows the empty drop-zone hint — the module
+    // landed inside the other column, not as a new top-level module.
+    expect(screen.getAllByText('+ Add content')).toHaveLength(1);
+    expect(screen.getByText('Add your heading or paragraph text here.', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('selecting the layout (not a column) shows the Column Widths editor with a Balance Columns action', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    expect(screen.getByText('Total: 100%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Balance Columns' })).toBeInTheDocument();
+  });
+
+  it('editing a column width updates the total and persists on save', async () => {
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    const widthInputs = screen.getAllByRole('spinbutton');
+    const firstWidth = widthInputs.find((input) => (input as HTMLInputElement).value === '50')!;
+    await user.clear(firstWidth);
+    await user.type(firstWidth, '35');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', {
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({ props: expect.objectContaining({ columnWidths: [35, 50] }) }),
+        ]),
+      }),
+    }));
+  });
+
+  it('reloads a document whose layout modules already have nested content', async () => {
+    const document1 = baseDocument({
+      content: {
+        version: 1,
+        modules: [{
+          id: 'layout-1', type: 'layout-2col-40-60', order: 0,
+          props: { columnWidths: [40, 60] },
+          settings: createResponsiveSettings(),
+          columns: [
+            {
+              id: 'col-a',
+              modules: [{ id: 'nested-1', type: 'text', order: 0, props: { text: 'Nested hello' }, settings: createResponsiveSettings() }],
+              settings: { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' },
+            },
+            {
+              id: 'col-b', modules: [],
+              settings: { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' },
+            },
+          ],
+        }],
+      },
+    });
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    renderPage();
+
+    expect(await screen.findByText('Nested hello', { selector: 'p, span' })).toBeInTheDocument();
+    expect(screen.getByText('+ Add content')).toBeInTheDocument();
+  });
+
+  it('a pre-Feature-05 layout module (no columns key) loads without crashing and shows empty drop zones', async () => {
+    const document1 = baseDocument({
+      content: {
+        version: 1,
+        modules: [{
+          id: 'layout-1', type: 'layout-2col-50-50', order: 0,
+          props: { columnWidths: [50, 50] },
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating a pre-Feature-05 stored document with no `columns` key
+          settings: createResponsiveSettings() as any,
+        }],
+      },
+    });
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    renderPage();
+
+    expect(await screen.findAllByText('+ Add content')).toHaveLength(2);
+  });
+});

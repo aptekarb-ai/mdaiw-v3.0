@@ -1,22 +1,51 @@
 import { useState, type ReactNode } from 'react';
 import type {
-  ButtonModuleProps, CompositeModuleProps, EmailModule, EmailModuleSettings, HorizontalAlign,
-  ImageModuleProps, TextModuleProps,
+  ButtonModuleProps, ColumnContainerSettings, CompositeModuleProps, EmailColumn, EmailModule, EmailModuleSettings,
+  HorizontalAlign, ImageModuleProps, TextModuleProps,
 } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import { IMAGE_WIDTH_PX_BOUNDS, getPath, setPath, type BuilderViewMode } from './registryCore';
 import { PaddingControls } from './PaddingControls';
 import { OuterSpacingControls } from './OuterSpacingControls';
 import { ResponsiveDimensionField } from './DimensionControl';
+import {
+  ColumnEditor, ColumnGutterEditor, ColumnWidthsEditor, LayoutStructureOverview, MobileStackingSettings,
+} from './ColumnEditor';
 import './PropertiesPanel.css';
 
 type PropertiesTab = 'content' | 'style' | 'settings';
 
+// Feature 05 — resolved from useEmailBuilderState's `selectedColumn` (ids
+// only) by the workspace page into the actual EmailColumn + its index, so
+// this file never needs its own tree-lookup logic.
+export interface SelectedColumnContext {
+  layoutId: string;
+  column: EmailColumn;
+  columnIndex: number;
+}
+
 interface PropertiesPanelProps {
   module: EmailModule | null;
+  selectedColumn: SelectedColumnContext | null;
+  breadcrumb: string[];
+  // The owning layout's id for whatever selection produced `breadcrumb`
+  // (present whenever breadcrumb.length > 1) — lets the breadcrumb's
+  // first segment jump back to "layout selected, no column drilled in"
+  // regardless of whether the CURRENT selection is a column or a nested
+  // module several levels different from the layout itself.
+  breadcrumbLayoutId: string | null;
   viewport: BuilderViewMode;
   onUpdateProps: (id: string, patch: Record<string, unknown>) => void;
   onUpdateSettings: (id: string, patch: Partial<EmailModuleSettings>) => void;
+  onUpdateColumnWidths: (layoutId: string, widths: number[]) => void;
+  onUpdateColumnSettings: (layoutId: string, columnId: string, patch: Partial<ColumnContainerSettings>) => void;
+  onSelectColumn: (layoutId: string, columnId: string) => void;
+  // Feature 05 — lets the breadcrumb's first segment ("2 Columns 40/60")
+  // reselect just the layout (clearing any drilled-into column), since
+  // clicking a column on the canvas has no other way back up once a
+  // nested module or column is selected — every click there intentionally
+  // stopPropagation()s past the layout's own outer selection handler.
+  onSelectModule: (id: string) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }
@@ -44,9 +73,12 @@ function AlignField({ value, onChange }: { value: HorizontalAlign; onChange: (va
 }
 
 export function PropertiesPanel({
-  module, viewport, onUpdateProps, onUpdateSettings, collapsed, onToggleCollapsed,
+  module, selectedColumn, breadcrumb, breadcrumbLayoutId, viewport, onUpdateProps, onUpdateSettings,
+  onUpdateColumnWidths, onUpdateColumnSettings, onSelectColumn, onSelectModule, collapsed, onToggleCollapsed,
 }: PropertiesPanelProps) {
   const [tab, setTab] = useState<PropertiesTab>('content');
+  const isLayout = Boolean(module?.columns);
+  const showColumnEditor = Boolean(module && selectedColumn && selectedColumn.layoutId === module.id);
 
   if (collapsed) {
     return (
@@ -89,6 +121,16 @@ export function PropertiesPanel({
         </div>
       ) : (
         <>
+          {breadcrumb.length > 0 && (
+            <p className="properties-panel__breadcrumb" aria-live="polite">
+              {breadcrumb.length > 1 && breadcrumbLayoutId ? (
+                <button type="button" className="properties-panel__breadcrumb-link" onClick={() => onSelectModule(breadcrumbLayoutId)}>
+                  {breadcrumb[0]}
+                </button>
+              ) : breadcrumb[0]}
+              {breadcrumb.slice(1).map((segment) => ` › ${segment}`).join('')}
+            </p>
+          )}
           <div className="properties-panel__tabs" role="tablist" aria-label="Property tabs">
             {(['content', 'style', 'settings'] as const).map((tabKey) => (
               <button
@@ -116,7 +158,18 @@ export function PropertiesPanel({
             aria-labelledby={`properties-tab-${tab}`}
             className="properties-panel__body"
           >
-            {tab === 'settings' ? (
+            {showColumnEditor && selectedColumn ? (
+              <PropertySection title={`Column ${selectedColumn.columnIndex + 1}`}>
+                <ColumnEditor
+                  module={module}
+                  column={selectedColumn.column}
+                  columnIndex={selectedColumn.columnIndex}
+                  viewport={viewport}
+                  onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)}
+                  onChangeColumnSettings={(patch) => onUpdateColumnSettings(module.id, selectedColumn.column.id, patch)}
+                />
+              </PropertySection>
+            ) : tab === 'settings' ? (
               <>
                 <PropertySection title="Outer Spacer Columns">
                   <OuterSpacingControls
@@ -132,7 +185,21 @@ export function PropertiesPanel({
                     onChange={(patch) => onUpdateSettings(module.id, patch)}
                   />
                 </PropertySection>
+                {isLayout && (
+                  <PropertySection title="Responsive / Mobile Stacking">
+                    <MobileStackingSettings module={module} onChange={(patch) => onUpdateSettings(module.id, patch)} />
+                  </PropertySection>
+                )}
               </>
+            ) : isLayout ? (
+              tab === 'content' ? (
+                <LayoutStructureOverview module={module} onSelectColumn={(columnId) => onSelectColumn(module.id, columnId)} />
+              ) : (
+                <>
+                  <ColumnWidthsEditor module={module} onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)} />
+                  <ColumnGutterEditor settings={module.settings} viewport={viewport} onChange={(patch) => onUpdateSettings(module.id, patch)} />
+                </>
+              )
             ) : (
               <ModuleEditor module={module} tab={tab} viewport={viewport} onUpdateProps={onUpdateProps} />
             )}

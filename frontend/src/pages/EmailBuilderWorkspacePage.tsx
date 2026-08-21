@@ -8,9 +8,12 @@ import { useSavedModules } from '../emailbuilder/useSavedModules';
 import { BuilderToolbar, type SaveStatus } from '../emailbuilder/BuilderToolbar';
 import { ModulePanel } from '../emailbuilder/ModulePanel';
 import { EmailCanvas, type BuilderViewMode } from '../emailbuilder/EmailCanvas';
-import { PropertiesPanel } from '../emailbuilder/PropertiesPanel';
+import { PropertiesPanel, type SelectedColumnContext } from '../emailbuilder/PropertiesPanel';
 import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
+import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
+import type { EmailModuleType } from '../emailbuilder/edm';
+import type { SavedEmailModule } from '../emailbuilder/types';
 import type { ApiError } from '../types/auth';
 import './EmailBuilderWorkspacePage.css';
 
@@ -101,6 +104,87 @@ export function EmailBuilderWorkspacePage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [builder, handleSave]);
 
+  // Feature 05 — where the current selection actually lives in the tree
+  // (top-level module, or nested inside a layout's column). Drives the
+  // Properties-panel breadcrumb, nested-aware prop/setting update
+  // routing, and "insert into the active column" (instruction 12).
+  const selectionPath = builder.selectedModuleId
+    ? findModulePath(builder.modules, builder.selectedModuleId)
+    : null;
+  const selectedTopLevelModule = builder.selectedModule && !selectionPath?.layout ? builder.selectedModule : null;
+
+  const activeColumn = builder.selectedColumn
+    ?? (selectionPath?.layout && selectionPath?.column
+      ? { layoutId: selectionPath.layout.id, columnId: selectionPath.column.id }
+      : null);
+
+  const selectedColumnContext: SelectedColumnContext | null = (() => {
+    if (!builder.selectedColumn || !selectedTopLevelModule?.columns) return null;
+    const columnIndex = selectedTopLevelModule.columns.findIndex((c) => c.id === builder.selectedColumn!.columnId);
+    const column = selectedTopLevelModule.columns[columnIndex];
+    if (!column) return null;
+    return { layoutId: builder.selectedColumn.layoutId, column, columnIndex };
+  })();
+
+  const breadcrumb: string[] = (() => {
+    if (selectionPath?.layout && selectionPath?.column) {
+      const columnIndex = selectionPath.layout.columns?.findIndex((c) => c.id === selectionPath.column!.id) ?? -1;
+      return [
+        getModuleDefinition(selectionPath.layout.type).label,
+        `Column ${columnIndex + 1}`,
+        getModuleDefinition(selectionPath.module.type).label,
+      ];
+    }
+    if (selectedTopLevelModule?.columns && builder.selectedColumn) {
+      const columnIndex = selectedTopLevelModule.columns.findIndex((c) => c.id === builder.selectedColumn!.columnId);
+      return [getModuleDefinition(selectedTopLevelModule.type).label, `Column ${columnIndex + 1}`];
+    }
+    if (selectedTopLevelModule) {
+      return [getModuleDefinition(selectedTopLevelModule.type).label];
+    }
+    return [];
+  })();
+
+  const breadcrumbLayoutId = selectionPath?.layout?.id ?? (selectedTopLevelModule?.columns ? selectedTopLevelModule.id : null);
+
+  const handleUpdateProps = useCallback((id: string, patch: Record<string, unknown>) => {
+    const path = findModulePath(builder.modules, id);
+    if (path?.layout && path?.column) {
+      builder.updateNestedModuleProps(path.layout.id, path.column.id, id, patch);
+    } else {
+      builder.updateModuleProps(id, patch);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, [builder.modules]);
+
+  const handleUpdateSettings = useCallback((id: string, patch: Record<string, unknown>) => {
+    const path = findModulePath(builder.modules, id);
+    if (path?.layout && path?.column) {
+      builder.updateNestedModuleSettings(path.layout.id, path.column.id, id, patch);
+    } else {
+      builder.updateModuleSettings(id, patch);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [builder.modules]);
+
+  const handleAddModule = useCallback((type: EmailModuleType) => {
+    if (activeColumn && !isLayoutModuleType(type)) {
+      builder.insertNestedModule(activeColumn.layoutId, activeColumn.columnId, type);
+    } else {
+      builder.addModule(type);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeColumn]);
+
+  const handleAddSavedModule = useCallback((saved: SavedEmailModule) => {
+    if (activeColumn && !isLayoutModuleType(saved.module_type)) {
+      builder.insertNestedSavedModule(activeColumn.layoutId, activeColumn.columnId, saved);
+    } else {
+      builder.addSavedModule(saved);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeColumn]);
+
   const saveModuleTarget = saveModuleTargetId
     ? builder.modules.find((module) => module.id === saveModuleTargetId) ?? null
     : null;
@@ -170,9 +254,9 @@ export function EmailBuilderWorkspacePage() {
 
       <div className="email-builder-workspace__body">
         <ModulePanel
-          onAddModule={builder.addModule}
+          onAddModule={handleAddModule}
           savedModules={savedModulesState.savedModules}
-          onAddSavedModule={builder.addSavedModule}
+          onAddSavedModule={handleAddSavedModule}
           onDeleteSavedModule={savedModulesState.removeModule}
           collapsed={modulesPanelCollapsed}
           onToggleCollapsed={() => setModulesPanelCollapsed((current) => !current)}
@@ -191,12 +275,28 @@ export function EmailBuilderWorkspacePage() {
           onDropSavedModule={builder.insertSavedModuleAt}
           onSaveModule={setSaveModuleTargetId}
           onAddFirstModule={() => builder.addModule('text')}
+          activeColumn={activeColumn}
+          onSelectColumn={builder.selectColumn}
+          onSelectNestedModule={builder.selectModule}
+          onInsertNestedModule={builder.insertNestedModule}
+          onInsertNestedSavedModule={builder.insertNestedSavedModule}
+          onReorderNested={builder.reorderNestedModule}
+          onMoveNested={builder.moveNestedModule}
+          onDuplicateNested={builder.duplicateNestedModule}
+          onDeleteNested={builder.deleteNestedModule}
         />
         <PropertiesPanel
           module={builder.selectedModule}
+          selectedColumn={selectedColumnContext}
+          breadcrumb={breadcrumb}
+          breadcrumbLayoutId={breadcrumbLayoutId}
           viewport={viewMode}
-          onUpdateProps={builder.updateModuleProps}
-          onUpdateSettings={builder.updateModuleSettings}
+          onUpdateProps={handleUpdateProps}
+          onUpdateSettings={handleUpdateSettings}
+          onUpdateColumnWidths={builder.updateColumnWidths}
+          onUpdateColumnSettings={builder.updateColumnSettings}
+          onSelectColumn={builder.selectColumn}
+          onSelectModule={builder.selectModule}
           collapsed={propertiesPanelCollapsed}
           onToggleCollapsed={() => setPropertiesPanelCollapsed((current) => !current)}
         />

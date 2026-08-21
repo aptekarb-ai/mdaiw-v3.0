@@ -239,3 +239,95 @@ describe('renderEmailDocument', () => {
     expect(html).not.toContain('<script');
   });
 });
+
+describe('Feature 05 — nested layout rendering', () => {
+  const LAYOUT_TYPES = [
+    ['layout-1col', 1], ['layout-2col-40-60', 2], ['layout-3col', 3],
+    ['layout-4col', 4], ['layout-5col', 5], ['layout-6col', 6],
+  ] as const;
+
+  it.each(LAYOUT_TYPES)('%s renders %d column <td>s, table-first, with a nested Text module', (type, count) => {
+    const layout = createModule(type, 0);
+    const text = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    text.props = { ...text.props, text: 'Nested text content' };
+    layout.columns![0].modules.push(text as unknown as EmailModule);
+
+    const html = renderEmailBody(withModules([layout]));
+    const columnCells = html.match(/<td width="\d+(\.\d+)?%"/g) ?? [];
+    expect(columnCells).toHaveLength(count);
+    expect(html).toContain('Nested text content');
+    expect(html).toContain('<table');
+    expect(html).toContain('role="presentation"');
+    expect(html).not.toContain('<div class');
+    expect(html).not.toMatch(/margin\s*:/);
+    expect(html).not.toMatch(/display:\s*flex/);
+    expect(html).not.toMatch(/display:\s*grid/);
+  });
+
+  it('emits an empty-column &nbsp; cell (table-first, no placeholder markup) for a column with no nested modules', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toContain('&nbsp;');
+  });
+
+  it('renders a fixed-px gutter <td> between columns when columnGutter > 0', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toContain('<td width="20" style="width:20px; font-size:0; line-height:0;">&nbsp;</td>');
+  });
+
+  it('omits the gutter <td> entirely when columnGutter is 0 (or unset)', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).not.toContain('font-size:0; line-height:0;');
+    // Exactly 2 column <td>s, no third gutter cell.
+    expect((html.match(/<td width="\d+%"/g) ?? [])).toHaveLength(2);
+  });
+
+  it('does not add a gutter <td> after the LAST column, even with a gutter set', () => {
+    const layout = createModule('layout-3col', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 10, unit: 'px' } } };
+    const html = renderEmailBody(withModules([layout]));
+    const gutterCells = (html.match(/font-size:0; line-height:0;/g) ?? []).length;
+    // 3 columns -> 2 gutters (between 1-2 and 2-3), never 3.
+    expect(gutterCells).toBe(2);
+  });
+
+  it('nested modules use their own definition\'s table-first renderEmailHtml (no div-wrapping special case)', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    const button = createModule('button', 0) as unknown as EmailModule<ButtonModuleProps>;
+    button.props = { ...button.props, text: 'Click me', href: 'https://example.com' };
+    layout.columns![1].modules.push(button as unknown as EmailModule);
+
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toContain('Click me');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).not.toContain('<div class');
+  });
+
+  it('the whole layout module still gets outer-spacer wrapping like any other top-level module', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = {
+      ...layout.settings,
+      outerSpacing: { desktop: { left: { value: 20, unit: 'px' }, right: { value: 20, unit: 'px' } }, mobile: {} },
+    };
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toContain('width="20"');
+  });
+
+  it('a layout module with no columns key at all (unnormalized) still renders without throwing', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    delete layout.columns;
+    expect(() => renderEmailBody(withModules([layout]))).not.toThrow();
+  });
+
+  it('escapes nested module text content the same as a top-level module', () => {
+    const layout = createModule('layout-1col', 0);
+    const text = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    text.props = { ...text.props, text: '<script>alert(1)</script>' };
+    layout.columns![0].modules.push(text as unknown as EmailModule);
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).not.toContain('<script>alert(1)</script>');
+  });
+});

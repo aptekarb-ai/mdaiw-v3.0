@@ -42,6 +42,10 @@ export function useSavedModules(): UseSavedModules {
       module_type: module.type,
       props: module.props,
       settings: module.settings,
+      // Feature 05 — a layout module's nested columns/modules save as
+      // part of the reusable module (instruction 35); every other module
+      // type simply has no `columns` to include.
+      ...(module.columns ? { columns: module.columns } : {}),
     });
     setSavedModules((current) => [created, ...current]);
   }, []);

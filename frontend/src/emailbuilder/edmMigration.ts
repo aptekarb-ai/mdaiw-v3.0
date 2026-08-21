@@ -6,12 +6,14 @@
 // other part of the builder (registry factories, renderer, canvas) can
 // assume the current shape everywhere else.
 import type {
-  EmailDocumentContent, EmailModule, EmailModuleSettings, EmailModuleType, ModuleSpacingValues, OuterSpacing,
-  OuterSpacingSides,
+  ColumnContainerSettings, EmailColumn, EmailDocumentContent, EmailModule, EmailModuleSettings, EmailModuleType,
+  ModuleSpacingValues, OuterSpacing, OuterSpacingSides,
 } from './edm';
 import type { DimensionValue, ResponsiveDimension } from './dimensions';
 import { px } from './dimensions';
 import { createDefaultOuterSpacing } from './registryCore';
+import { createEmptyColumns, isLayoutModuleType } from './layoutModel';
+import { generateId } from './idGenerator';
 
 // Module types whose top-level props.width was a plain px number before
 // this architecture (now ResponsiveDimension).
@@ -87,8 +89,27 @@ function upgradeOuterSpacing(raw: unknown): OuterSpacing {
   return createDefaultOuterSpacing();
 }
 
+// Feature 05 — columnGutter is new; any pre-Feature-05 document simply
+// lacks the key, which upgradeWidth-style logic reads as "no gutter"
+// (0px, no gutter <td> emitted — see registryCore.ts's wrapWithOuterSpacing
+// docstring for the identical "0 emits nothing" convention). A present
+// value is passed through as-is (already the current ResponsiveDimension
+// shape — columnGutter didn't exist before this feature, so there is no
+// older shape to upgrade from).
+function normalizeColumnGutter(raw: unknown): ResponsiveDimension | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const value = raw as Record<string, unknown>;
+  if (!isDimensionValue(value.desktop)) return undefined;
+  const mobile = isDimensionValue(value.mobile) ? value.mobile : undefined;
+  return mobile ? { desktop: value.desktop, mobile } : { desktop: value.desktop };
+}
+
 function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const settings = (rawSettings ?? {}) as Record<string, unknown>;
+  const columnGutter = normalizeColumnGutter(settings.columnGutter);
+  const mobileColumnOrder = Array.isArray(settings.mobileColumnOrder)
+    ? (settings.mobileColumnOrder as number[])
+    : undefined;
 
   if ('desktop' in settings) {
     // Already the current shape — still backfill any field an even-older
@@ -105,6 +126,8 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
       outerSpacing: upgradeOuterSpacing(settings.outerSpacing),
       mobileOrder: settings.mobileOrder as EmailModuleSettings['mobileOrder'],
       mobileStack: typeof settings.mobileStack === 'boolean' ? settings.mobileStack : true,
+      ...(columnGutter ? { columnGutter } : {}),
+      ...(mobileColumnOrder ? { mobileColumnOrder } : {}),
     };
   }
 
@@ -120,14 +143,70 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
     outerSpacing: upgradeOuterSpacing(settings.outerSpacing),
     mobileOrder: settings.mobileOrder as EmailModuleSettings['mobileOrder'],
     mobileStack: true,
+    ...(columnGutter ? { columnGutter } : {}),
+    ...(mobileColumnOrder ? { mobileColumnOrder } : {}),
   };
 }
 
+function normalizeColumnSettings(raw: unknown): ColumnContainerSettings {
+  const settings = (raw ?? {}) as Record<string, unknown>;
+  const desktop = (settings.desktop ?? {}) as ModuleSpacingValues;
+  const verticalAlign = settings.verticalAlign;
+  return {
+    desktop: {
+      paddingTop: asPaddingNumber(desktop.paddingTop),
+      paddingRight: asPaddingNumber(desktop.paddingRight),
+      paddingBottom: asPaddingNumber(desktop.paddingBottom),
+      paddingLeft: asPaddingNumber(desktop.paddingLeft),
+    },
+    mobile: (settings.mobile as Partial<ModuleSpacingValues>) ?? {},
+    backgroundColor: typeof settings.backgroundColor === 'string' ? settings.backgroundColor : '',
+    verticalAlign: verticalAlign === 'middle' || verticalAlign === 'bottom' ? verticalAlign : 'top',
+  };
+}
+
+// Feature 05 — builds/backfills a layout module's nested columns[]. Three
+// cases: (1) not a layout type at all -> undefined, no columns key ever
+// added to non-layout modules; (2) a layout type with columns already
+// present (current shape, possibly from an older Feature-05 session) ->
+// pass each column through normalizeColumnSettings + recursively
+// normalize its nested modules (nesting is exactly one level, so this
+// recursion never goes deeper than that — see layoutModel.ts's
+// ModulePath docstring); (3) a layout type with NO columns yet (every
+// Feature 03/04 document ever saved) -> backward-compat per the brief:
+// "old: layout-2-40-60 becomes logically column1=40%, column2=60% with
+// empty modules arrays" — build fresh empty columns, one per
+// columnWidths entry, entirely at runtime, no destructive DB migration.
+function normalizeColumns(type: EmailModuleType, rawColumns: unknown, columnCount: number): EmailColumn[] | undefined {
+  if (!isLayoutModuleType(type)) return undefined;
+
+  if (Array.isArray(rawColumns) && rawColumns.length > 0) {
+    return rawColumns.map((raw) => {
+      const column = (raw ?? {}) as Record<string, unknown>;
+      const id = typeof column.id === 'string' && column.id.trim() ? column.id : generateId();
+      const nestedModules = Array.isArray(column.modules) ? (column.modules as EmailModule[]) : [];
+      return {
+        id,
+        settings: normalizeColumnSettings(column.settings),
+        modules: nestedModules.map(normalizeModule),
+      };
+    });
+  }
+
+  return createEmptyColumns(columnCount);
+}
+
 export function normalizeModule(module: EmailModule): EmailModule {
+  const props = normalizeProps(module.type, module.props as Record<string, unknown>);
+  const columnWidths = Array.isArray((props as { columnWidths?: unknown }).columnWidths)
+    ? (props as { columnWidths: number[] }).columnWidths
+    : [];
+  const columns = normalizeColumns(module.type, module.columns, columnWidths.length);
   return {
     ...module,
-    props: normalizeProps(module.type, module.props as Record<string, unknown>),
+    props,
     settings: normalizeSettings(module.settings),
+    ...(columns ? { columns } : {}),
   };
 }
 

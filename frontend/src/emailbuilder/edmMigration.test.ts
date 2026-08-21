@@ -121,6 +121,64 @@ describe('edmMigration — backward compatibility for pre-responsive drafts', ()
     expect((result.props as unknown as ImageModuleProps).width).toEqual({ desktop: { value: 100, unit: '%' } });
   });
 
+  it('Feature 05 — backfills empty columns for a legacy layout module with no columns key', () => {
+    const legacy: EmailModule = {
+      id: 'layout-1', type: 'layout-2col-40-60', order: 0,
+      props: { columnWidths: [40, 60] },
+      settings: createResponsiveSettings(),
+    };
+
+    const upgraded = normalizeModule(legacy);
+    expect(upgraded.columns).toHaveLength(2);
+    expect(upgraded.columns?.every((column) => column.modules.length === 0)).toBe(true);
+    expect(upgraded.columns?.[0].settings.verticalAlign).toBe('top');
+    // Every backfilled column gets a fresh, non-empty id.
+    const ids = upgraded.columns?.map((column) => column.id) ?? [];
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every((id) => id.trim().length > 0)).toBe(true);
+  });
+
+  it('Feature 05 — never adds a columns key to a non-layout module', () => {
+    const legacy: EmailModule = {
+      id: 'm1', type: 'text', order: 0, props: { text: 'a' }, settings: createResponsiveSettings(),
+    };
+    expect(normalizeModule(legacy).columns).toBeUndefined();
+  });
+
+  it('Feature 05 — leaves already-populated columns/nested modules unchanged (idempotent) and normalizes nested settings', () => {
+    const current: EmailModule = {
+      id: 'layout-1', type: 'layout-2col-50-50', order: 0,
+      props: { columnWidths: [50, 50] },
+      settings: createResponsiveSettings(),
+      columns: [
+        {
+          id: 'col-a',
+          settings: { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' },
+          modules: [
+            {
+              id: 'nested-1', type: 'text', order: 0, props: { text: 'hi' },
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating a pre-migration nested module settings shape
+              settings: { paddingTop: 4, paddingRight: 4, paddingBottom: 4, paddingLeft: 4 } as any,
+            },
+          ],
+        },
+        {
+          id: 'col-b',
+          settings: { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' },
+          modules: [],
+        },
+      ],
+    };
+
+    const upgraded = normalizeModule(current);
+    expect(upgraded.columns?.[0].id).toBe('col-a');
+    expect(upgraded.columns?.[1].id).toBe('col-b');
+    // Nested module settings recursively normalized to the current shape.
+    expect(upgraded.columns?.[0].modules[0].settings.desktop).toEqual({
+      paddingTop: 4, paddingRight: 4, paddingBottom: 4, paddingLeft: 4,
+    });
+  });
+
   it('normalizeContent maps every module in a document', () => {
     const content = {
       version: 1 as const,

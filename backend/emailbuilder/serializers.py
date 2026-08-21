@@ -54,8 +54,9 @@ class SavedEmailModuleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SavedEmailModule
-        fields = ['id', 'name', 'module_type', 'props', 'settings', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'module_type', 'props', 'settings', 'columns', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+        extra_kwargs = {'columns': {'required': False}}
 
     def validate_name(self, value):
         trimmed = value.strip()
@@ -67,8 +68,14 @@ class SavedEmailModuleSerializer(serializers.ModelSerializer):
         module_type = attrs.get('module_type', getattr(self.instance, 'module_type', None))
         props = attrs.get('props', getattr(self.instance, 'props', None))
         module_settings = attrs.get('settings', getattr(self.instance, 'settings', None))
+        # A saved module's columns default to [] (the model field default)
+        # rather than None — validate_module_instance treats an empty list
+        # the same as "no columns" for a non-layout module_type, and as
+        # "not yet backfilled" for a layout type (still valid; the
+        # frontend backfills empty columns on load, same as a full EDM).
+        columns = attrs.get('columns', getattr(self.instance, 'columns', None)) or None
         try:
-            validate_module_instance(module_type, props, module_settings, prefix='module')
+            validate_module_instance(module_type, props, module_settings, columns=columns, prefix='module')
         except EdmValidationError as error:
             raise serializers.ValidationError({'module_type': [str(error)]}) from error
         return attrs

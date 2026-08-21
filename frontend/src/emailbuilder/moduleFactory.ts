@@ -1,39 +1,37 @@
 import type { EmailModule, EmailModuleType } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import { normalizeModule } from './edmMigration';
+import { generateId } from './idGenerator';
+import { cloneColumnsWithNewIds } from './layoutModel';
 import type { SavedEmailModule } from './types';
 
-let counter = 0;
-
-// Stable, unique-enough ids without pulling in a uuid dependency —
-// crypto.randomUUID() where available (all modern browsers, and jsdom in
-// recent Node), a monotonic counter fallback otherwise.
-export function generateModuleId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  counter += 1;
-  return `module-${Date.now()}-${counter}`;
-}
+export { generateId as generateModuleId } from './idGenerator';
 
 export function createModule(type: EmailModuleType, order: number): EmailModule {
   const definition = getModuleDefinition(type);
+  const columns = definition.createDefaultColumns?.();
   return {
-    id: generateModuleId(),
+    id: generateId(),
     type,
     order,
     props: definition.createDefaultProps(),
     settings: definition.createDefaultSettings(),
+    ...(columns ? { columns } : {}),
   };
 }
 
+// Deep-clones a module for duplication — instruction 36: "Duplicating a
+// layout must deep-clone: layout ID, column IDs, all nested module IDs.
+// Every cloned identifier must be fresh." A module with no columns (the
+// overwhelming majority) clones exactly as before Feature 05.
 export function cloneModuleWithNewId(module: EmailModule, order: number): EmailModule {
   return {
     ...module,
-    id: generateModuleId(),
+    id: generateId(),
     order,
     props: { ...module.props },
     settings: { ...module.settings },
+    ...(module.columns ? { columns: cloneColumnsWithNewIds(module.columns, cloneModuleWithNewId) } : {}),
   };
 }
 
@@ -43,6 +41,9 @@ export function cloneModuleWithNewId(module: EmailModule, order: number): EmailM
 // insertions of the same saved module never collide. Normalized on the
 // way in too — a module saved before the Desktop/Mobile + outer-spacing
 // architecture must upgrade cleanly, same as loading an old document.
+// Feature 05 — a saved Layout module's columns/nested modules deep-clone
+// with entirely fresh column + nested-module ids (instruction 35: "Do NOT
+// share child IDs between instances"), exactly like duplicating a layout.
 export function createModuleFromSaved(saved: SavedEmailModule, order: number): EmailModule {
   const normalized = normalizeModule({
     id: '',
@@ -50,6 +51,12 @@ export function createModuleFromSaved(saved: SavedEmailModule, order: number): E
     order,
     props: { ...saved.props },
     settings: { ...saved.settings },
+    columns: saved.columns,
   });
-  return { ...normalized, id: generateModuleId(), order };
+  return {
+    ...normalized,
+    id: generateId(),
+    order,
+    ...(normalized.columns ? { columns: cloneColumnsWithNewIds(normalized.columns, cloneModuleWithNewId) } : {}),
+  };
 }

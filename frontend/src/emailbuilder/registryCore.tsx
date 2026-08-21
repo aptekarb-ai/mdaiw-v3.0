@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import type {
-  EmailModule, EmailModuleSettings, EmailModuleType, HorizontalAlign, ModuleCategory,
+  EmailColumn, EmailModule, EmailModuleSettings, EmailModuleType, HorizontalAlign, ModuleCategory,
   ModuleSpacingValues, OuterSpacing, OuterSpacingSides,
 } from './edm';
 import { DEFAULT_SPACING, ZERO_SPACING } from './edm';
@@ -66,12 +66,43 @@ export interface ModuleDefinition<Props = Record<string, unknown>> {
   editableFields?: SchemaField[];
   createDefaultProps: () => Props;
   createDefaultSettings: () => EmailModuleSettings;
+  // Layout-family definitions only (Feature 05) — one EmailColumn per
+  // createDefaultProps().columnWidths entry. Absent for every other
+  // module type; moduleFactory.ts only calls this when present.
+  createDefaultColumns?: () => EmailColumn[];
   renderPreview: (module: EmailModule<Props>, viewport?: BuilderViewMode) => ReactNode;
   renderEmailHtml: (module: EmailModule<Props>) => string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the registry is intentionally heterogeneous (each entry has its own Props shape); callers narrow via getModuleDefinition() + a type-specific cast where they need one.
 export type AnyModuleDefinition = ModuleDefinition<any>;
+
+// --- Nested-module render resolver (Feature 05) --------------------------
+// catalog/layoutCatalog.tsx's renderEmailHtml needs to render each nested
+// column module using ITS OWN definition's renderEmailHtml — the exact
+// same table-first contract every top-level module already uses (no
+// div-wrapping special case for nested content). It cannot import
+// moduleRegistry.tsx directly to look that up: moduleRegistry.tsx imports
+// every catalog/*.tsx file (including layoutCatalog.tsx), so the reverse
+// import would be circular.
+//
+// Dependency injection breaks the cycle: moduleRegistry.tsx registers its
+// own getModuleDefinition as the resolver once, at its own module-eval
+// time (see moduleRegistry.tsx's bottom). By the time any renderEmailHtml
+// actually RUNS (a later event, never during module evaluation), the
+// resolver is always already registered — catalog files never call this
+// during their own top-level evaluation, only inside functions.
+type ModuleDefinitionResolver = (type: EmailModuleType) => AnyModuleDefinition | undefined;
+
+let moduleDefinitionResolver: ModuleDefinitionResolver = () => undefined;
+
+export function registerModuleDefinitionResolver(resolver: ModuleDefinitionResolver): void {
+  moduleDefinitionResolver = resolver;
+}
+
+export function resolveModuleDefinition(type: EmailModuleType): AnyModuleDefinition | undefined {
+  return moduleDefinitionResolver(type);
+}
 
 // All Feature-04 built-in modules are Generic-compatible first (rule #22
 // in the feature brief) — platform-specific scripting is a later

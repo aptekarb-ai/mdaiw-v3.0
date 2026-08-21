@@ -1,4 +1,4 @@
-import type { EmailDocumentContent, EmailModuleSettings, EmailModuleType } from './edm';
+import type { EmailColumn, EmailDocumentContent, EmailModuleSettings, EmailModuleType } from './edm';
 
 export type EmailPlatform = 'generic' | 'sfmc' | 'marketo' | 'hubspot' | 'pardot' | 'other';
 
@@ -42,6 +42,10 @@ export interface SavedEmailModule {
   module_type: EmailModuleType;
   props: Record<string, unknown>;
   settings: EmailModuleSettings;
+  // Feature 05 — present only when the saved module is a layout with
+  // nested column content; absent (undefined) for every other saved
+  // module, same convention as EmailModule.columns.
+  columns?: EmailColumn[];
   created_at: string;
   updated_at: string;
 }
@@ -51,6 +55,7 @@ export interface CreateSavedModuleInput {
   module_type: EmailModuleType;
   props: Record<string, unknown>;
   settings: EmailModuleSettings;
+  columns?: EmailColumn[];
 }
 
 export interface RecentEmailSummary {

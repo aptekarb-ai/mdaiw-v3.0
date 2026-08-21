@@ -1,6 +1,11 @@
 import type { EmailModuleType, LayoutModuleProps } from '../edm';
-import { ZERO_SPACING } from '../edm';
-import { GENERIC_ONLY, createResponsiveSettings, moduleTable, type ModuleDefinition } from '../registryCore';
+import { ZERO_SPACING, resolveColumnGutter, resolveSpacing } from '../edm';
+import { widthCssValue } from '../dimensions';
+import {
+  GENERIC_ONLY, createResponsiveSettings, moduleTable, paddingStyle, resolveModuleDefinition,
+  type ModuleDefinition,
+} from '../registryCore';
+import { createEmptyColumns } from '../layoutModel';
 
 function layoutDefinition(
   type: EmailModuleType, label: string, columnWidths: number[], tags: string[],
@@ -19,29 +24,56 @@ function layoutDefinition(
     propertyEditor: 'basic',
     createDefaultProps: () => ({ columnWidths }),
     createDefaultSettings: () => createResponsiveSettings(ZERO_SPACING, { mobileStack: true }),
-    // Mobile view + mobileStack (the email-safe default) previews columns
-    // stacked full-width, matching the exported HTML's mobile behaviour
-    // intent — the same architecture composite modules use below.
-    renderPreview: (module, viewport = 'desktop') => {
-      const stacked = viewport === 'mobile' && module.settings.mobileStack !== false;
-      return (
-        <div className={stacked ? 'email-canvas__layout-columns email-canvas__layout-columns--stacked' : 'email-canvas__layout-columns'}>
-          {module.props.columnWidths.map((width, index) => (
-            <div
-              key={`${module.id}-col-${index}`}
-              className="email-canvas__layout-column"
-              style={stacked ? undefined : { flex: `0 0 ${width}%` }}
-            >
-              + Add content
-            </div>
-          ))}
-        </div>
-      );
-    },
+    createDefaultColumns: () => createEmptyColumns(columnWidths.length),
+    // The canvas renders an interactive column/drop-zone UI for layout
+    // modules directly (see LayoutCanvasModule.tsx) instead of calling
+    // this — EmailCanvas.tsx branches on `module.columns` before ever
+    // reaching definition.renderPreview for a layout type. This stays
+    // here only as the Module Library card's small structural preview
+    // (see ModulePanel.tsx's ModuleCardPreview), which never needs
+    // interactivity — just the column ratio bars.
+    renderPreview: (module) => (
+      <span className="module-panel__layout-preview" aria-hidden="true">
+        {module.props.columnWidths.map((width, index) => (
+          <span key={`${module.id}-col-${index}`} className="module-panel__layout-bar" style={{ flexGrow: width }} />
+        ))}
+      </span>
+    ),
+    // Table-first nested layout — see docs/module-4 Feature-05 brief
+    // section 26-28. One inner presentation table; each column is its own
+    // <td width="N%" valign="...">, with a FIXED-px spacer <td> between
+    // adjacent columns only when the gutter is > 0 (0 emits nothing, same
+    // convention as wrapWithOuterSpacing's outer spacer cells). Nested
+    // modules render through their OWN definition's renderEmailHtml via
+    // resolveModuleDefinition — the exact same table-first contract every
+    // top-level module already uses; no div-wrapping special case.
     renderEmailHtml: (module) => {
-      const cells = module.props.columnWidths
-        .map((width) => `<td width="${width}%" style="width:${width}%; vertical-align:top;">&nbsp;</td>`)
-        .join('');
+      const columns = module.columns ?? createEmptyColumns(module.props.columnWidths.length);
+      const gutterDimension = resolveColumnGutter(module.settings, 'desktop');
+      const gutterPx = gutterDimension.unit === 'px' ? Math.round(gutterDimension.value) : 0;
+
+      const cells = columns.map((column, index) => {
+        const width = module.props.columnWidths[index] ?? 0;
+        const spacing = resolveSpacing(column.settings, 'desktop');
+        const valign = column.settings.verticalAlign;
+        const background = column.settings.backgroundColor ? `background-color:${column.settings.backgroundColor};` : '';
+        const innerHtml = column.modules.length === 0
+          ? '&nbsp;'
+          : column.modules
+            .map((nested) => resolveModuleDefinition(nested.type)?.renderEmailHtml(nested) ?? '')
+            .join('');
+        const columnCell = (
+          `<td width="${width}%" valign="${valign}" `
+          + `style="width:${width}%; vertical-align:${valign}; ${background}${paddingStyle(spacing)}">`
+          + `${innerHtml}</td>`
+        );
+        const isLast = index === columns.length - 1;
+        const gutterCell = !isLast && gutterPx > 0
+          ? `<td width="${gutterPx}" style="width:${widthCssValue({ value: gutterPx, unit: 'px' })}; font-size:0; line-height:0;">&nbsp;</td>`
+          : '';
+        return columnCell + gutterCell;
+      }).join('');
+
       return moduleTable(`<tr>${cells}</tr>`);
     },
   };

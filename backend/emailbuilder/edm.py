@@ -70,6 +70,33 @@ PADDING_KEYS = ('paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft')
 MAX_PADDING = 200
 CURRENT_VERSION = 1
 
+# Feature 05 — Layout Builder. Column count is inherent in the layout
+# module TYPE (mirrors frontend/src/emailbuilder/layoutModel.ts's
+# LAYOUT_COLUMN_COUNTS exactly — duplicated here as a small static map,
+# not imported, since this is a separate Python codebase).
+LAYOUT_COLUMN_COUNTS = {
+    'layout-1col': 1,
+    'layout-2col-50-50': 2,
+    'layout-2col-40-60': 2,
+    'layout-2col-60-40': 2,
+    'layout-2col-30-70': 2,
+    'layout-2col-70-30': 2,
+    'layout-3col': 3,
+    'layout-4col': 4,
+    'layout-5col': 5,
+    'layout-6col': 6,
+}
+LAYOUT_MODULE_TYPES = frozenset(LAYOUT_COLUMN_COUNTS.keys())
+
+# Same floor as layoutModel.ts's MIN_COLUMN_WIDTH_PERCENT — below this a
+# column is rejected outright, not just warned about (see that file's
+# docstring for why: an unusably thin column is never a legitimate
+# design intent).
+MIN_COLUMN_WIDTH_PERCENT = 10
+COLUMN_WIDTH_TOTAL_TOLERANCE = 0.05
+MAX_COLUMN_GUTTER_PX = 100
+COLUMN_VALIGN_VALUES = ('top', 'middle', 'bottom')
+
 
 class EdmValidationError(ValueError):
     pass
@@ -110,23 +137,40 @@ def _validate_module(module, index, seen_ids):
     if not isinstance(order, int) or isinstance(order, bool):
         raise EdmValidationError(f'{prefix}.order must be an integer.')
 
-    validate_module_instance(module.get('type'), module.get('props'), module.get('settings'), prefix)
+    validate_module_instance(
+        module.get('type'), module.get('props'), module.get('settings'),
+        columns=module.get('columns'), prefix=prefix, seen_ids=seen_ids,
+    )
 
 
-def validate_module_instance(module_type, props, settings, prefix='module'):
-    """Validate the (type, props, settings) triple shared by every EDM
-    module instance — used both by a full EDM's per-module validation
-    above and, unchanged, by SavedEmailModule (Feature 04's Saved
-    Modules), which stores that exact same triple outside of any
-    document. `id`/`order` are EDM-tree-position concepts and are
-    intentionally validated separately, not here."""
+def validate_module_instance(module_type, props, settings, columns=None, prefix='module', seen_ids=None):
+    """Validate the (type, props, settings, columns) tuple shared by every
+    EDM module instance — used both by a full EDM's per-module validation
+    above and by SavedEmailModule (Feature 04's Saved Modules / Feature
+    05's nested-layout Saved Modules), which stores that exact same tuple
+    outside of any document. `id`/`order` are EDM-tree-position concepts
+    and are intentionally validated separately, not here.
+
+    `columns` (Feature 05) is only meaningful for a layout-type module and
+    is optional even then — an older/raw payload may omit it entirely;
+    the frontend backfills empty columns at load time (see
+    edmMigration.ts), so the backend never forces a document to already
+    have it. `seen_ids` collects nested module ids into the SAME set as
+    top-level module ids when validating a full document (so ids stay
+    unique across the whole tree — instruction 34); a saved module passed
+    with no `seen_ids` gets its own fresh set (ids unique within just that
+    one saved module's tree)."""
     if module_type not in ALLOWED_MODULE_TYPES:
         raise EdmValidationError(f'{prefix}.type "{module_type}" is not a recognized module type.')
 
     if not isinstance(props, dict):
         raise EdmValidationError(f'{prefix}.props must be an object.')
 
-    _validate_settings(f'{prefix}.settings', settings)
+    if module_type in LAYOUT_MODULE_TYPES:
+        _validate_column_widths(f'{prefix}.props.columnWidths', props.get('columnWidths'), module_type)
+
+    _validate_settings(f'{prefix}.settings', settings, columns)
+    _validate_columns(f'{prefix}.columns', columns, module_type, seen_ids if seen_ids is not None else set())
 
 
 def _validate_padding_keys(prefix, spacing, required):
@@ -219,9 +263,14 @@ def _validate_outer_spacing(prefix, outer_spacing):
     _validate_outer_spacing_percent_sum(prefix, outer_spacing)
 
 
-def _validate_settings(prefix, settings):
+def _validate_settings(prefix, settings, columns=None):
     if not isinstance(settings, dict):
         raise EdmValidationError(f'{prefix} must be an object.')
+
+    # Feature 05 — independent of the desktop/mobile-vs-legacy-flat branch
+    # below; both shapes may carry these two new, optional keys.
+    _validate_column_gutter(f'{prefix}.columnGutter', settings.get('columnGutter'))
+    _validate_mobile_column_order(f'{prefix}.mobileColumnOrder', settings.get('mobileColumnOrder'), columns)
 
     if 'desktop' in settings or 'mobile' in settings or 'outerSpacing' in settings:
         # Current (Desktop/Mobile + outer-spacing) shape.
@@ -236,3 +285,160 @@ def _validate_settings(prefix, settings):
     # without a forced migration; the frontend upgrades this shape to the
     # current one on load (edmMigration.ts), never the backend.
     _validate_padding_keys(prefix, settings, required=False)
+
+
+def _validate_gutter_dimension(prefix, dimension):
+    if not isinstance(dimension, dict):
+        raise EdmValidationError(f'{prefix} must be an object.')
+    if dimension.get('unit') != 'px':
+        raise EdmValidationError(f'{prefix}.unit must be "px".')
+    value = dimension.get('value')
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise EdmValidationError(f'{prefix}.value must be a number.')
+    if value != value or value in (float('inf'), float('-inf')):  # NaN/Infinity
+        raise EdmValidationError(f'{prefix}.value must be a finite number.')
+    if value < 0 or value > MAX_COLUMN_GUTTER_PX:
+        raise EdmValidationError(f'{prefix}.value must be between 0 and {MAX_COLUMN_GUTTER_PX} pixels.')
+
+
+def _validate_column_gutter(prefix, gutter):
+    # Optional — absent on every non-layout module, and on layout modules
+    # saved before Feature 05 (0px/no-gutter is the frontend's own
+    # fallback — see edm.ts's resolveColumnGutter).
+    if gutter is None:
+        return
+    if not isinstance(gutter, dict):
+        raise EdmValidationError(f'{prefix} must be an object.')
+    if 'desktop' not in gutter:
+        raise EdmValidationError(f'{prefix}.desktop is required.')
+    _validate_gutter_dimension(f'{prefix}.desktop', gutter['desktop'])
+    if gutter.get('mobile') is not None:
+        _validate_gutter_dimension(f'{prefix}.mobile', gutter['mobile'])
+
+
+def _validate_mobile_column_order(prefix, order, columns):
+    if order is None:
+        return
+    if not isinstance(order, list):
+        raise EdmValidationError(f'{prefix} must be a list.')
+    if isinstance(columns, list) and len(order) != len(columns):
+        raise EdmValidationError(f'{prefix} must list every column index exactly once.')
+    if sorted(order) != list(range(len(order))):
+        raise EdmValidationError(f'{prefix} must be a permutation of column indexes starting at 0.')
+
+
+def _validate_column_settings(prefix, settings):
+    if not isinstance(settings, dict):
+        raise EdmValidationError(f'{prefix} must be an object.')
+    _validate_padding_keys(f'{prefix}.desktop', settings.get('desktop', {}), required=True)
+    if 'mobile' in settings:
+        _validate_padding_keys(f'{prefix}.mobile', settings.get('mobile', {}), required=False)
+    background = settings.get('backgroundColor', '')
+    if not isinstance(background, str):
+        raise EdmValidationError(f'{prefix}.backgroundColor must be a string.')
+    valign = settings.get('verticalAlign', 'top')
+    if valign not in COLUMN_VALIGN_VALUES:
+        raise EdmValidationError(f'{prefix}.verticalAlign must be one of {COLUMN_VALIGN_VALUES}.')
+
+
+def _validate_columns(prefix, columns, module_type, seen_ids):
+    """Feature 05 — validates a layout module's nested columns[]. Nesting
+    is deliberately capped at exactly one level: a nested module may never
+    itself be a layout type or carry its own `columns` key (instruction
+    33: "avoid unsafe arbitrary-depth recursion") — enforced below rather
+    than by recursing into this function again."""
+    if columns is None:
+        return  # optional — see validate_module_instance's docstring.
+    if not isinstance(columns, list):
+        raise EdmValidationError(f'{prefix} must be a list.')
+    if len(columns) == 0:
+        return  # not-yet-backfilled — same tolerance as `columns is None`.
+
+    expected_count = LAYOUT_COLUMN_COUNTS.get(module_type)
+    if expected_count is None:
+        raise EdmValidationError(f'{prefix} is only allowed on layout modules.')
+    if len(columns) != expected_count:
+        raise EdmValidationError(f'{prefix} must have exactly {expected_count} column(s) for "{module_type}".')
+
+    column_ids = set()
+    for col_index, column in enumerate(columns):
+        col_prefix = f'{prefix}[{col_index}]'
+        if not isinstance(column, dict):
+            raise EdmValidationError(f'{col_prefix} must be an object.')
+
+        column_id = column.get('id')
+        if not isinstance(column_id, str) or not column_id.strip():
+            raise EdmValidationError(f'{col_prefix}.id must be a non-empty string.')
+        if column_id in column_ids:
+            raise EdmValidationError(f'{col_prefix}.id "{column_id}" is duplicated.')
+        column_ids.add(column_id)
+
+        _validate_column_settings(f'{col_prefix}.settings', column.get('settings', {}))
+
+        nested_modules = column.get('modules')
+        if not isinstance(nested_modules, list):
+            raise EdmValidationError(f'{col_prefix}.modules must be a list.')
+        for nested_index, nested in enumerate(nested_modules):
+            nested_prefix = f'{col_prefix}.modules[{nested_index}]'
+            if not isinstance(nested, dict):
+                raise EdmValidationError(f'{nested_prefix} must be an object.')
+
+            nested_id = nested.get('id')
+            if not isinstance(nested_id, str) or not nested_id.strip():
+                raise EdmValidationError(f'{nested_prefix}.id must be a non-empty string.')
+            if nested_id in seen_ids:
+                raise EdmValidationError(f'{nested_prefix}.id "{nested_id}" is duplicated.')
+            seen_ids.add(nested_id)
+
+            nested_order = nested.get('order')
+            if not isinstance(nested_order, int) or isinstance(nested_order, bool):
+                raise EdmValidationError(f'{nested_prefix}.order must be an integer.')
+
+            nested_type = nested.get('type')
+            if nested_type in LAYOUT_MODULE_TYPES:
+                raise EdmValidationError(f'{nested_prefix}.type — a layout cannot be nested inside a layout column.')
+            if nested.get('columns') is not None:
+                raise EdmValidationError(f'{nested_prefix}.columns is not allowed — nesting is limited to one level.')
+
+            validate_module_instance(
+                nested_type, nested.get('props'), nested.get('settings'),
+                columns=None, prefix=nested_prefix, seen_ids=seen_ids,
+            )
+
+    # Column WIDTH itself lives on the parent layout module's own
+    # props.columnWidths[index] (see layoutModel.ts's EmailColumn
+    # docstring for why it isn't duplicated onto the column object) —
+    # validated by _validate_column_widths (called from
+    # validate_module_instance, which has access to `props`). This
+    # function only validates the column CONTAINER: id/settings/nested
+    # modules.
+
+
+def _validate_column_widths(prefix, column_widths, module_type):
+    """Feature 05 — validates a layout module's props.columnWidths[] —
+    the single source of truth for column width (see _validate_columns'
+    docstring). Required whenever module_type is a layout type; a
+    mismatched length against the type's expected column count, a
+    below-minimum width, or a total that doesn't sum to 100% (within
+    floating-point tolerance) are all rejected outright — instruction 5:
+    "do not allow invalid persistence... if the layout would be
+    structurally invalid." """
+    expected_count = LAYOUT_COLUMN_COUNTS.get(module_type)
+    if expected_count is None:
+        return
+    if not isinstance(column_widths, list) or len(column_widths) != expected_count:
+        raise EdmValidationError(f'{prefix} must be a list of {expected_count} number(s) for "{module_type}".')
+
+    total = 0.0
+    for index, width in enumerate(column_widths):
+        item_prefix = f'{prefix}[{index}]'
+        if not isinstance(width, (int, float)) or isinstance(width, bool):
+            raise EdmValidationError(f'{item_prefix} must be a number.')
+        if width != width or width in (float('inf'), float('-inf')):
+            raise EdmValidationError(f'{item_prefix} must be a finite number.')
+        if width < MIN_COLUMN_WIDTH_PERCENT or width > 100:
+            raise EdmValidationError(f'{item_prefix} must be between {MIN_COLUMN_WIDTH_PERCENT} and 100 percent.')
+        total += width
+
+    if abs(total - 100) > COLUMN_WIDTH_TOTAL_TOLERANCE:
+        raise EdmValidationError(f'{prefix} must total 100 percent (got {round(total, 2)}).')

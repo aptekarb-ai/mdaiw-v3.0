@@ -121,10 +121,51 @@ export interface EmailModuleSettings {
   // on mobile (the email-safe default). Feature 07 may expose a control
   // to turn this off for advanced side-by-side-on-mobile layouts.
   mobileStack?: boolean;
+  // Layout modules only (Feature 05) — the fixed-px gap between adjacent
+  // columns, rendered as a real spacer <td> (never CSS margin/gap) — see
+  // registryCore.ts's wrapWithOuterSpacing docstring for why outer
+  // spacing uses the identical spacer-<td> technique. px-only (no %) —
+  // see docs/module-4 Feature-05 brief section 8. Desktop is the static-
+  // HTML-export source of truth, same convention as outerSpacing/padding;
+  // `mobile` is an explicit override only, absent = inherits desktop.
+  columnGutter?: ResponsiveDimension;
+  // Layout modules only (Feature 05) — the order columns are shown in
+  // when mobileStack is on, as an array of desktop column indexes (e.g.
+  // [1, 0] shows desktop column 2 first). Canvas-preview + data-model
+  // only for this feature, same as mobileStack itself — not yet emitted
+  // as @media CSS in the static export (Feature 07 scope). Absent/undefined
+  // means "desktop order" (identity).
+  mobileColumnOrder?: number[];
 }
 
-export function resolveSpacing(
-  settings: EmailModuleSettings, viewport: 'desktop' | 'mobile',
+// --- Feature 05 — Layout Builder: nested column content -----------------
+// A layout module's per-column container. Column WIDTH is intentionally
+// NOT duplicated here — it lives in the layout module's own
+// LayoutModuleProps.columnWidths[index] (the existing Feature 03/04
+// field), so there is exactly one source of truth for widths whether or
+// not nested content exists yet. This column only owns what's genuinely
+// per-column: its nested module tree and its own container settings.
+export type ColumnVerticalAlign = 'top' | 'middle' | 'bottom';
+
+export interface ColumnContainerSettings {
+  desktop: ModuleSpacingValues;
+  mobile: Partial<ModuleSpacingValues>;
+  backgroundColor: string;
+  verticalAlign: ColumnVerticalAlign;
+}
+
+export interface EmailColumn {
+  id: string;
+  modules: EmailModule[];
+  settings: ColumnContainerSettings;
+}
+
+// Generic over any {desktop, mobile} padding-shaped settings object — both
+// EmailModuleSettings (module-level padding) and ColumnContainerSettings
+// (Feature 05 — per-column padding) satisfy this shape, so column padding
+// reuses the exact same resolver instead of a second copy of the logic.
+export function resolveSpacing<T extends { desktop: ModuleSpacingValues; mobile: Partial<ModuleSpacingValues> }>(
+  settings: T, viewport: 'desktop' | 'mobile',
 ): ModuleSpacingValues {
   if (viewport === 'desktop') return settings.desktop;
   return { ...settings.desktop, ...settings.mobile };
@@ -153,12 +194,34 @@ export function isMobileOuterSpacingOverridden(settings: EmailModuleSettings, si
   return side in settings.outerSpacing.mobile;
 }
 
+const ZERO_GUTTER: DimensionValue = { value: 0, unit: 'px' };
+
+// Layout modules only — resolves settings.columnGutter for the given
+// viewport, defaulting to 0px (no gutter) when the module has none set at
+// all (e.g. a non-layout module, or an older document normalized before
+// Feature 05). Desktop is the static-HTML-export source of truth, same
+// convention as resolveOuterSpacing/resolveSpacing above.
+export function resolveColumnGutter(
+  settings: EmailModuleSettings, viewport: 'desktop' | 'mobile',
+): DimensionValue {
+  const gutter = settings.columnGutter;
+  if (!gutter) return ZERO_GUTTER;
+  if (viewport === 'mobile' && gutter.mobile) return gutter.mobile;
+  return gutter.desktop;
+}
+
 export interface EmailModule<Props = Record<string, unknown>> {
   id: string;
   type: EmailModuleType;
   order: number;
   props: Props;
   settings: EmailModuleSettings;
+  // Feature 05 — present only on layout-family modules; one EmailColumn
+  // per LayoutModuleProps.columnWidths entry (same length, same index
+  // order). Undefined for every other module type, and undefined on any
+  // module already nested inside a column (nesting is one level deep —
+  // layouts cannot contain layouts, see layoutModel.ts's LAYOUT_TYPES).
+  columns?: EmailColumn[];
 }
 
 export interface EmailDocumentContent {

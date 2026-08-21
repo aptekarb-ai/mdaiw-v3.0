@@ -3,9 +3,10 @@ import type { EmailModule, EmailModuleType } from './edm';
 import { resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import type { BuilderViewMode } from './registryCore';
-import { NEW_MODULE_DRAG_MIME, REORDER_DRAG_MIME, SAVED_MODULE_DRAG_MIME } from './dragTypes';
+import { NEW_MODULE_DRAG_MIME, REORDER_DRAG_MIME, SAVED_MODULE_DRAG_MIME, type NestedModuleDragPayload } from './dragTypes';
 import type { DimensionValue } from './dimensions';
 import type { SavedEmailModule } from './types';
+import { LayoutCanvasModule } from './LayoutCanvasModule';
 import './EmailCanvas.css';
 
 // Builder-canvas-only approximation of an outer-spacing dimension as a
@@ -34,6 +35,20 @@ interface EmailCanvasProps {
   onDropSavedModule: (saved: SavedEmailModule, index: number) => void;
   onSaveModule: (id: string) => void;
   onAddFirstModule: () => void;
+  // Feature 05 — nested column interaction, only relevant for modules
+  // with a `columns` array (see LayoutCanvasModule.tsx). `activeColumn`
+  // drives both the active-column highlight and instruction 12's "click
+  // a library module to insert into the selected column" routing (owned
+  // by the workspace page, not this component).
+  activeColumn: { layoutId: string; columnId: string } | null;
+  onSelectColumn: (layoutId: string, columnId: string) => void;
+  onSelectNestedModule: (moduleId: string) => void;
+  onInsertNestedModule: (layoutId: string, columnId: string, type: EmailModuleType, index?: number) => void;
+  onInsertNestedSavedModule: (layoutId: string, columnId: string, saved: SavedEmailModule, index?: number) => void;
+  onReorderNested: (layoutId: string, columnId: string, fromIndex: number, toIndex: number) => void;
+  onMoveNested: (from: NestedModuleDragPayload, toLayoutId: string, toColumnId: string, toIndex: number) => void;
+  onDuplicateNested: (layoutId: string, columnId: string, moduleId: string) => void;
+  onDeleteNested: (layoutId: string, columnId: string, moduleId: string) => void;
 }
 
 type DropInfo =
@@ -60,6 +75,8 @@ function readDropIndex(event: DragEvent, fallback: number): DropInfo | null {
 export function EmailCanvas({
   modules, selectedModuleId, width, viewMode, savedModules, onSelect, onDelete, onDuplicate, onReorder,
   onDropNewModule, onDropSavedModule, onSaveModule, onAddFirstModule,
+  activeColumn, onSelectColumn, onSelectNestedModule, onInsertNestedModule, onInsertNestedSavedModule,
+  onReorderNested, onMoveNested, onDuplicateNested, onDeleteNested,
 }: EmailCanvasProps) {
   const canvasWidth = viewMode === 'mobile' ? MOBILE_CANVAS_WIDTH : width;
   // Builder-UI-only drag feedback — an insertion line showing where a
@@ -224,7 +241,25 @@ export function EmailCanvas({
                         };
                       })()}
                     >
-                      {definition.renderPreview(module, viewMode)}
+                      {module.columns ? (
+                        <LayoutCanvasModule
+                          layout={module}
+                          viewport={viewMode}
+                          selectedModuleId={selectedModuleId}
+                          activeColumnId={activeColumn?.layoutId === module.id ? activeColumn.columnId : null}
+                          savedModules={savedModules}
+                          onSelectColumn={(columnId) => onSelectColumn(module.id, columnId)}
+                          onSelectNestedModule={onSelectNestedModule}
+                          onInsertNewModule={(columnId, type, index) => onInsertNestedModule(module.id, columnId, type, index)}
+                          onInsertSavedModule={(columnId, saved, index) => onInsertNestedSavedModule(module.id, columnId, saved, index)}
+                          onReorderNested={(columnId, fromIndex, toIndex) => onReorderNested(module.id, columnId, fromIndex, toIndex)}
+                          onMoveNested={(from, toColumnId, toIndex) => onMoveNested(from, module.id, toColumnId, toIndex)}
+                          onDuplicateNested={(columnId, moduleId) => onDuplicateNested(module.id, columnId, moduleId)}
+                          onDeleteNested={(columnId, moduleId) => onDeleteNested(module.id, columnId, moduleId)}
+                        />
+                      ) : (
+                        definition.renderPreview(module, viewMode)
+                      )}
                     </div>
                   </div>
                 </div>

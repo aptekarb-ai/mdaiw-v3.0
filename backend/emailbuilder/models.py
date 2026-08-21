@@ -100,6 +100,11 @@ class SavedEmailModule(models.Model):
     module_type = models.CharField(max_length=40)
     props = models.JSONField(default=dict)
     settings = models.JSONField(default=dict)
+    # Feature 05 — present only when the saved module is a layout with
+    # nested column content (a list of column objects, each with its own
+    # nested module tree); an empty list for every other saved module
+    # type. See edm.py's validate_module_instance for the validated shape.
+    columns = models.JSONField(default=list)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

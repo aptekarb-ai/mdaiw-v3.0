@@ -275,12 +275,17 @@ class EmailDocumentBuilderPatchTests(TestCase):
     def test_feature_04_module_types_accepted(self):
         self.client.force_login(self.user)
         for module_type in [
-            'layout-6col', 'header-logo-nav', 'hero-background-image', 'content-quote',
+            'header-logo-nav', 'hero-background-image', 'content-quote',
             'product-three-cards', 'cta-dual', 'social-follow-us', 'footer-preference-unsubscribe',
         ]:
             content = {'version': 1, 'modules': [_module(module_type=module_type)]}
             response = self._patch_json({'content': content})
             self.assertEqual(response.status_code, 200, module_type)
+        # layout-6col needs real columnWidths (Feature 05 validates the
+        # sum/minimum — see LayoutBuilderNestedTests below), not the
+        # generic _module() default {'text': ...} props.
+        response = self._patch_json({'content': {'version': 1, 'modules': [_layout_module(module_type='layout-6col', column_widths=[17, 17, 16, 17, 16, 17])]}})
+        self.assertEqual(response.status_code, 200, 'layout-6col')
 
     def test_responsive_settings_shape_accepted(self):
         self.client.force_login(self.user)
@@ -443,6 +448,183 @@ class EmailDocumentBuilderPatchTests(TestCase):
         response = self._patch_json({'content': content})
         self.assertEqual(response.status_code, 200)
 
+    def test_non_owner_cannot_patch_document_with_nested_layout(self):
+        other = get_user_model().objects.create_user(username='mallory', password='StrongPass123')
+        self.client.force_login(other)
+        response = self._patch_json({'content': {'version': 1, 'modules': [_layout_module()]}})
+        self.assertEqual(response.status_code, 404)
+
+
+def _column(column_id='col-a', modules=None, background='', valign='top'):
+    return {
+        'id': column_id,
+        'modules': modules if modules is not None else [],
+        'settings': {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'backgroundColor': background,
+            'verticalAlign': valign,
+        },
+    }
+
+
+def _layout_module(module_id='layout-1', module_type='layout-2col-50-50', column_widths=None, columns=None, settings=None):
+    widths = column_widths if column_widths is not None else [50, 50]
+    return {
+        'id': module_id,
+        'type': module_type,
+        'order': 0,
+        'props': {'columnWidths': widths},
+        'columns': columns if columns is not None else [_column(f'{module_id}-col-{i}') for i in range(len(widths))],
+        'settings': settings if settings is not None else {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {
+                'desktop': {'left': {'value': 0, 'unit': 'px'}, 'right': {'value': 0, 'unit': 'px'}}, 'mobile': {},
+            },
+        },
+    }
+
+
+class LayoutBuilderNestedTests(TestCase):
+    """Feature 05 — Layout Builder: nested column content validation."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='Layout Draft', platform='generic', width=700, start_type='blank',
+        )
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+        self.client.force_login(self.user)
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_nested_layout_with_content_accepted(self):
+        nested_text = _module('text-1', module_type='text', order=0)
+        layout = _layout_module(columns=[
+            _column('col-a', modules=[nested_text]),
+            _column('col-b'),
+        ])
+        content = {'version': 1, 'modules': [layout]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['content'], content)
+
+    def test_missing_columns_key_still_accepted_backward_compat(self):
+        # Feature 03/04 layout modules (no `columns` key at all) must
+        # keep saving — the frontend backfills empty columns at load time
+        # (edmMigration.ts), not the backend (instruction 2).
+        layout = _layout_module()
+        del layout['columns']
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_malformed_columns_not_a_list_rejected(self):
+        layout = _layout_module()
+        layout['columns'] = 'not-a-list'
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_wrong_column_count_rejected(self):
+        layout = _layout_module(module_type='layout-3col', column_widths=[34, 33, 33])
+        layout['columns'] = layout['columns'][:2]
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_duplicate_column_ids_rejected(self):
+        layout = _layout_module(columns=[_column('same-id'), _column('same-id')])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_duplicate_nested_module_ids_across_columns_rejected(self):
+        layout = _layout_module(columns=[
+            _column('col-a', modules=[_module('dup-id')]),
+            _column('col-b', modules=[_module('dup-id')]),
+        ])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_nested_module_id_colliding_with_top_level_id_rejected(self):
+        # Instruction 34 — ids must be unique across the WHOLE document,
+        # top-level and nested alike.
+        nested = _module('layout-1', module_type='text')
+        layout = _layout_module(module_id='layout-1', columns=[
+            _column('col-a', modules=[nested]), _column('col-b'),
+        ])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_column_widths_sum_rejected(self):
+        layout = _layout_module(column_widths=[50, 40])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_column_width_below_minimum_rejected(self):
+        layout = _layout_module(column_widths=[5, 95])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_column_gutter_valid_px_accepted(self):
+        layout = _layout_module()
+        layout['settings']['columnGutter'] = {'desktop': {'value': 20, 'unit': 'px'}}
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_column_gutter_percent_unit_rejected(self):
+        layout = _layout_module()
+        layout['settings']['columnGutter'] = {'desktop': {'value': 5, 'unit': '%'}}
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_column_gutter_over_max_rejected(self):
+        layout = _layout_module()
+        layout['settings']['columnGutter'] = {'desktop': {'value': 500, 'unit': 'px'}}
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_layout_nested_inside_column_rejected(self):
+        nested_layout = _layout_module(module_id='inner-layout')
+        layout = _layout_module(columns=[
+            _column('col-a', modules=[nested_layout]), _column('col-b'),
+        ])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_nested_module_with_own_columns_key_rejected(self):
+        bad_nested = _module('bad-1', module_type='text')
+        bad_nested['columns'] = []
+        layout = _layout_module(columns=[_column('col-a', modules=[bad_nested]), _column('col-b')])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_nested_module_type_rejected(self):
+        bad_nested = _module('bad-1', module_type='carousel')
+        layout = _layout_module(columns=[_column('col-a', modules=[bad_nested]), _column('col-b')])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_mobile_column_order_valid_permutation_accepted(self):
+        layout = _layout_module()
+        layout['settings']['mobileColumnOrder'] = [1, 0]
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_mobile_column_order_invalid_permutation_rejected(self):
+        layout = _layout_module()
+        layout['settings']['mobileColumnOrder'] = [0, 0]
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_column_vertical_align_invalid_value_rejected(self):
+        layout = _layout_module(columns=[_column('col-a', valign='center'), _column('col-b')])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
 
 def _saved_module_payload(**overrides):
     payload = {
@@ -582,3 +764,51 @@ class SavedEmailModuleTests(TestCase):
         response = self.client.delete(f'{self.url}{saved.id}/')
         self.assertEqual(response.status_code, 403)
         self.assertTrue(SavedEmailModule.objects.filter(pk=saved.id).exists())
+
+    def _layout_settings(self):
+        return {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 0, 'unit': 'px'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+
+    def test_saved_layout_module_with_nested_columns_accepted(self):
+        self.client.force_login(self.user)
+        layout_columns = [
+            _column('col-a', modules=[_module('text-1', module_type='text')]),
+            _column('col-b'),
+        ]
+        payload = _saved_module_payload(
+            name='My 2-Column Layout', module_type='layout-2col-50-50',
+            props={'columnWidths': [50, 50]}, settings=self._layout_settings(), columns=layout_columns,
+        )
+        response = self._post_json(payload)
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['columns'], layout_columns)
+        saved = SavedEmailModule.objects.get(pk=response.json()['id'])
+        self.assertEqual(saved.columns, layout_columns)
+
+    def test_saved_layout_module_wrong_column_count_rejected(self):
+        self.client.force_login(self.user)
+        payload = _saved_module_payload(
+            name='Bad Layout', module_type='layout-3col',
+            props={'columnWidths': [34, 33, 33]}, settings=self._layout_settings(),
+            columns=[_column('col-a'), _column('col-b')],
+        )
+        response = self._post_json(payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('module_type', response.json()['errors'])
+
+    def test_saved_module_ownership_enforced_for_nested_layout(self):
+        self.client.force_login(self.user)
+        payload = _saved_module_payload(
+            module_type='layout-2col-50-50', props={'columnWidths': [50, 50]},
+            settings=self._layout_settings(), columns=[_column('col-a'), _column('col-b')],
+        )
+        response = self._post_json(payload)
+        saved_id = response.json()['id']
+        self.client.logout()
+        self.client.force_login(self.other_user)
+        delete_response = self.client.delete(f'{self.url}{saved_id}/')
+        self.assertEqual(delete_response.status_code, 404)
+        self.assertTrue(SavedEmailModule.objects.filter(pk=saved_id).exists())

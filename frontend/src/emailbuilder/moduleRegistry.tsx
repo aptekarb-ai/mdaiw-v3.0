@@ -8,6 +8,7 @@
 // needs to touch the canvas/renderer/properties-panel code itself.
 import type { EmailModuleType } from './edm';
 import type { AnyModuleDefinition } from './registryCore';
+import { registerModuleDefinitionResolver } from './registryCore';
 import { BASIC_DEFINITIONS, BASIC_TYPES_ORDER } from './catalog/basicCatalog';
 import { LAYOUT_DEFINITIONS, LAYOUT_TYPES_ORDER } from './catalog/layoutCatalog';
 import { HEADER_DEFINITIONS, HEADER_TYPES_ORDER } from './catalog/headerCatalog';
@@ -58,3 +59,8 @@ export function getModuleDefinition(type: EmailModuleType): AnyModuleDefinition 
 export function getAllModuleDefinitions(): AnyModuleDefinition[] {
   return ALL_DEFINITIONS;
 }
+
+// Feature 05 — see registryCore.ts's resolveModuleDefinition docstring:
+// this is the one call site that connects layoutCatalog.tsx's nested
+// module rendering back to the full registry without a circular import.
+registerModuleDefinitionResolver(getModuleDefinition);
