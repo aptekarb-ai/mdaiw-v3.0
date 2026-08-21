@@ -4,18 +4,10 @@ import { resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import type { BuilderViewMode } from './registryCore';
 import { NEW_MODULE_DRAG_MIME, REORDER_DRAG_MIME, SAVED_MODULE_DRAG_MIME, type NestedModuleDragPayload } from './dragTypes';
-import type { DimensionValue } from './dimensions';
+import { outerSpacingPx } from './dimensions';
 import type { SavedEmailModule } from './types';
 import { LayoutCanvasModule } from './LayoutCanvasModule';
 import './EmailCanvas.css';
-
-// Builder-canvas-only approximation of an outer-spacing dimension as a
-// pixel margin, for visual feedback while editing. The exported email
-// HTML computes the real spacer <td> from the same DimensionValue — see
-// registryCore.ts's wrapWithOuterSpacing, the actual source of truth.
-function outerSpacingPx(dimension: DimensionValue, canvasWidth: number): number {
-  return dimension.unit === '%' ? Math.round((dimension.value / 100) * canvasWidth) : dimension.value;
-}
 
 export type { BuilderViewMode };
 
@@ -211,57 +203,64 @@ export function EmailCanvas({
                       </button>
                     </div>
                   )}
-                  <div
-                    className="email-canvas__module-outer-spacing"
-                    style={(() => {
-                      // Builder-only approximation: % outer spacing is
-                      // shown against the current canvas width so it
-                      // stays visually meaningful at both Desktop and
-                      // Mobile canvas sizes. Real px is exact either way.
-                      // Resolves the CURRENT viewport's outer spacing —
-                      // switching Desktop/Mobile visibly changes this
-                      // without touching the other viewport's stored
-                      // values (see edm.ts's resolveOuterSpacing).
-                      const resolvedOuter = resolveOuterSpacing(module.settings, viewMode);
-                      return {
-                        marginLeft: outerSpacingPx(resolvedOuter.left, canvasWidth),
-                        marginRight: outerSpacingPx(resolvedOuter.right, canvasWidth),
-                      };
-                    })()}
-                  >
-                    <div
-                      className="email-canvas__module-content"
-                      style={(() => {
-                        const spacing = resolveSpacing(module.settings, viewMode);
-                        return {
-                          paddingTop: spacing.paddingTop,
-                          paddingRight: spacing.paddingRight,
-                          paddingBottom: spacing.paddingBottom,
-                          paddingLeft: spacing.paddingLeft,
-                        };
-                      })()}
-                    >
-                      {module.columns ? (
-                        <LayoutCanvasModule
-                          layout={module}
-                          viewport={viewMode}
-                          selectedModuleId={selectedModuleId}
-                          activeColumnId={activeColumn?.layoutId === module.id ? activeColumn.columnId : null}
-                          savedModules={savedModules}
-                          onSelectColumn={(columnId) => onSelectColumn(module.id, columnId)}
-                          onSelectNestedModule={onSelectNestedModule}
-                          onInsertNewModule={(columnId, type, index) => onInsertNestedModule(module.id, columnId, type, index)}
-                          onInsertSavedModule={(columnId, saved, index) => onInsertNestedSavedModule(module.id, columnId, saved, index)}
-                          onReorderNested={(columnId, fromIndex, toIndex) => onReorderNested(module.id, columnId, fromIndex, toIndex)}
-                          onMoveNested={(from, toColumnId, toIndex) => onMoveNested(from, module.id, toColumnId, toIndex)}
-                          onDuplicateNested={(columnId, moduleId) => onDuplicateNested(module.id, columnId, moduleId)}
-                          onDeleteNested={(columnId, moduleId) => onDeleteNested(module.id, columnId, moduleId)}
-                        />
-                      ) : (
-                        definition.renderPreview(module, viewMode)
-                      )}
-                    </div>
-                  </div>
+                  {(() => {
+                    // Mirrors the exported email's OUTER TABLE > TR >
+                    // optional left spacer / content / optional right
+                    // spacer structure — a dedicated spacer REGION beside
+                    // the content, never a CSS margin shifting the module
+                    // (see registryCore.ts's wrapWithOuterSpacing, the
+                    // real source of truth this approximates for the
+                    // builder canvas). Resolves the CURRENT viewport's
+                    // outer spacing — switching Desktop/Mobile visibly
+                    // changes this without touching the other viewport's
+                    // stored values (see edm.ts's resolveOuterSpacing). A
+                    // side with value 0 omits its spacer region entirely,
+                    // same as the exported HTML omitting that spacer <td>.
+                    const resolvedOuter = resolveOuterSpacing(module.settings, viewMode);
+                    const leftPx = outerSpacingPx(resolvedOuter.left, canvasWidth);
+                    const rightPx = outerSpacingPx(resolvedOuter.right, canvasWidth);
+                    const spacing = resolveSpacing(module.settings, viewMode);
+                    return (
+                      <div className="email-canvas__module-outer-row">
+                        {leftPx > 0 && (
+                          <div className="email-canvas__module-spacer-region" style={{ width: leftPx }} />
+                        )}
+                        <div
+                          className="email-canvas__module-content"
+                          style={{
+                            paddingTop: spacing.paddingTop,
+                            paddingRight: spacing.paddingRight,
+                            paddingBottom: spacing.paddingBottom,
+                            paddingLeft: spacing.paddingLeft,
+                          }}
+                        >
+                          {module.columns ? (
+                            <LayoutCanvasModule
+                              layout={module}
+                              viewport={viewMode}
+                              canvasWidth={canvasWidth}
+                              selectedModuleId={selectedModuleId}
+                              activeColumnId={activeColumn?.layoutId === module.id ? activeColumn.columnId : null}
+                              savedModules={savedModules}
+                              onSelectColumn={(columnId) => onSelectColumn(module.id, columnId)}
+                              onSelectNestedModule={onSelectNestedModule}
+                              onInsertNewModule={(columnId, type, index) => onInsertNestedModule(module.id, columnId, type, index)}
+                              onInsertSavedModule={(columnId, saved, index) => onInsertNestedSavedModule(module.id, columnId, saved, index)}
+                              onReorderNested={(columnId, fromIndex, toIndex) => onReorderNested(module.id, columnId, fromIndex, toIndex)}
+                              onMoveNested={(from, toColumnId, toIndex) => onMoveNested(from, module.id, toColumnId, toIndex)}
+                              onDuplicateNested={(columnId, moduleId) => onDuplicateNested(module.id, columnId, moduleId)}
+                              onDeleteNested={(columnId, moduleId) => onDeleteNested(module.id, columnId, moduleId)}
+                            />
+                          ) : (
+                            definition.renderPreview(module, viewMode)
+                          )}
+                        </div>
+                        {rightPx > 0 && (
+                          <div className="email-canvas__module-spacer-region" style={{ width: rightPx }} />
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );

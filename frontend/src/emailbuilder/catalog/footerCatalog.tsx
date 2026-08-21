@@ -2,8 +2,40 @@ import type { EmailModuleType, FooterModuleProps, SocialPlatformLink } from '../
 import { resolveSpacing } from '../edm';
 import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
 import {
-  GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition, type SchemaField,
+  GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition,
+  type RepeatableFieldConfig, type SchemaField,
 } from '../registryCore';
+import { SOCIAL_PLATFORM_PRESETS } from './socialCatalog';
+
+const MAX_FOOTER_SOCIAL_LINKS = 6;
+
+const footerSocialField: RepeatableFieldConfig<SocialPlatformLink> = {
+  path: 'socialPlatforms',
+  group: 'content',
+  label: 'Social links',
+  itemLabel: (item, index) => item.label.trim() || `Link ${index + 1}`,
+  createItem: () => ({ label: 'Facebook', href: '' }),
+  maxItems: MAX_FOOTER_SOCIAL_LINKS,
+  addLabel: 'Add social link',
+  renderItemFields: (item, update) => (
+    <>
+      <label className="properties-panel__field">
+        <span>Platform</span>
+        <select value={SOCIAL_PLATFORM_PRESETS.includes(item.label) ? item.label : 'Other'} onChange={(e) => update({ label: e.target.value === 'Other' ? '' : e.target.value })}>
+          {SOCIAL_PLATFORM_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+          <option value="Other">Other</option>
+        </select>
+        {!SOCIAL_PLATFORM_PRESETS.includes(item.label) && (
+          <input type="text" value={item.label} placeholder="Platform name" onChange={(e) => update({ label: e.target.value })} />
+        )}
+      </label>
+      <label className="properties-panel__field">
+        <span>URL</span>
+        <input type="text" value={item.href} placeholder="https://" onChange={(e) => update({ href: e.target.value })} />
+      </label>
+    </>
+  ),
+};
 
 const DEFAULT_SOCIAL: SocialPlatformLink[] = [
   { label: 'Facebook', href: '' },
@@ -39,6 +71,9 @@ function editableFields(variant: FooterVariant): SchemaField[] {
   fields.push(
     { key: 'unsubscribeText', label: 'Unsubscribe link text', kind: 'text', group: 'content' },
     { key: 'unsubscribeHref', label: 'Unsubscribe link URL', kind: 'url', group: 'content' },
+    { key: 'preferenceText', label: 'Preference center link text', kind: 'text', group: 'content' },
+    { key: 'preferenceHref', label: 'Preference center link URL', kind: 'url', group: 'content' },
+    { key: 'align', label: 'Alignment', kind: 'align', group: 'style' },
   );
   return fields;
 }
@@ -57,12 +92,15 @@ function footerDefinition(variant: FooterVariant): ModuleDefinition<FooterModule
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
     editableFields: editableFields(variant),
+    repeatableField: variant.showSocial ? footerSocialField : undefined,
     createDefaultProps: () => ({
       companyName: 'MarketOne Digital, Inc.',
       address: '123 Market Street, Suite 400, San Francisco, CA 94105',
       legalText: '© 2026 MarketOne Digital. All rights reserved.',
       unsubscribeText: 'Unsubscribe',
       unsubscribeHref: '',
+      preferenceText: '',
+      preferenceHref: '',
       socialPlatforms: variant.showSocial ? DEFAULT_SOCIAL : [],
       align: 'center',
     }),
@@ -84,6 +122,9 @@ function footerDefinition(variant: FooterVariant): ModuleDefinition<FooterModule
           {variant.showAddress && <p style={{ margin: '0 0 4px' }}>{props.address}</p>}
           <p style={{ margin: '0 0 4px' }}>{props.legalText}</p>
           <p style={{ margin: 0, fontWeight: variant.emphasizeUnsubscribe ? 700 : 400, textDecoration: 'underline' }}>{props.unsubscribeText}</p>
+          {props.preferenceText && (
+            <p style={{ margin: '4px 0 0', textDecoration: 'underline' }}>{props.preferenceText}</p>
+          )}
         </div>
       );
     },
@@ -104,12 +145,19 @@ function footerDefinition(variant: FooterVariant): ModuleDefinition<FooterModule
       const unsubscribeStyle = variant.emphasizeUnsubscribe
         ? 'font-weight:bold; text-decoration:underline; color:#0082AD;'
         : 'text-decoration:underline; color:#66777D;';
+      const preferenceHtml = props.preferenceText
+        ? textLine(
+          `<a href="${escapeAttribute(sanitizeUrl(props.preferenceHref))}" style="text-decoration:underline; color:#66777D;">${escapeHtml(props.preferenceText)}</a>`,
+          'padding-top:4px; font-family:Arial,Helvetica,sans-serif; font-size:11px;',
+        )
+        : '';
       const html = (
         socialHtml
         + textLine(escapeHtml(props.companyName), 'font-family:Arial,Helvetica,sans-serif; font-size:12px; font-weight:bold; color:#333333;', 4)
         + addressHtml
         + textLine(escapeHtml(props.legalText), 'font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#829096;', 6)
         + `<a href="${escapeAttribute(sanitizeUrl(props.unsubscribeHref))}" style="font-family:Arial,Helvetica,sans-serif; font-size:11px; ${unsubscribeStyle}">${escapeHtml(props.unsubscribeText)}</a>`
+        + preferenceHtml
       );
       return moduleTableRow(cell(html, `padding:${spacing.paddingTop}px ${spacing.paddingRight}px ${spacing.paddingBottom}px ${spacing.paddingLeft}px; text-align:${props.align};`));
     },

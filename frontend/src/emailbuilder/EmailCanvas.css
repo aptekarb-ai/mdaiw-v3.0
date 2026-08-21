@@ -116,8 +116,23 @@
   outline-offset: -2px;
 }
 
-.email-canvas__module-outer-spacing {
-  transition: margin var(--transition-fast);
+/* Outer Spacer Columns preview — a dedicated spacer REGION beside the
+   content (flex row), not a CSS margin shifting the module. Mirrors the
+   exported email's OUTER TABLE > TR > optional spacer <td> / content <td>
+   / optional spacer <td> structure. */
+.email-canvas__module-outer-row {
+  display: flex;
+  transition: gap var(--transition-fast);
+}
+
+.email-canvas__module-spacer-region {
+  flex: 0 0 auto;
+  transition: width var(--transition-fast);
+}
+
+.email-canvas__module-content {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .email-canvas__module-toolbar {

@@ -1,8 +1,9 @@
 import { useState, type DragEvent, type KeyboardEvent } from 'react';
 import type { EmailColumn, EmailModule, EmailModuleType } from './edm';
-import { resolveColumnGutter, resolveSpacing } from './edm';
+import { resolveColumnGutter, resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import type { BuilderViewMode } from './registryCore';
+import { outerSpacingPx } from './dimensions';
 import { isLayoutModuleType } from './layoutModel';
 import {
   NESTED_MODULE_DRAG_MIME, NEW_MODULE_DRAG_MIME, SAVED_MODULE_DRAG_MIME, type NestedModuleDragPayload,
@@ -13,6 +14,7 @@ import './LayoutCanvasModule.css';
 interface LayoutCanvasModuleProps {
   layout: EmailModule;
   viewport: BuilderViewMode;
+  canvasWidth: number;
   selectedModuleId: string | null;
   activeColumnId: string | null;
   savedModules: SavedEmailModule[];
@@ -41,7 +43,7 @@ function readNestedDrop(event: DragEvent): 'nested' | 'saved' | 'new' | null {
 // component only owns what's genuinely inside the layout: columns, drop
 // zones and nested module rows.
 export function LayoutCanvasModule({
-  layout, viewport, selectedModuleId, activeColumnId, savedModules,
+  layout, viewport, canvasWidth, selectedModuleId, activeColumnId, savedModules,
   onSelectColumn, onSelectNestedModule, onInsertNewModule, onInsertSavedModule,
   onReorderNested, onMoveNested, onDuplicateNested, onDeleteNested,
 }: LayoutCanvasModuleProps) {
@@ -229,7 +231,31 @@ export function LayoutCanvasModule({
                           </button>
                         </div>
                       )}
-                      {definition?.renderPreview(nested, viewport)}
+                      {(() => {
+                        // Same spacer-REGION approach the top-level
+                        // canvas uses (EmailCanvas.tsx) — a dedicated
+                        // spacer element beside the content, never a CSS
+                        // margin — for the nested module's OWN outer
+                        // spacer, resolved for the current viewport,
+                        // independent of the parent Layout's own outer
+                        // spacer.
+                        const resolvedOuter = resolveOuterSpacing(nested.settings, viewport);
+                        const leftPx = outerSpacingPx(resolvedOuter.left, canvasWidth);
+                        const rightPx = outerSpacingPx(resolvedOuter.right, canvasWidth);
+                        return (
+                          <div className="layout-canvas__nested-outer-row">
+                            {leftPx > 0 && (
+                              <div className="layout-canvas__nested-spacer-region" style={{ width: leftPx }} />
+                            )}
+                            <div className="layout-canvas__nested-content">
+                              {definition?.renderPreview(nested, viewport)}
+                            </div>
+                            {rightPx > 0 && (
+                              <div className="layout-canvas__nested-spacer-region" style={{ width: rightPx }} />
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 );

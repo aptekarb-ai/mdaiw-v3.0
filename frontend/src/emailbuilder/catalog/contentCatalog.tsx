@@ -48,6 +48,7 @@ function contentEditableFields(withImage: boolean, withCta: boolean): SchemaFiel
       { key: 'ctaHref', label: 'Button link', kind: 'url', group: 'content' },
     );
   }
+  fields.push({ key: 'align', label: 'Text alignment', kind: 'align', group: 'style' });
   return fields;
 }
 
@@ -80,7 +81,7 @@ function contentBlockDefinition(variant: ContentVariant): ModuleDefinition<Conte
       const { props } = module;
       const stacked = viewport === 'mobile' && module.settings.mobileStack !== false;
       const textBlock = (
-        <div>
+        <div style={{ textAlign: props.align }}>
           <h3 style={{ margin: '0 0 6px', fontSize: 18 }}>{props.heading}</h3>
           <p style={{ margin: variant.withCta ? '0 0 12px' : 0 }}>{props.text}</p>
           {variant.withCta && (
@@ -113,10 +114,10 @@ function contentBlockDefinition(variant: ContentVariant): ModuleDefinition<Conte
       const { props, settings } = module;
       const spacing = resolveSpacing(settings, 'desktop');
       const paddingCss = `padding:${spacing.paddingTop}px ${spacing.paddingRight}px ${spacing.paddingBottom}px ${spacing.paddingLeft}px;`;
-      const headingHtml = textLine(escapeHtml(props.heading), 'font-family:Arial,Helvetica,sans-serif; font-size:20px; color:#002D38;', 8);
+      const headingHtml = textLine(escapeHtml(props.heading), `text-align:${props.align}; font-family:Arial,Helvetica,sans-serif; font-size:20px; color:#002D38;`, 8);
       const textHtml = textLine(
         escapeHtml(props.text).replace(/\n/g, '<br>'),
-        'font-family:Arial,Helvetica,sans-serif; font-size:15px; color:#333333;',
+        `text-align:${props.align}; font-family:Arial,Helvetica,sans-serif; font-size:15px; color:#333333;`,
         variant.withCta ? 16 : 0,
       );
       const ctaHtml = variant.withCta

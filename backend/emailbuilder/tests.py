@@ -626,6 +626,115 @@ class LayoutBuilderNestedTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class ModuleElementEditorValidationTests(TestCase):
+    """Feature 06 — generic key-pattern prop validation (colors, font
+    ids, unsafe URL schemes, bounded repeatable lists)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='Module Editor Draft', platform='generic', width=700, start_type='blank',
+        )
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+        self.client.force_login(self.user)
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def _text_module(self, **prop_overrides):
+        props = {
+            'text': 'Hello', 'align': 'left', 'fontFamily': 'arial', 'fontSize': 16,
+            'fontWeight': 400, 'color': '#333333', 'lineHeight': 24, 'backgroundColor': '',
+        }
+        props.update(prop_overrides)
+        return _module(module_type='text', props=props)
+
+    def test_invalid_hex_color_rejected(self):
+        module = self._text_module(backgroundColor='red')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_valid_hex_color_accepted(self):
+        module = self._text_module(backgroundColor='#FF0000')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_empty_color_string_accepted_as_no_color(self):
+        module = self._text_module(backgroundColor='')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_short_hex_color_rejected(self):
+        module = self._text_module(color='#fff')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_font_family_rejected(self):
+        module = self._text_module(fontFamily='ComicSans')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_valid_font_family_accepted(self):
+        module = self._text_module(fontFamily='georgia')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_javascript_url_in_button_href_rejected(self):
+        module = _module(module_type='button', props={
+            'text': 'Shop', 'href': 'javascript:alert(1)', 'align': 'center',
+            'backgroundColor': '#0082AD', 'textColor': '#FFFFFF', 'fontSize': 15, 'borderRadius': 6,
+        })
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_data_url_in_image_src_rejected(self):
+        module = _module(module_type='image', props={
+            'src': 'data:text/html,<script>alert(1)</script>', 'alt': 'x',
+            'width': {'desktop': {'value': 100, 'unit': '%'}}, 'align': 'center', 'href': '',
+        })
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_safe_https_url_accepted(self):
+        module = _module(module_type='button', props={
+            'text': 'Shop', 'href': 'https://example.com', 'align': 'center',
+            'backgroundColor': '#0082AD', 'textColor': '#FFFFFF', 'fontSize': 15, 'borderRadius': 6,
+        })
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def _header_with_nav_links(self, count):
+        return _module(module_type='header-logo-nav', props={
+            'logoSrc': '', 'logoAlt': 'Logo', 'logoWidth': 160, 'logoHref': '',
+            'preheaderText': '', 'navLinks': [{'label': f'Link {i}', 'href': ''} for i in range(count)],
+            'ctaText': '', 'ctaHref': '', 'backgroundColor': '#FFFFFF', 'align': 'left',
+        })
+
+    def test_nav_links_over_max_rejected(self):
+        module = self._header_with_nav_links(7)
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_nav_links_at_max_accepted(self):
+        module = self._header_with_nav_links(6)
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_nav_link_href_unsafe_scheme_rejected(self):
+        module = _module(module_type='header-logo-nav', props={
+            'logoSrc': '', 'logoAlt': 'Logo', 'logoWidth': 160, 'logoHref': '',
+            'preheaderText': '', 'navLinks': [{'label': 'Evil', 'href': 'javascript:alert(1)'}],
+            'ctaText': '', 'ctaHref': '', 'backgroundColor': '#FFFFFF', 'align': 'left',
+        })
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+
 def _saved_module_payload(**overrides):
     payload = {
         'name': 'My Reusable Header',

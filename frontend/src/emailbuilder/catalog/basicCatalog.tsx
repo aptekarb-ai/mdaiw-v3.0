@@ -1,10 +1,11 @@
 import type {
-  ButtonModuleProps, CompositeModuleProps, DividerModuleProps, EmailModuleType, ImageModuleProps,
+  ButtonModuleProps, ButtonWidthMode, CompositeModuleProps, DividerModuleProps, EmailModuleType, ImageModuleProps,
   SpacerModuleProps, TextModuleProps,
 } from '../edm';
 import { DEFAULT_SPACING, resolveSpacing } from '../edm';
 import { percent, px, resolveDimension, widthAttr, widthCssValue } from '../dimensions';
 import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
+import { DEFAULT_FONT_ID, fontStackFor } from '../fonts';
 import {
   GENERIC_ONLY, ImagePreview, cell, createResponsiveSettings, moduleTable, moduleTableRow, paddingStyle,
   textLine, type AnyModuleDefinition, type ModuleDefinition,
@@ -25,10 +26,13 @@ const textDefinition: ModuleDefinition<TextModuleProps> = {
   createDefaultProps: () => ({
     text: 'Add your heading or paragraph text here.',
     align: 'left',
+    fontFamily: DEFAULT_FONT_ID,
     fontSize: 16,
     fontWeight: 400,
     color: '#333333',
     lineHeight: 24,
+    backgroundColor: '',
+    width: { desktop: percent(100) },
   }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
   renderPreview: (module) => (
@@ -36,10 +40,12 @@ const textDefinition: ModuleDefinition<TextModuleProps> = {
       style={{
         margin: 0,
         textAlign: module.props.align,
+        fontFamily: fontStackFor(module.props.fontFamily),
         fontSize: module.props.fontSize,
         fontWeight: module.props.fontWeight,
         color: module.props.color,
         lineHeight: `${module.props.lineHeight}px`,
+        backgroundColor: module.props.backgroundColor || undefined,
       }}
     >
       {module.props.text}
@@ -47,10 +53,12 @@ const textDefinition: ModuleDefinition<TextModuleProps> = {
   ),
   renderEmailHtml: (module) => {
     const { props, settings } = module;
-    const style = `${paddingStyle(resolveSpacing(settings, 'desktop'))} text-align:${props.align}; font-family:Arial,Helvetica,sans-serif; `
+    const resolvedWidth = resolveDimension(props.width ?? { desktop: percent(100) }, 'desktop');
+    const background = props.backgroundColor ? `background-color:${props.backgroundColor}; ` : '';
+    const style = `${paddingStyle(resolveSpacing(settings, 'desktop'))} text-align:${props.align}; font-family:${fontStackFor(props.fontFamily)}; `
       + `font-size:${props.fontSize}px; font-weight:${props.fontWeight}; color:${props.color}; `
-      + `line-height:${props.lineHeight}px;`;
-    return moduleTableRow(cell(escapeHtml(props.text).replace(/\n/g, '<br>'), style));
+      + `line-height:${props.lineHeight}px; ${background}width:${widthCssValue(resolvedWidth)};`;
+    return moduleTableRow(cell(escapeHtml(props.text).replace(/\n/g, '<br>'), style, { width: widthAttr(resolvedWidth) }));
   },
 };
 
@@ -77,15 +85,18 @@ const imageDefinition: ModuleDefinition<ImageModuleProps> = {
     width: { desktop: percent(100) },
     align: 'center',
     href: '',
+    backgroundColor: '',
   }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
   renderPreview: (module, viewport = 'desktop') => (
-    <ImagePreview
-      src={module.props.src}
-      alt={module.props.alt}
-      width={resolveDimension(module.props.width, viewport)}
-      align={module.props.align}
-    />
+    <div style={{ backgroundColor: module.props.backgroundColor || undefined }}>
+      <ImagePreview
+        src={module.props.src}
+        alt={module.props.alt}
+        width={resolveDimension(module.props.width, viewport)}
+        align={module.props.align}
+      />
+    </div>
   ),
   renderEmailHtml: (module) => {
     const { props, settings } = module;
@@ -97,8 +108,9 @@ const imageDefinition: ModuleDefinition<ImageModuleProps> = {
     const linked = props.href
       ? `<a href="${escapeAttribute(sanitizeUrl(props.href))}" target="_blank" rel="noopener noreferrer">${imgTag}</a>`
       : imgTag;
-    const style = `${paddingStyle(resolveSpacing(settings, 'desktop'))} text-align:${props.align};`;
-    return moduleTableRow(cell(linked, style));
+    const background = props.backgroundColor ? `background-color:${props.backgroundColor}; ` : '';
+    const style = `${paddingStyle(resolveSpacing(settings, 'desktop'))} text-align:${props.align}; ${background}`;
+    return moduleTableRow(cell(linked, style, { bgcolor: props.backgroundColor || undefined }));
   },
 };
 
@@ -122,46 +134,64 @@ const buttonDefinition: ModuleDefinition<ButtonModuleProps> = {
     textColor: '#FFFFFF',
     fontSize: 15,
     borderRadius: 6,
+    widthMode: 'auto',
+    fixedWidth: 200,
+    borderColor: '',
+    borderWidth: 0,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
   }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
-  renderPreview: (module) => (
-    <div style={{ textAlign: module.props.align }}>
-      <span
-        style={{
-          display: 'inline-block',
-          padding: '12px 24px',
-          background: module.props.backgroundColor,
-          color: module.props.textColor,
-          fontSize: module.props.fontSize,
-          borderRadius: module.props.borderRadius,
-          fontWeight: 600,
-        }}
-      >
-        {module.props.text}
-      </span>
-    </div>
-  ),
+  renderPreview: (module) => {
+    const { props } = module;
+    const widthMode: ButtonWidthMode = props.widthMode ?? 'auto';
+    const paddingH = props.paddingHorizontal ?? 24;
+    const paddingV = props.paddingVertical ?? 12;
+    return (
+      <div style={{ textAlign: module.props.align }}>
+        <span
+          style={{
+            display: widthMode === 'full' ? 'block' : 'inline-block',
+            boxSizing: 'border-box',
+            width: widthMode === 'fixed' ? props.fixedWidth : widthMode === 'full' ? '100%' : undefined,
+            padding: `${paddingV}px ${paddingH}px`,
+            background: props.backgroundColor,
+            color: props.textColor,
+            fontSize: props.fontSize,
+            borderRadius: props.borderRadius,
+            border: props.borderWidth ? `${props.borderWidth}px solid ${props.borderColor || 'transparent'}` : undefined,
+            fontWeight: 600,
+            textAlign: 'center',
+          }}
+        >
+          {props.text}
+        </span>
+      </div>
+    );
+  },
   renderEmailHtml: (module) => {
     const { props, settings } = module;
-    // Table-based button — safe in Outlook Classic, unlike a flex/anchor
-    // button — per the Module-4 Outlook-compatibility rule. Content-
-    // sized by design (instruction: "Button: auto/content-sized, unless
-    // module explicitly needs width") — no width control.
-    const button = (
-      // align="center" (HTML attribute, not CSS margin) — the
-      // Outlook-safe way to center a block-level table.
-      '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">'
-      + '<tr><td style="'
-      + `border-radius:${props.borderRadius}px; background-color:${props.backgroundColor};`
-      + '">'
-      + `<a href="${escapeAttribute(sanitizeUrl(props.href))}" target="_blank" rel="noopener noreferrer" `
-      + `style="display:inline-block; padding:12px 24px; font-family:Arial,Helvetica,sans-serif; `
+    const widthMode: ButtonWidthMode = props.widthMode ?? 'auto';
+    const paddingH = props.paddingHorizontal ?? 24;
+    const paddingV = props.paddingVertical ?? 12;
+    const border = props.borderWidth ? `border:${props.borderWidth}px solid ${props.borderColor || props.backgroundColor}; ` : '';
+    const tdStyle = `border-radius:${props.borderRadius}px; background-color:${props.backgroundColor}; ${border}`;
+    const linkStyle = `display:${widthMode === 'full' ? 'block' : 'inline-block'}; box-sizing:border-box; `
+      + (widthMode === 'fixed' ? `width:${props.fixedWidth ?? 200}px; ` : '')
+      + `padding:${paddingV}px ${paddingH}px; font-family:Arial,Helvetica,sans-serif; `
       + `font-size:${props.fontSize}px; font-weight:bold; color:${props.textColor}; text-decoration:none; `
-      + `border-radius:${props.borderRadius}px;">${escapeHtml(props.text)}</a>`
-      + '</td></tr></table>'
-    );
+      + `border-radius:${props.borderRadius}px; text-align:center;`;
+    const link = `<a href="${escapeAttribute(sanitizeUrl(props.href))}" target="_blank" rel="noopener noreferrer" style="${linkStyle}">${escapeHtml(props.text)}</a>`;
+    // Table-based button — safe in Outlook Classic, unlike a flex/anchor
+    // button — per the Module-4 Outlook-compatibility rule.
+    // align="center" (HTML attribute, not CSS margin) — the Outlook-safe
+    // way to center a block-level table; a Full Width button instead
+    // gets width="100%" on the table itself so the <a> can fill it.
+    const table = widthMode === 'full'
+      ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="100%" bgcolor="${props.backgroundColor}" style="${tdStyle}">${link}</td></tr></table>`
+      : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td bgcolor="${props.backgroundColor}" style="${tdStyle}">${link}</td></tr></table>`;
     const style = `${paddingStyle(resolveSpacing(settings, 'desktop'))} text-align:${props.align};`;
-    return moduleTableRow(cell(button, style));
+    return moduleTableRow(cell(table, style));
   },
 };
 
@@ -177,20 +207,33 @@ const dividerDefinition: ModuleDefinition<DividerModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'basic',
-  createDefaultProps: () => ({ color: '#D9E2E5', thickness: 1 }),
+  createDefaultProps: () => ({ color: '#D9E2E5', thickness: 1, width: { desktop: percent(100) }, align: 'center' }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
   renderPreview: (module) => (
-    <hr style={{ border: 'none', borderTop: `${module.props.thickness}px solid ${module.props.color}`, margin: 0 }} />
+    <div style={{ textAlign: module.props.align ?? 'center' }}>
+      <hr
+        style={{
+          border: 'none',
+          borderTop: `${module.props.thickness}px solid ${module.props.color}`,
+          margin: 0,
+          width: widthCssValue(resolveDimension(module.props.width ?? { desktop: percent(100) }, 'desktop')),
+          display: 'inline-block',
+        }}
+      />
+    </div>
   ),
   renderEmailHtml: (module) => {
     const { props, settings } = module;
     const spacing = resolveSpacing(settings, 'desktop');
+    const resolvedWidth = resolveDimension(props.width ?? { desktop: percent(100) }, 'desktop');
     // The border lives on a nested single-cell table's <td> — no <div>
     // at all — kept as its own inner table (rather than putting the
     // border directly on the padded outer <td>) so the line still sits
-    // centered within the module's padding, exactly as before.
-    const borderCell = `<td style="border-top:${props.thickness}px solid ${props.color}; font-size:0; line-height:0;">&nbsp;</td>`;
-    const line = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>${borderCell}</tr></table>`;
+    // centered within the module's padding, exactly as before. `align`
+    // on the inner table (HTML attribute, not CSS margin) positions a
+    // narrower-than-100% line left/center/right.
+    const borderCell = cell('&nbsp;', `border-top:${props.thickness}px solid ${props.color}; font-size:0; line-height:0;`, { width: widthAttr(resolvedWidth) });
+    const line = `<table role="presentation" width="${widthAttr(resolvedWidth)}" cellpadding="0" cellspacing="0" border="0" align="${props.align ?? 'center'}"><tr>${borderCell}</tr></table>`;
     return moduleTableRow(cell(line, paddingStyle(spacing)));
   },
 };
@@ -207,12 +250,20 @@ const spacerDefinition: ModuleDefinition<SpacerModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'basic',
-  createDefaultProps: () => ({ height: 24 }),
+  createDefaultProps: () => ({ height: 24, mobileHeight: undefined }),
   createDefaultSettings: () => createResponsiveSettings({ paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }),
-  renderPreview: (module) => <div style={{ height: module.props.height }} />,
+  renderPreview: (module, viewport = 'desktop') => {
+    const height = viewport === 'mobile' && module.props.mobileHeight !== undefined
+      ? module.props.mobileHeight
+      : module.props.height;
+    return <div style={{ height }} />;
+  },
   renderEmailHtml: (module) => (
     // Table-cell height + non-breaking line-height, not an empty div —
-    // the email-safe spacer pattern.
+    // the email-safe spacer pattern. Desktop height is the static-export
+    // source of truth (mobileHeight is canvas-preview + data-model only,
+    // same convention as every other Desktop/Mobile property this pass —
+    // see edm.ts's EmailModuleSettings docstring).
     moduleTable(`<tr><td height="${module.props.height}" style="font-size:${module.props.height}px; line-height:${module.props.height}px;">&nbsp;</td></tr>`)
   ),
 };
@@ -238,7 +289,10 @@ function compositeDefinition(
       // no external network dependency; ImagePreview shows a builder
       // placeholder until a real URL is set.
       image: { src: '', alt: 'Image', width: { desktop: px(280) } },
-      text: { text: 'Add a short description next to your image.', align: 'left' },
+      text: {
+        text: 'Add a short description next to your image.', align: 'left',
+        fontFamily: DEFAULT_FONT_ID, fontSize: 15, color: '#333333', ctaText: '', ctaHref: '',
+      },
     }),
     createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING, { mobileOrder: 'image-first', mobileStack: true }),
     // Mobile view stacks image-over-text (mobileOrder decides which
@@ -255,7 +309,26 @@ function compositeDefinition(
         />
       );
       const textCol = (
-        <p style={{ margin: 0, textAlign: module.props.text.align }}>{module.props.text.text}</p>
+        <div>
+          <p
+            style={{
+              margin: 0,
+              textAlign: module.props.text.align,
+              fontFamily: fontStackFor(module.props.text.fontFamily),
+              fontSize: module.props.text.fontSize ?? 15,
+              color: module.props.text.color ?? '#333333',
+            }}
+          >
+            {module.props.text.text}
+          </p>
+          {module.props.text.ctaText && (
+            <p style={{ margin: '10px 0 0', textAlign: module.props.text.align }}>
+              <span style={{ display: 'inline-block', padding: '8px 16px', background: '#0082AD', color: '#FFFFFF', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
+                {module.props.text.ctaText}
+              </span>
+            </p>
+          )}
+        </div>
       );
       if (stacked) {
         const imageLeadsOnMobile = (module.settings.mobileOrder ?? (imageFirst ? 'image-first' : 'content-first')) === 'image-first';
@@ -281,11 +354,15 @@ function compositeDefinition(
         + `width="${widthAttr(resolvedWidth)}" style="display:block; width:100%; max-width:${widthCssValue(resolvedWidth)}; height:auto; border:0;" />`,
         'width:40%; vertical-align:top;',
       );
+      const ctaHtml = props.text.ctaText
+        ? `<a href="${escapeAttribute(sanitizeUrl(props.text.ctaHref))}" style="display:inline-block; padding:8px 16px; background-color:#0082AD; color:#FFFFFF; font-family:Arial,Helvetica,sans-serif; font-size:12px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(props.text.ctaText)}</a>`
+        : '';
       const textCell = cell(
         textLine(
           escapeHtml(props.text.text).replace(/\n/g, '<br>'),
-          `text-align:${props.text.align}; font-family:Arial,Helvetica,sans-serif; font-size:15px; color:#333333;`,
-        ),
+          `text-align:${props.text.align}; font-family:${fontStackFor(props.text.fontFamily)}; font-size:${props.text.fontSize ?? 15}px; color:${props.text.color ?? '#333333'};`,
+          ctaHtml ? 10 : 0,
+        ) + (ctaHtml ? textLine(ctaHtml, `text-align:${props.text.align};`) : ''),
         'width:60%; vertical-align:top;',
       );
       const cells = imageFirst ? `${imgCell}${textCell}` : `${textCell}${imgCell}`;

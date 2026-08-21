@@ -120,6 +120,51 @@ describe('module registry (Feature 04 catalog)', () => {
     }
   });
 
+  it('every registered module (all 53+) renders the centralized outer-module spacer TDs correctly — 0/0, left-only, right-only, both', () => {
+    const OUTER_TABLE_OPEN = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>';
+    const countOf = (haystack: string) => haystack.split(OUTER_TABLE_OPEN).length - 1;
+
+    for (const definition of definitions) {
+      // 0/0 — the standard outer module table is STILL present (one
+      // content <td>, no spacer <td>s) — not "no wrapper at all". Some
+      // modules, e.g. Divider, legitimately have their OWN internal
+      // font-size:0/line-height:0 cell, so the spacer-absence check
+      // matches the specific width-prefixed style wrapWithOuterSpacing
+      // emits, not the bare font-size:0/line-height:0 pair alone. The
+      // "wrapper applied exactly once" check compares against the
+      // module's raw (unwrapped) renderEmailHtml output — renderEmailBody
+      // must add exactly one more occurrence of the outer-table-open
+      // literal, proving the wrapper exists and is not double-applied.
+      const zero = createModule(definition.type, 0);
+      const zeroHtml = renderEmailBody({ width: 700, content: { version: 1, modules: [zero] } });
+      expect(zeroHtml, `${definition.type} (0/0)`).not.toMatch(/style="width:\d+(\.\d+)?(px|%); font-size:0; line-height:0;">&nbsp;<\/td>/);
+      const rawHtml = definition.renderEmailHtml(zero);
+      expect(countOf(zeroHtml), `${definition.type} (0/0 wrapper applied exactly once)`).toBe(countOf(rawHtml) + 1);
+
+      // Left-only.
+      const left = createModule(definition.type, 0);
+      left.settings.outerSpacing = { desktop: { left: { value: 12, unit: 'px' }, right: { value: 0, unit: 'px' } }, mobile: {} };
+      const leftHtml = renderEmailBody({ width: 700, content: { version: 1, modules: [left] } });
+      expect(leftHtml.match(/width:12px;[^>]*>&nbsp;<\/td>/g) ?? [], `${definition.type} (left-only)`).toHaveLength(1);
+      expect(countOf(leftHtml), `${definition.type} (left-only wrapper applied exactly once)`).toBe(countOf(rawHtml) + 1);
+
+      // Right-only.
+      const right = createModule(definition.type, 0);
+      right.settings.outerSpacing = { desktop: { left: { value: 0, unit: 'px' }, right: { value: 18, unit: 'px' } }, mobile: {} };
+      const rightHtml = renderEmailBody({ width: 700, content: { version: 1, modules: [right] } });
+      expect(rightHtml.match(/width:18px;[^>]*>&nbsp;<\/td>/g) ?? [], `${definition.type} (right-only)`).toHaveLength(1);
+      expect(countOf(rightHtml), `${definition.type} (right-only wrapper applied exactly once)`).toBe(countOf(rawHtml) + 1);
+
+      // Both.
+      const both = createModule(definition.type, 0);
+      both.settings.outerSpacing = { desktop: { left: { value: 12, unit: 'px' }, right: { value: 18, unit: 'px' } }, mobile: {} };
+      const bothHtml = renderEmailBody({ width: 700, content: { version: 1, modules: [both] } });
+      expect(bothHtml.match(/width:12px;[^>]*>&nbsp;<\/td>/g) ?? [], `${definition.type} (both) left`).toHaveLength(1);
+      expect(bothHtml.match(/width:18px;[^>]*>&nbsp;<\/td>/g) ?? [], `${definition.type} (both) right`).toHaveLength(1);
+      expect(countOf(bothHtml), `${definition.type} (both wrapper applied exactly once)`).toBe(countOf(rawHtml) + 1);
+    }
+  });
+
   it('every definition\'s createDefaultSettings() returns the current desktop/mobile/outerSpacing shape', () => {
     for (const definition of definitions) {
       const settings = definition.createDefaultSettings();

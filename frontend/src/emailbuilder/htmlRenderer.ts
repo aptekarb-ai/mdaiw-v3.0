@@ -1,7 +1,5 @@
 import type { EmailDocumentContent } from './edm';
-import { resolveOuterSpacing } from './edm';
-import { getModuleDefinition } from './moduleRegistry';
-import { wrapWithOuterSpacing } from './registryCore';
+import { renderModuleWithOuterStructure } from './registryCore';
 
 export interface RenderableEmail {
   width: number;
@@ -15,25 +13,16 @@ export interface RenderableEmail {
 // scripting (AMPScript/Marketo tokens/HubL/...) is not implemented here —
 // that is a future platform-adapter layer.
 //
-// Left/right OUTER spacing (settings.outerSpacing) is applied HERE, once,
-// uniformly around every module's own HTML — not inside each module
-// definition — so all 53+ built-ins (and any future one) get it for
-// free. See registryCore.ts's wrapWithOuterSpacing.
+// Left/right OUTER spacing (settings.outerSpacing) is applied uniformly
+// around every module's own HTML — not inside each module definition —
+// via the single centralized renderModuleWithOuterStructure, so all 53+
+// built-ins (and any future one) get it for free, whether top-level
+// (here) or nested inside a Layout column (layoutCatalog.tsx uses the
+// exact same function).
 export function renderEmailBody(document: RenderableEmail): string {
   const modules = [...document.content.modules].sort((a, b) => a.order - b.order);
   const rows = modules
-    .map((module) => {
-      const definition = getModuleDefinition(module.type);
-      if (!definition) return '';
-      // Desktop is the source of truth for today's single static HTML
-      // export — see edm.ts's EmailModuleSettings docstring. The
-      // resolver (not this call site) is where mobile-inheritance logic
-      // lives, so Feature 07 can call it with 'mobile' without touching
-      // this file.
-      const resolvedOuterSpacing = resolveOuterSpacing(module.settings, 'desktop');
-      const bodyHtml = wrapWithOuterSpacing(definition.renderEmailHtml(module), resolvedOuterSpacing);
-      return `<tr><td>${bodyHtml}</td></tr>`;
-    })
+    .map((module) => `<tr><td>${renderModuleWithOuterStructure(module)}</td></tr>`)
     .join('');
 
   return (

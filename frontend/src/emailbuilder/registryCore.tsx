@@ -4,7 +4,7 @@ import type {
   EmailColumn, EmailModule, EmailModuleSettings, EmailModuleType, HorizontalAlign, ModuleCategory,
   ModuleSpacingValues, OuterSpacing, OuterSpacingSides,
 } from './edm';
-import { DEFAULT_SPACING, ZERO_SPACING } from './edm';
+import { DEFAULT_SPACING, resolveOuterSpacing, ZERO_SPACING } from './edm';
 import type { DimensionValue, PixelBounds } from './dimensions';
 import { px, widthCssValue } from './dimensions';
 
@@ -39,8 +39,26 @@ export type ModuleImagePosition = 'left' | 'right' | 'top' | 'background';
 export interface SchemaField {
   key: string;
   label: string;
-  kind: 'text' | 'textarea' | 'url' | 'color' | 'number';
+  // Feature 06 additions: 'select' (a closed enum — pass `options`),
+  // 'align' (the shared left/center/right control), 'toggle' (boolean
+  // checkbox), 'font' (the EMAIL_SAFE_FONTS whitelist select).
+  kind: 'text' | 'textarea' | 'url' | 'color' | 'number' | 'select' | 'align' | 'toggle' | 'font';
   group: 'content' | 'style';
+  // Required when kind === 'select'; ignored otherwise.
+  options?: { value: string; label: string }[];
+}
+
+// Feature 06 — see ModuleDefinition.repeatableField's docstring.
+export interface RepeatableFieldConfig<Item> {
+  path: string;
+  group: 'content' | 'style';
+  label: string;
+  itemLabel: (item: Item, index: number) => string;
+  createItem: () => Item;
+  renderItemFields: (item: Item, update: (patch: Partial<Item>) => void) => ReactNode;
+  minItems?: number;
+  maxItems?: number;
+  addLabel?: string;
 }
 
 // A module definition owns everything the builder needs for one module
@@ -64,6 +82,16 @@ export interface ModuleDefinition<Props = Record<string, unknown>> {
   platformCompatibility: ModulePlatform[];
   propertyEditor: 'text' | 'image' | 'button' | 'composite' | 'basic' | 'schema';
   editableFields?: SchemaField[];
+  // Feature 06 — declarative repeatable-list editing (instruction 1:
+  // schema-driven, not a growing switch). Used by any module whose props
+  // contain a bounded user-editable array (header nav links, social/
+  // footer platform links, product cards) — one shared
+  // RepeatableItemEditor renders it, keyed off `path` (dot path into
+  // props, one level, matching SchemaField's own path convention).
+  // `any` here mirrors AnyModuleDefinition's existing heterogeneity —
+  // each definition supplies its own item shape.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  repeatableField?: RepeatableFieldConfig<any>;
   createDefaultProps: () => Props;
   createDefaultSettings: () => EmailModuleSettings;
   // Layout-family definitions only (Feature 05) — one EmailColumn per
@@ -144,8 +172,22 @@ export function paddingStyle(spacing: ModuleSpacingValues): string {
   return `padding:${spacing.paddingTop}px ${spacing.paddingRight}px ${spacing.paddingBottom}px ${spacing.paddingLeft}px;`;
 }
 
-export function cell(content: string, extraStyle = ''): string {
-  return `<td style="${extraStyle}">${content}</td>`;
+export interface CellAttrs {
+  // Emits an explicit HTML `width` attribute alongside the CSS width
+  // already carried in `extraStyle` — belt-and-suspenders for older/
+  // partial email-client CSS support, same convention already used by
+  // the Image module's own <img width="..." style="width:..."> pairing.
+  width?: string;
+  // Feature 06 (instruction 10) — pairs with an inline background-color
+  // in `extraStyle`; the `bgcolor` HTML attribute is honored by clients
+  // that ignore or strip inline background-color CSS.
+  bgcolor?: string;
+}
+
+export function cell(content: string, extraStyle = '', attrs: CellAttrs = {}): string {
+  const widthPart = attrs.width !== undefined ? ` width="${attrs.width}"` : '';
+  const bgcolorPart = attrs.bgcolor ? ` bgcolor="${attrs.bgcolor}"` : '';
+  return `<td${widthPart}${bgcolorPart} style="${extraStyle}">${content}</td>`;
 }
 
 export function multiCell(cellsHtml: string[]): string {
@@ -180,19 +222,22 @@ export function textLine(content: string, style = '', gapBelow = 0): string {
   return `<span style="display:block; ${gap}${style}">${content}</span>`;
 }
 
-// Left/right OUTER spacing (gutters), applied once, uniformly, around
-// EVERY module's own HTML — see htmlRenderer.ts::renderEmailBody, the
-// single call site. Email-safe: spacer <td>s in a nested presentation
-// table, never CSS margin on a div. A side with value 0 emits no cell at
-// all (no unnecessary spacer markup). Takes an already-resolved
-// {left,right} pair — callers resolve the viewport via
+// Every module ALWAYS renders through this standard outer module table —
+// see renderModuleWithOuterStructure below, the single per-module call
+// site (used for both top-level modules and modules nested inside a
+// Layout column). The outer table exists even at Left=0/Right=0 (a
+// single content <td>, no spacer <td>s) — every module has the SAME
+// structural contract (OUTER TABLE > TR > optional left spacer TD,
+// required content TD, optional right spacer TD), not "wrapped only if
+// spacing is non-zero". Email-safe: spacer <td>s in a nested
+// presentation table, never CSS margin on a div. Takes an
+// already-resolved {left,right} pair — callers resolve the viewport via
 // edm.ts::resolveOuterSpacing first, so this stays viewport-agnostic.
 export function wrapWithOuterSpacing(bodyHtml: string, outerSpacing: OuterSpacingSides | undefined): string {
   const left = outerSpacing?.left;
   const right = outerSpacing?.right;
   const leftActive = Boolean(left && left.value > 0);
   const rightActive = Boolean(right && right.value > 0);
-  if (!leftActive && !rightActive) return bodyHtml;
 
   const spacerCell = (dimension: DimensionValue) => {
     const widthValue = dimension.unit === '%' ? `${dimension.value}%` : String(Math.round(dimension.value));
@@ -206,6 +251,24 @@ export function wrapWithOuterSpacing(bodyHtml: string, outerSpacing: OuterSpacin
     + (rightActive ? spacerCell(right as DimensionValue) : '')
     + '</tr></table>'
   );
+}
+
+// The single centralized "outer module structure" entry point (feature
+// spec: "Do NOT manually implement this in all 53 module renderers").
+// Every module — top-level (htmlRenderer.ts) or nested inside a Layout
+// column (layoutCatalog.tsx) — is rendered through THIS function, never
+// by calling definition.renderEmailHtml directly. It resolves the
+// module's own outer-spacer settings and wraps its (unmodified) internal
+// content HTML with wrapWithOuterSpacing — the module definition itself
+// only ever renders its internal content and never has to know about
+// outer spacer columns. Desktop is the resolution source of truth here,
+// same convention as every other Desktop/Mobile property in the static
+// HTML export (see edm.ts's EmailModuleSettings docstring).
+export function renderModuleWithOuterStructure(module: EmailModule): string {
+  const definition = resolveModuleDefinition(module.type);
+  if (!definition) return '';
+  const resolvedOuterSpacing = resolveOuterSpacing(module.settings, 'desktop');
+  return wrapWithOuterSpacing(definition.renderEmailHtml(module), resolvedOuterSpacing);
 }
 
 // Builder-canvas-only: shown whenever no image URL is set yet, or the

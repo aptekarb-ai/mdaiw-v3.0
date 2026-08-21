@@ -61,6 +61,7 @@ function editableFields(hasImage: boolean): SchemaField[] {
   fields.push(
     { key: 'backgroundColor', label: 'Background color', kind: 'color', group: 'style' },
     { key: 'textColor', label: 'Text color', kind: 'color', group: 'style' },
+    { key: 'align', label: 'Alignment', kind: 'align', group: 'style' },
   );
   return fields;
 }
@@ -108,11 +109,11 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
       const image = <ImagePreview src={props.imageSrc} alt={props.imageAlt} width={px(480)} align="center" />;
 
       if (variant.layout === 'image-top') {
-        return <div style={{ textAlign: 'center', background: props.backgroundColor }}>{image}{headline}{subtext}{button}</div>;
+        return <div style={{ textAlign: props.align, background: props.backgroundColor }}>{image}{headline}{subtext}{button}</div>;
       }
       if (variant.layout === 'background') {
         return (
-          <div style={{ background: props.backgroundColor, padding: 24, textAlign: 'center', borderRadius: 8 }}>
+          <div style={{ background: props.backgroundColor, padding: 24, textAlign: props.align, borderRadius: 8 }}>
             {headline}{subtext}{button}
           </div>
         );
@@ -128,7 +129,7 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
         );
       }
       // text-only / centered
-      return <div style={{ textAlign: 'center', background: props.backgroundColor }}>{headline}{subtext}{button}</div>;
+      return <div style={{ textAlign: props.align, background: props.backgroundColor }}>{headline}{subtext}{button}</div>;
     },
     renderEmailHtml: (module) => {
       const { props, settings } = module;
@@ -160,10 +161,10 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
         // No VML fallback for Outlook Classic — a documented MVP
         // limitation (see the master prompt's honesty requirements).
         const safeImageUrl = escapeAttribute(sanitizeUrl(props.imageSrc));
-        const bgCellStyle = `${containerStyle} background-image:url('${safeImageUrl}'); background-size:cover; background-position:center; text-align:center;`;
+        const bgCellStyle = `${containerStyle} background-image:url('${safeImageUrl}'); background-size:cover; background-position:center; text-align:${props.align};`;
         const bgTable = (
           `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">`
-          + `<tr><td align="center" background="${safeImageUrl}" style="${bgCellStyle}">`
+          + `<tr><td align="${props.align}" background="${safeImageUrl}" style="${bgCellStyle}">`
           + `${headlineHtml}${subtextHtml}${buttonHtml}`
           + '</td></tr></table>'
         );
@@ -178,7 +179,7 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
           + '</table>'
         )
         : `${headlineHtml}${subtextHtml}${buttonHtml}`;
-      return moduleTableRow(cell(bodyHtml, `${containerStyle} text-align:center;`));
+      return moduleTableRow(cell(bodyHtml, `${containerStyle} text-align:${props.align};`));
     },
   };
 }

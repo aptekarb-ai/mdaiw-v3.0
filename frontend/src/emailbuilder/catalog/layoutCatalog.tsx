@@ -2,7 +2,7 @@ import type { EmailModuleType, LayoutModuleProps } from '../edm';
 import { ZERO_SPACING, resolveColumnGutter, resolveSpacing } from '../edm';
 import { widthCssValue } from '../dimensions';
 import {
-  GENERIC_ONLY, createResponsiveSettings, moduleTable, paddingStyle, resolveModuleDefinition,
+  GENERIC_ONLY, createResponsiveSettings, moduleTable, paddingStyle, renderModuleWithOuterStructure,
   type ModuleDefinition,
 } from '../registryCore';
 import { createEmptyColumns } from '../layoutModel';
@@ -44,9 +44,12 @@ function layoutDefinition(
     // <td width="N%" valign="...">, with a FIXED-px spacer <td> between
     // adjacent columns only when the gutter is > 0 (0 emits nothing, same
     // convention as wrapWithOuterSpacing's outer spacer cells). Nested
-    // modules render through their OWN definition's renderEmailHtml via
-    // resolveModuleDefinition — the exact same table-first contract every
-    // top-level module already uses; no div-wrapping special case.
+    // modules render through renderModuleWithOuterStructure — the SAME
+    // centralized outer-module-structure entry point every top-level
+    // module goes through in htmlRenderer.ts — so a nested module's own
+    // Left/Right Outer Spacer settings are honored exactly like a
+    // top-level module's, independently of the parent Layout's own outer
+    // spacer values. No div-wrapping special case.
     renderEmailHtml: (module) => {
       const columns = module.columns ?? createEmptyColumns(module.props.columnWidths.length);
       const gutterDimension = resolveColumnGutter(module.settings, 'desktop');
@@ -59,9 +62,7 @@ function layoutDefinition(
         const background = column.settings.backgroundColor ? `background-color:${column.settings.backgroundColor};` : '';
         const innerHtml = column.modules.length === 0
           ? '&nbsp;'
-          : column.modules
-            .map((nested) => resolveModuleDefinition(nested.type)?.renderEmailHtml(nested) ?? '')
-            .join('');
+          : column.modules.map((nested) => renderModuleWithOuterStructure(nested)).join('');
         const columnCell = (
           `<td width="${width}%" valign="${valign}" `
           + `style="width:${width}%; vertical-align:${valign}; ${background}${paddingStyle(spacing)}">`

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderEmailBody, renderEmailDocument } from './htmlRenderer';
 import { createModule } from './moduleFactory';
+import { getModuleDefinition } from './moduleRegistry';
 import type { EmailModule, TextModuleProps, ButtonModuleProps, ImageModuleProps } from './edm';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper accepts modules narrowed to any specific Props type
@@ -108,10 +109,19 @@ describe('renderEmailBody', () => {
 });
 
 describe('renderEmailBody — outer left/right spacing', () => {
-  it('emits no spacer <td> when both sides are 0 (the default)', () => {
+  it('always wraps in the standard outer module table, even at 0/0 — a single content <td>, no spacer <td>s', () => {
     const textModule = createModule('text', 0);
     const html = renderEmailBody(withModules([textModule]));
+    // No spacer <td> (0/0 means no spacer columns, not no outer table).
     expect(html).not.toMatch(/font-size:0; line-height:0;">&nbsp;<\/td>/);
+    // The outer wrapper table IS present: renderEmailBody's own output
+    // must contain exactly one MORE occurrence of the outer-table-open
+    // literal than the module's raw (unwrapped) renderEmailHtml does —
+    // i.e. the outer wrapper was prepended, not skipped.
+    const OUTER_TABLE_OPEN = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>';
+    const countOf = (haystack: string) => haystack.split(OUTER_TABLE_OPEN).length - 1;
+    const rawHtml = getModuleDefinition('text').renderEmailHtml(textModule);
+    expect(countOf(html)).toBe(countOf(rawHtml) + 1);
   });
 
   it('emits a left-only spacer <td> when only left is set', () => {
@@ -253,7 +263,11 @@ describe('Feature 05 — nested layout rendering', () => {
     layout.columns![0].modules.push(text as unknown as EmailModule);
 
     const html = renderEmailBody(withModules([layout]));
-    const columnCells = html.match(/<td width="\d+(\.\d+)?%"/g) ?? [];
+    // Scoped to layout column cells specifically (they carry `valign`,
+    // unlike a nested module's own width-bearing <td>, e.g. Text's
+    // Feature-06 width control) — a nested module contributing its own
+    // width="...%" cell must not inflate this count.
+    const columnCells = html.match(/<td width="\d+(\.\d+)?%" valign=/g) ?? [];
     expect(columnCells).toHaveLength(count);
     expect(html).toContain('Nested text content');
     expect(html).toContain('<table');
@@ -314,6 +328,47 @@ describe('Feature 05 — nested layout rendering', () => {
     };
     const html = renderEmailBody(withModules([layout]));
     expect(html).toContain('width="20"');
+  });
+
+  it('a module nested inside a Layout column honors its own outer spacer, independently of the parent Layout\'s outer spacer', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    // Parent Layout has NO outer spacing of its own.
+    layout.settings = { ...layout.settings, outerSpacing: { desktop: { left: { value: 0, unit: 'px' }, right: { value: 0, unit: 'px' } }, mobile: {} } };
+    const text = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    text.props = { ...text.props, text: 'Nested with its own spacer' };
+    text.settings = { ...text.settings, outerSpacing: { desktop: { left: { value: 10, unit: 'px' }, right: { value: 0, unit: 'px' } }, mobile: {} } };
+    layout.columns![0].modules.push(text as unknown as EmailModule);
+
+    const html = renderEmailBody(withModules([layout]));
+    // Exactly one 10px spacer cell (the nested Text's left spacer) —
+    // nothing from the (unset) parent Layout outer spacer.
+    const spacerCells = html.match(/width:10px;[^>]*>&nbsp;<\/td>/g) ?? [];
+    expect(spacerCells).toHaveLength(1);
+    expect(html).toContain('Nested with its own spacer');
+  });
+
+  it('a module nested inside a Layout column supports Left-only, Right-only, and both-sides spacers, same as top-level', () => {
+    const leftOnly = createModule('layout-1col', 0);
+    const leftText = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    leftText.settings = { ...leftText.settings, outerSpacing: { desktop: { left: { value: 20, unit: 'px' }, right: { value: 0, unit: 'px' } }, mobile: {} } };
+    leftOnly.columns![0].modules.push(leftText as unknown as EmailModule);
+    const leftHtml = renderEmailBody(withModules([leftOnly]));
+    expect(leftHtml.match(/width:20px;[^>]*>&nbsp;<\/td>/g) ?? []).toHaveLength(1);
+
+    const rightOnly = createModule('layout-1col', 0);
+    const rightText = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    rightText.settings = { ...rightText.settings, outerSpacing: { desktop: { left: { value: 0, unit: 'px' }, right: { value: 30, unit: 'px' } }, mobile: {} } };
+    rightOnly.columns![0].modules.push(rightText as unknown as EmailModule);
+    const rightHtml = renderEmailBody(withModules([rightOnly]));
+    expect(rightHtml.match(/width:30px;[^>]*>&nbsp;<\/td>/g) ?? []).toHaveLength(1);
+
+    const both = createModule('layout-1col', 0);
+    const bothText = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    bothText.settings = { ...bothText.settings, outerSpacing: { desktop: { left: { value: 20, unit: 'px' }, right: { value: 30, unit: 'px' } }, mobile: {} } };
+    both.columns![0].modules.push(bothText as unknown as EmailModule);
+    const bothHtml = renderEmailBody(withModules([both]));
+    expect(bothHtml.match(/width:20px;[^>]*>&nbsp;<\/td>/g) ?? []).toHaveLength(1);
+    expect(bothHtml.match(/width:30px;[^>]*>&nbsp;<\/td>/g) ?? []).toHaveLength(1);
   });
 
   it('a layout module with no columns key at all (unnormalized) still renders without throwing', () => {

@@ -238,10 +238,20 @@ export function createEmptyContent(): EmailDocumentContent {
 export interface TextModuleProps {
   text: string;
   align: HorizontalAlign;
+  // Feature 06 — a whitelisted EMAIL_SAFE_FONTS id, never raw CSS (see
+  // fonts.ts). Optional so pre-Feature-06 drafts normalize to the
+  // default rather than requiring a destructive migration.
+  fontFamily?: string;
   fontSize: number;
   fontWeight: 400 | 700;
   color: string;
   lineHeight: number;
+  // Feature 06 — '' (the normalized default) means "no background",
+  // matching every other optional color field's convention in this file.
+  backgroundColor?: string;
+  // Feature 06 — optional; undefined/omitted behaves exactly as before
+  // (fluid, no explicit width attribute/style beyond 100% content flow).
+  width?: ResponsiveDimension;
 }
 
 export interface ImageModuleProps {
@@ -250,7 +260,11 @@ export interface ImageModuleProps {
   width: ResponsiveDimension;
   align: HorizontalAlign;
   href: string;
+  // Feature 06 — '' means "no background" (transparent).
+  backgroundColor?: string;
 }
+
+export type ButtonWidthMode = 'auto' | 'fixed' | 'full';
 
 export interface ButtonModuleProps {
   text: string;
@@ -260,6 +274,15 @@ export interface ButtonModuleProps {
   textColor: string;
   fontSize: number;
   borderRadius: number;
+  // Feature 06 — width/border/padding controls (instruction 15). All
+  // optional so pre-Feature-06 drafts normalize to the exact prior
+  // rendered appearance (auto width, no border, 12px/24px padding).
+  widthMode?: ButtonWidthMode;
+  fixedWidth?: number;
+  borderColor?: string;
+  borderWidth?: number;
+  paddingHorizontal?: number;
+  paddingVertical?: number;
 }
 
 export interface LayoutModuleProps {
@@ -274,18 +297,41 @@ export interface ImageRef {
   width: ResponsiveDimension;
 }
 
+export interface CompositeTextRef {
+  text: string;
+  align: HorizontalAlign;
+  // Feature 06 — optional typography, defaults match the pre-Feature-06
+  // rendered appearance exactly (15px, #333333, Arial).
+  fontFamily?: string;
+  fontSize?: number;
+  color?: string;
+  // Feature 06 — optional CTA (instruction 21: "CTA text/URL if module
+  // includes CTA"). Empty ctaText means no CTA renders, same convention
+  // as CtaModuleProps's optional heading/text.
+  ctaText?: string;
+  ctaHref?: string;
+}
+
 export interface CompositeModuleProps {
   image: ImageRef;
-  text: Pick<TextModuleProps, 'text' | 'align'>;
+  text: CompositeTextRef;
 }
 
 export interface DividerModuleProps {
   color: string;
   thickness: number;
+  // Feature 06 — instruction 19: "width, alignment". Optional so old
+  // drafts normalize to the prior full-width/centered appearance.
+  width?: ResponsiveDimension;
+  align?: HorizontalAlign;
 }
 
 export interface SpacerModuleProps {
   height: number;
+  // Feature 06 — instruction 20: "Desktop / Mobile override". Optional;
+  // undefined means "inherit the desktop height", same convention as
+  // ResponsiveDimension.mobile elsewhere in this file.
+  mobileHeight?: number;
 }
 
 // --- Feature 04 catalog-family prop shapes -----------------------------
@@ -302,6 +348,9 @@ export interface HeaderModuleProps {
   logoSrc: string;
   logoAlt: string;
   logoWidth: number;
+  // Feature 06 — instruction 25: "Logo Link". '' means the logo renders
+  // unlinked, same convention as every other optional href in this file.
+  logoHref?: string;
   preheaderText: string;
   navLinks: NavLink[];
   ctaText: string;
@@ -371,12 +420,23 @@ export interface ProductItem {
   imageAlt: string;
   name: string;
   price: string;
+  // Feature 06 — instruction 28: "Optional description". '' = omitted
+  // from the rendered card, same convention as every optional text field.
+  description?: string;
   ctaText: string;
   ctaHref: string;
 }
 
 export interface ProductGridModuleProps {
   items: ProductItem[];
+  // Feature 06 — instruction 28 Style: "Image width, Text alignment,
+  // Colors, CTA style" — applied uniformly across every card in the
+  // module (not per-item, to keep the editor to one style section rather
+  // than N). Optional; undefined normalizes to the pre-Feature-06
+  // hardcoded appearance (#0082AD / #FFFFFF, left-aligned text).
+  textAlign?: HorizontalAlign;
+  ctaBackgroundColor?: string;
+  ctaTextColor?: string;
 }
 
 export interface CtaModuleProps {
@@ -389,6 +449,13 @@ export interface CtaModuleProps {
   backgroundColor: string;
   textColor: string;
   align: HorizontalAlign;
+  // Feature 06 — instruction 27: "Button colors". Optional; undefined
+  // normalizes to the pre-Feature-06 hardcoded button colors
+  // (#76C043/#002D38 primary, transparent/#0082AD secondary outline).
+  ctaBackgroundColor?: string;
+  ctaTextColor?: string;
+  secondaryCtaBackgroundColor?: string;
+  secondaryCtaTextColor?: string;
 }
 
 export interface SocialPlatformLink {
@@ -408,6 +475,11 @@ export interface FooterModuleProps {
   legalText: string;
   unsubscribeText: string;
   unsubscribeHref: string;
+  // Feature 06 — instruction 31: "Preference text, Preference URL".
+  // Plain editable value fields only — no platform token scripting
+  // (that's Feature 10). '' = the preference link is omitted from output.
+  preferenceText?: string;
+  preferenceHref?: string;
   socialPlatforms: SocialPlatformLink[];
   align: HorizontalAlign;
 }

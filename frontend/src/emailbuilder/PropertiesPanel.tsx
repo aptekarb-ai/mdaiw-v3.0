@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type {
-  ButtonModuleProps, ColumnContainerSettings, CompositeModuleProps, EmailColumn, EmailModule, EmailModuleSettings,
-  HorizontalAlign, ImageModuleProps, TextModuleProps,
+  ButtonModuleProps, ButtonWidthMode, ColumnContainerSettings, CompositeModuleProps, EmailColumn, EmailModule,
+  EmailModuleSettings, HorizontalAlign, ImageModuleProps, TextModuleProps,
 } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import { IMAGE_WIDTH_PX_BOUNDS, getPath, setPath, type BuilderViewMode } from './registryCore';
@@ -11,6 +11,10 @@ import { ResponsiveDimensionField } from './DimensionControl';
 import {
   ColumnEditor, ColumnGutterEditor, ColumnWidthsEditor, LayoutStructureOverview, MobileStackingSettings,
 } from './ColumnEditor';
+import { ColorControl } from './ColorControl';
+import { TypographyControls } from './TypographyControls';
+import { RepeatableItemEditor } from './RepeatableItemEditor';
+import { DEFAULT_FONT_ID, EMAIL_SAFE_FONTS } from './fonts';
 import './PropertiesPanel.css';
 
 type PropertiesTab = 'content' | 'style' | 'settings';
@@ -59,7 +63,7 @@ function PropertySection({ title, children }: { title: string; children: ReactNo
   );
 }
 
-function AlignField({ value, onChange }: { value: HorizontalAlign; onChange: (value: HorizontalAlign) => void }) {
+export function AlignField({ value, onChange }: { value: HorizontalAlign; onChange: (value: HorizontalAlign) => void }) {
   return (
     <label className="properties-panel__field">
       <span>Alignment</span>
@@ -173,6 +177,7 @@ export function PropertiesPanel({
               <>
                 <PropertySection title="Outer Spacer Columns">
                   <OuterSpacingControls
+                    key={module.id}
                     settings={module.settings}
                     viewport={viewport}
                     onChange={(patch) => onUpdateSettings(module.id, patch)}
@@ -185,6 +190,13 @@ export function PropertiesPanel({
                     onChange={(patch) => onUpdateSettings(module.id, patch)}
                   />
                 </PropertySection>
+                {module.type === 'text' && (
+                  <TextWidthSettings
+                    module={module as unknown as EmailModule<TextModuleProps>}
+                    viewport={viewport}
+                    update={(patch) => onUpdateProps(module.id, patch)}
+                  />
+                )}
                 {isLayout && (
                   <PropertySection title="Responsive / Mobile Stacking">
                     <MobileStackingSettings module={module} onChange={(patch) => onUpdateSettings(module.id, patch)} />
@@ -232,23 +244,33 @@ function ModuleEditor({ module, tab, viewport, onUpdateProps }: ModuleEditorProp
       return <CompositeEditor module={module as unknown as EmailModule<CompositeModuleProps>} tab={tab} viewport={viewport} update={update} />;
     case 'schema':
       return <SchemaEditor module={module} tab={tab} update={update} />;
+    case 'basic':
+      if (module.type === 'divider') return <DividerEditor module={module} tab={tab} viewport={viewport} update={update} />;
+      if (module.type === 'spacer') return <SpacerEditor module={module} tab={tab} viewport={viewport} update={update} />;
+      return <p className="properties-panel__hint">Detailed editing for this module arrives in a future update.</p>;
     default:
-      return <BasicEditor module={module} tab={tab} update={update} />;
+      return <p className="properties-panel__hint">Detailed editing for this module arrives in a future update.</p>;
   }
 }
 
-// Feature 04 — generic content/style editor for catalog modules that
+// Feature 04/06 — generic content/style editor for catalog modules that
 // declare `editableFields` (registryCore.ts's SchemaField[]) instead of a
-// bespoke React editor. Only scalar leaf fields are editable this way —
-// repeating list fields (nav links, product items, ...) are Feature 06
-// (Module Element Editor) scope; see registryCore.ts's SchemaField docstring.
+// bespoke React editor, plus (Feature 06) a declarative `repeatableField`
+// (nav links, social platform links, product cards, ...) rendered
+// through the one shared RepeatableItemEditor. Scalar leaf fields cover
+// text/textarea/url/color/number/select/align/toggle/font — a module
+// only needs a bespoke React editor when it has genuinely specialized UX
+// (Text/Image/Button/Composite below), not merely "more than one field".
 function SchemaEditor({ module, tab, update }: {
   module: EmailModule; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
 }) {
   const definition = getModuleDefinition(module.type);
   const fields = (definition.editableFields ?? []).filter((field) => field.group === tab);
+  const repeatable = definition.repeatableField && definition.repeatableField.group === tab
+    ? definition.repeatableField
+    : null;
 
-  if (fields.length === 0) {
+  if (fields.length === 0 && !repeatable) {
     return (
       <p className="properties-panel__hint">
         Detailed editing for this module arrives in a future update.
@@ -260,7 +282,7 @@ function SchemaEditor({ module, tab, update }: {
     <>
       {fields.map((field) => {
         const rawValue = getPath(module.props, field.key);
-        const onChange = (nextValue: string | number) => {
+        const onChange = (nextValue: string | number | boolean) => {
           update(setPath(module.props as Record<string, unknown>, field.key, nextValue));
         };
 
@@ -274,10 +296,13 @@ function SchemaEditor({ module, tab, update }: {
         }
         if (field.kind === 'color') {
           return (
-            <label key={field.key} className="properties-panel__field">
-              <span>{field.label}</span>
-              <input type="color" value={String(rawValue ?? '#000000')} onChange={(e) => onChange(e.target.value)} />
-            </label>
+            <ColorControl
+              key={field.key}
+              label={field.label}
+              value={String(rawValue ?? '')}
+              onChange={onChange}
+              allowNone
+            />
           );
         }
         if (field.kind === 'number') {
@@ -285,6 +310,43 @@ function SchemaEditor({ module, tab, update }: {
             <label key={field.key} className="properties-panel__field">
               <span>{field.label}</span>
               <input type="number" value={Number(rawValue ?? 0)} onChange={(e) => onChange(Number(e.target.value))} />
+            </label>
+          );
+        }
+        if (field.kind === 'select') {
+          return (
+            <label key={field.key} className="properties-panel__field">
+              <span>{field.label}</span>
+              <select value={String(rawValue ?? field.options?.[0]?.value ?? '')} onChange={(e) => onChange(e.target.value)}>
+                {(field.options ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          );
+        }
+        if (field.kind === 'align') {
+          return (
+            <AlignField
+              key={field.key}
+              value={(rawValue as HorizontalAlign) ?? 'left'}
+              onChange={(align) => onChange(align)}
+            />
+          );
+        }
+        if (field.kind === 'toggle') {
+          return (
+            <label key={field.key} className="properties-panel__checkbox-field">
+              <input type="checkbox" checked={Boolean(rawValue)} onChange={(e) => onChange(e.target.checked)} />
+              <span>{field.label}</span>
+            </label>
+          );
+        }
+        if (field.kind === 'font') {
+          return (
+            <label key={field.key} className="properties-panel__field">
+              <span>{field.label}</span>
+              <select value={String(rawValue ?? DEFAULT_FONT_ID)} onChange={(e) => onChange(e.target.value)}>
+                {EMAIL_SAFE_FONTS.map((font) => <option key={font.id} value={font.id}>{font.label}</option>)}
+              </select>
             </label>
           );
         }
@@ -300,12 +362,28 @@ function SchemaEditor({ module, tab, update }: {
           </label>
         );
       })}
+      {repeatable && (
+        <div className="properties-panel__field-group">
+          <span className="properties-panel__field-group-label">{repeatable.label}</span>
+          <RepeatableItemEditor
+            items={(getPath(module.props, repeatable.path) as unknown[]) ?? []}
+            onChange={(items) => update(setPath(module.props as Record<string, unknown>, repeatable.path, items))}
+            createItem={repeatable.createItem}
+            itemLabel={repeatable.itemLabel}
+            renderItemEditor={repeatable.renderItemFields}
+            minItems={repeatable.minItems}
+            maxItems={repeatable.maxItems}
+            addLabel={repeatable.addLabel}
+          />
+        </div>
+      )}
     </>
   );
 }
 
 function TextEditor({ module, tab, update }: {
-  module: EmailModule<TextModuleProps>; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
+  module: EmailModule<TextModuleProps>; tab: 'content' | 'style';
+  update: (patch: Record<string, unknown>) => void;
 }) {
   const { props } = module;
   if (tab === 'content') {
@@ -323,30 +401,41 @@ function TextEditor({ module, tab, update }: {
   return (
     <>
       <PropertySection title="Typography">
-        <label className="properties-panel__field">
-          <span>Font size (px)</span>
-          <input type="number" min={8} max={72} value={props.fontSize} onChange={(e) => update({ fontSize: Number(e.target.value) })} />
-        </label>
-        <label className="properties-panel__field">
-          <span>Font weight</span>
-          <select value={props.fontWeight} onChange={(e) => update({ fontWeight: Number(e.target.value) })}>
-            <option value={400}>Normal</option>
-            <option value={700}>Bold</option>
-          </select>
-        </label>
-        <label className="properties-panel__field">
-          <span>Line height (px)</span>
-          <input type="number" min={10} max={120} value={props.lineHeight} onChange={(e) => update({ lineHeight: Number(e.target.value) })} />
-        </label>
+        <TypographyControls
+          fontFamily={{ value: props.fontFamily ?? DEFAULT_FONT_ID, onChange: (fontFamily) => update({ fontFamily }) }}
+          fontSize={{ value: props.fontSize, onChange: (fontSize) => update({ fontSize }) }}
+          fontWeight={{ value: props.fontWeight, onChange: (fontWeight) => update({ fontWeight }) }}
+          lineHeight={{ value: props.lineHeight, onChange: (lineHeight) => update({ lineHeight }) }}
+          color={{ value: props.color, onChange: (color) => update({ color }) }}
+        />
       </PropertySection>
-      <PropertySection title="Alignment & Color">
+      <PropertySection title="Alignment & Background">
         <AlignField value={props.align} onChange={(align) => update({ align })} />
-        <label className="properties-panel__field">
-          <span>Text color</span>
-          <input type="color" value={props.color} onChange={(e) => update({ color: e.target.value })} />
-        </label>
+        <ColorControl label="Background color" value={props.backgroundColor ?? ''} onChange={(backgroundColor) => update({ backgroundColor })} allowNone />
       </PropertySection>
     </>
+  );
+}
+
+// Text's width control lives in the Settings tab (instruction 4:
+// "Settings: Width where relevant"), unlike Image's (Style tab, instruction
+// 11) — the Settings tab is rendered directly by PropertiesPanel rather
+// than through ModuleEditor, so this is called from there for `text`
+// modules only, right alongside Internal Padding/Outer Spacer Columns.
+function TextWidthSettings({ module, viewport, update }: {
+  module: EmailModule<TextModuleProps>; viewport: BuilderViewMode; update: (patch: Record<string, unknown>) => void;
+}) {
+  return (
+    <PropertySection title="Width">
+      <ResponsiveDimensionField
+        label="Width"
+        dimension={module.props.width ?? { desktop: { value: 100, unit: '%' } }}
+        viewport={viewport}
+        pxBounds={IMAGE_WIDTH_PX_BOUNDS}
+        onChange={(width) => update({ width })}
+      />
+      <p className="properties-panel__hint">Leave at 100% to fill the available content width.</p>
+    </PropertySection>
   );
 }
 
@@ -383,14 +472,18 @@ function ImageEditor({ module, tab, viewport, update }: {
         onChange={(width) => update({ width })}
       />
       <AlignField value={props.align} onChange={(align) => update({ align })} />
+      <ColorControl label="Background color" value={props.backgroundColor ?? ''} onChange={(backgroundColor) => update({ backgroundColor })} allowNone />
     </>
   );
 }
+
+const BUTTON_WIDTH_MODE_LABELS: Record<ButtonWidthMode, string> = { auto: 'Auto', fixed: 'Fixed', full: 'Full Width' };
 
 function ButtonEditor({ module, tab, update }: {
   module: EmailModule<ButtonModuleProps>; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
 }) {
   const { props } = module;
+  const widthMode: ButtonWidthMode = props.widthMode ?? 'auto';
   if (tab === 'content') {
     return (
       <>
@@ -410,23 +503,55 @@ function ButtonEditor({ module, tab, update }: {
       <PropertySection title="Layout">
         <AlignField value={props.align} onChange={(align) => update({ align })} />
         <label className="properties-panel__field">
+          <span>Width</span>
+          <select value={widthMode} onChange={(e) => update({ widthMode: e.target.value as ButtonWidthMode })}>
+            {(Object.keys(BUTTON_WIDTH_MODE_LABELS) as ButtonWidthMode[]).map((mode) => (
+              <option key={mode} value={mode}>{BUTTON_WIDTH_MODE_LABELS[mode]}</option>
+            ))}
+          </select>
+        </label>
+        {widthMode === 'fixed' && (
+          <label className="properties-panel__field">
+            <span>Fixed width (px)</span>
+            <input type="number" min={40} max={600} value={props.fixedWidth ?? 200} onChange={(e) => update({ fixedWidth: Number(e.target.value) })} />
+          </label>
+        )}
+        <label className="properties-panel__field">
           <span>Font size (px)</span>
           <input type="number" min={10} max={32} value={props.fontSize} onChange={(e) => update({ fontSize: Number(e.target.value) })} />
         </label>
-        <label className="properties-panel__field">
-          <span>Border radius (px)</span>
-          <input type="number" min={0} max={40} value={props.borderRadius} onChange={(e) => update({ borderRadius: Number(e.target.value) })} />
-        </label>
+      </PropertySection>
+      <PropertySection title="Padding">
+        <div className="properties-panel__typography-row">
+          <label className="properties-panel__field">
+            <span>Horizontal (px)</span>
+            <input type="number" min={0} max={80} value={props.paddingHorizontal ?? 24} onChange={(e) => update({ paddingHorizontal: Number(e.target.value) })} />
+          </label>
+          <label className="properties-panel__field">
+            <span>Vertical (px)</span>
+            <input type="number" min={0} max={40} value={props.paddingVertical ?? 12} onChange={(e) => update({ paddingVertical: Number(e.target.value) })} />
+          </label>
+        </div>
+      </PropertySection>
+      <PropertySection title="Border">
+        <div className="properties-panel__typography-row">
+          <label className="properties-panel__field">
+            <span>Width (px)</span>
+            <input type="number" min={0} max={10} value={props.borderWidth ?? 0} onChange={(e) => update({ borderWidth: Number(e.target.value) })} />
+          </label>
+          <label className="properties-panel__field">
+            <span>Radius (px)</span>
+            <input type="number" min={0} max={40} value={props.borderRadius} onChange={(e) => update({ borderRadius: Number(e.target.value) })} />
+          </label>
+        </div>
+        <ColorControl label="Border color" value={props.borderColor ?? ''} onChange={(borderColor) => update({ borderColor })} allowNone />
+        {props.borderRadius > 0 && (
+          <p className="properties-panel__hint">Rounded corners may not render in Outlook Classic — the button remains fully functional either way.</p>
+        )}
       </PropertySection>
       <PropertySection title="Color">
-        <label className="properties-panel__field">
-          <span>Background color</span>
-          <input type="color" value={props.backgroundColor} onChange={(e) => update({ backgroundColor: e.target.value })} />
-        </label>
-        <label className="properties-panel__field">
-          <span>Text color</span>
-          <input type="color" value={props.textColor} onChange={(e) => update({ textColor: e.target.value })} />
-        </label>
+        <ColorControl label="Background color" value={props.backgroundColor} onChange={(backgroundColor) => update({ backgroundColor })} />
+        <ColorControl label="Text color" value={props.textColor} onChange={(textColor) => update({ textColor })} />
       </PropertySection>
     </>
   );
@@ -464,6 +589,26 @@ function CompositeEditor({ module, tab, viewport, update }: {
             onChange={(e) => update({ text: { ...props.text, text: e.target.value } })}
           />
         </label>
+        <PropertySection title="Call to action (optional)">
+          <label className="properties-panel__field">
+            <span>Button text</span>
+            <input
+              type="text"
+              value={props.text.ctaText ?? ''}
+              placeholder="Leave blank for no button"
+              onChange={(e) => update({ text: { ...props.text, ctaText: e.target.value } })}
+            />
+          </label>
+          <label className="properties-panel__field">
+            <span>Button link</span>
+            <input
+              type="text"
+              value={props.text.ctaHref ?? ''}
+              placeholder="https://"
+              onChange={(e) => update({ text: { ...props.text, ctaHref: e.target.value } })}
+            />
+          </label>
+        </PropertySection>
       </>
     );
   }
@@ -476,51 +621,78 @@ function CompositeEditor({ module, tab, viewport, update }: {
         pxBounds={IMAGE_WIDTH_PX_BOUNDS}
         onChange={(width) => update({ image: { ...props.image, width } })}
       />
-      <AlignField value={props.text.align} onChange={(align) => update({ text: { ...props.text, align } })} />
+      <PropertySection title="Text typography">
+        <TypographyControls
+          fontFamily={{ value: props.text.fontFamily ?? DEFAULT_FONT_ID, onChange: (fontFamily) => update({ text: { ...props.text, fontFamily } }) }}
+          fontSize={{ value: props.text.fontSize ?? 15, onChange: (fontSize) => update({ text: { ...props.text, fontSize } }) }}
+          color={{ value: props.text.color ?? '#333333', onChange: (color) => update({ text: { ...props.text, color } }) }}
+        />
+        <AlignField value={props.text.align} onChange={(align) => update({ text: { ...props.text, align } })} />
+      </PropertySection>
     </>
   );
 }
 
-function BasicEditor({ module, tab, update }: {
-  module: EmailModule; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
+function DividerEditor({ module, tab, viewport, update }: {
+  module: EmailModule; tab: 'content' | 'style'; viewport: BuilderViewMode; update: (patch: Record<string, unknown>) => void;
 }) {
-  if (module.type === 'divider') {
-    const props = module.props as { color: string; thickness: number };
-    if (tab === 'style') {
-      return (
-        <>
-          <label className="properties-panel__field">
-            <span>Color</span>
-            <input type="color" value={props.color} onChange={(e) => update({ color: e.target.value })} />
-          </label>
-          <label className="properties-panel__field">
-            <span>Thickness (px)</span>
-            <input type="number" min={1} max={12} value={props.thickness} onChange={(e) => update({ thickness: Number(e.target.value) })} />
-          </label>
-        </>
-      );
-    }
+  const props = module.props as { color: string; thickness: number; width?: { desktop: { value: number; unit: 'px' | '%' } }; align?: HorizontalAlign };
+  if (tab === 'content') {
     return <p className="properties-panel__hint">A horizontal divider line.</p>;
   }
+  return (
+    <>
+      <ColorControl label="Color" value={props.color} onChange={(color) => update({ color })} />
+      <label className="properties-panel__field">
+        <span>Thickness (px)</span>
+        <input type="number" min={1} max={12} value={props.thickness} onChange={(e) => update({ thickness: Number(e.target.value) })} />
+      </label>
+      <ResponsiveDimensionField
+        label="Width"
+        dimension={props.width ?? { desktop: { value: 100, unit: '%' } }}
+        viewport={viewport}
+        pxBounds={IMAGE_WIDTH_PX_BOUNDS}
+        onChange={(width) => update({ width })}
+      />
+      <AlignField value={props.align ?? 'center'} onChange={(align) => update({ align })} />
+    </>
+  );
+}
 
-  if (module.type === 'spacer') {
-    const props = module.props as { height: number };
-    if (tab === 'content') {
-      return (
-        <label className="properties-panel__field">
-          <span>Height (px)</span>
-          <input type="number" min={4} max={400} value={props.height} onChange={(e) => update({ height: Number(e.target.value) })} />
-        </label>
-      );
-    }
+function SpacerEditor({ module, tab, viewport, update }: {
+  module: EmailModule; tab: 'content' | 'style'; viewport: BuilderViewMode; update: (patch: Record<string, unknown>) => void;
+}) {
+  const props = module.props as { height: number; mobileHeight?: number };
+  if (tab !== 'content') {
     return <p className="properties-panel__hint">Vertical blank space.</p>;
   }
-
-  // Layout modules — Feature 03 keeps these structural/visual only; a
-  // nested per-column content editor is Feature 05 (Layout Builder).
+  const isMobile = viewport === 'mobile';
+  const overridden = isMobile && props.mobileHeight !== undefined;
+  const resolvedHeight = isMobile && props.mobileHeight !== undefined ? props.mobileHeight : props.height;
   return (
-    <p className="properties-panel__hint">
-      Layout structure is fixed for this block. Column content editing arrives in a future update.
-    </p>
+    <>
+      <label className="properties-panel__field">
+        <span>Height ({isMobile ? 'Mobile' : 'Desktop'}) (px)</span>
+        <input
+          type="number"
+          min={4}
+          max={400}
+          value={resolvedHeight}
+          onChange={(e) => {
+            const next = Number(e.target.value);
+            update(isMobile ? { mobileHeight: next } : { height: next });
+          }}
+        />
+      </label>
+      {isMobile && (
+        overridden ? (
+          <button type="button" className="properties-panel__inherit-reset" onClick={() => update({ mobileHeight: undefined })}>
+            Use Desktop value
+          </button>
+        ) : (
+          <span className="properties-panel__inherit-hint">Inheriting Desktop value</span>
+        )
+      )}
+    </>
   );
 }

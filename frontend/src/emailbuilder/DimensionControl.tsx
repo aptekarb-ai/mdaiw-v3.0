@@ -8,6 +8,7 @@ interface DimensionControlProps {
   pxBounds: PixelBounds;
   onChange: (next: DimensionValue) => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
 // Generic reusable px/% control (instruction: "avoid duplicating separate
@@ -16,9 +17,24 @@ interface DimensionControlProps {
 // instead of a select — used for outer spacing, which stays px-only for
 // now (see OuterSpacingControls).
 export function DimensionControl({
-  value, allowedUnits = ['px', '%'], pxBounds, onChange, disabled,
+  value, allowedUnits = ['px', '%'], pxBounds, onChange, disabled, ariaLabel,
 }: DimensionControlProps) {
+  // Clamping the LOWER bound on every keystroke corrupts multi-digit
+  // typing (an intermediate digit below the minimum gets clamped up,
+  // and the next keystroke then lands on the clamped value instead of
+  // the digit sequence the user is typing — e.g. typing "20" into a
+  // min-of-8 field: "2" clamps to 8, then "0" makes "80"). The upper
+  // bound is still enforced while typing (it doesn't have this failure
+  // mode, and it keeps a runaway value from growing unbounded before
+  // the field loses focus); the lower bound is enforced on blur.
   const handleValueChange = (raw: string) => {
+    const numeric = Number(raw === '' ? 0 : raw);
+    if (!Number.isFinite(numeric)) return;
+    const max = value.unit === '%' ? 100 : pxBounds.pxMax;
+    onChange({ value: Math.min(numeric, max), unit: value.unit });
+  };
+
+  const handleValueBlur = (raw: string) => {
     const numeric = Number(raw);
     onChange(clampDimension({ value: numeric, unit: value.unit }, pxBounds));
   };
@@ -32,11 +48,13 @@ export function DimensionControl({
       <input
         type="number"
         className="dimension-control__value"
+        aria-label={ariaLabel}
         value={value.value}
         min={value.unit === '%' ? 0 : pxBounds.pxMin}
         max={value.unit === '%' ? 100 : pxBounds.pxMax}
         disabled={disabled}
         onChange={(event) => handleValueChange(event.target.value)}
+        onBlur={(event) => handleValueBlur(event.target.value)}
       />
       {allowedUnits.length > 1 ? (
         <select
@@ -86,6 +104,7 @@ export function ResponsiveDimensionField({
         value={resolved}
         pxBounds={pxBounds}
         allowedUnits={allowedUnits}
+        ariaLabel={`${label} (${isMobile ? 'Mobile' : 'Desktop'})`}
         onChange={(next) => {
           if (isMobile) {
             onChange({ ...dimension, mobile: next });

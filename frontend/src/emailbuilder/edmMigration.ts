@@ -10,10 +10,69 @@ import type {
   ModuleSpacingValues, OuterSpacing, OuterSpacingSides,
 } from './edm';
 import type { DimensionValue, ResponsiveDimension } from './dimensions';
-import { px } from './dimensions';
+import { percent, px } from './dimensions';
 import { createDefaultOuterSpacing } from './registryCore';
 import { createEmptyColumns, isLayoutModuleType } from './layoutModel';
 import { generateId } from './idGenerator';
+import { DEFAULT_FONT_ID } from './fonts';
+
+// Feature 06 — every new optional prop added this feature, with its
+// exact pre-Feature-06 rendered-appearance default (instruction 49/50:
+// "avoid undefined-state explosions... old drafts must normalize
+// cleanly... rather than destructive migrations"). Shallow, top-level
+// keys only; `composite.text` (one level nested) is handled separately
+// below since these tables assume a flat prop bag.
+const TOP_LEVEL_PROP_DEFAULTS: Partial<Record<EmailModuleType, Record<string, unknown>>> = {
+  text: { fontFamily: DEFAULT_FONT_ID, backgroundColor: '', width: { desktop: percent(100) } },
+  image: { backgroundColor: '' },
+  button: {
+    widthMode: 'auto', fixedWidth: 200, borderColor: '', borderWidth: 0, paddingHorizontal: 24, paddingVertical: 12,
+  },
+  divider: { width: { desktop: percent(100) }, align: 'center' },
+  'header-logo-center': { logoHref: '' },
+  'header-logo-left': { logoHref: '' },
+  'header-logo-nav': { logoHref: '' },
+  'header-logo-cta': { logoHref: '' },
+  'header-preheader-logo': { logoHref: '' },
+  'header-compact': { logoHref: '' },
+  'cta-centered': { ctaBackgroundColor: '#76C043', ctaTextColor: '#002D38', secondaryCtaBackgroundColor: '', secondaryCtaTextColor: '#0082AD' },
+  'cta-banner': { ctaBackgroundColor: '#76C043', ctaTextColor: '#002D38', secondaryCtaBackgroundColor: '', secondaryCtaTextColor: '#0082AD' },
+  'cta-text-cta': { ctaBackgroundColor: '#76C043', ctaTextColor: '#002D38', secondaryCtaBackgroundColor: '', secondaryCtaTextColor: '#0082AD' },
+  'cta-dual': { ctaBackgroundColor: '#76C043', ctaTextColor: '#002D38', secondaryCtaBackgroundColor: '', secondaryCtaTextColor: '#0082AD' },
+  'product-single': { textAlign: 'left', ctaBackgroundColor: '#0082AD', ctaTextColor: '#FFFFFF' },
+  'product-two-cards': { textAlign: 'left', ctaBackgroundColor: '#0082AD', ctaTextColor: '#FFFFFF' },
+  'product-three-cards': { textAlign: 'left', ctaBackgroundColor: '#0082AD', ctaTextColor: '#FFFFFF' },
+  'product-image-price-cta': { textAlign: 'left', ctaBackgroundColor: '#0082AD', ctaTextColor: '#FFFFFF' },
+  'product-grid': { textAlign: 'left', ctaBackgroundColor: '#0082AD', ctaTextColor: '#FFFFFF' },
+  'footer-simple-legal': { preferenceText: '', preferenceHref: '' },
+  'footer-social-legal': { preferenceText: '', preferenceHref: '' },
+  'footer-address-contact': { preferenceText: '', preferenceHref: '' },
+  'footer-preference-unsubscribe': { preferenceText: '', preferenceHref: '' },
+};
+
+const COMPOSITE_TEXT_DEFAULTS = { fontFamily: DEFAULT_FONT_ID, fontSize: 15, color: '#333333', ctaText: '', ctaHref: '' };
+const COMPOSITE_TYPES: EmailModuleType[] = ['image-text', 'text-image'];
+
+function backfillDefaults(type: EmailModuleType, props: Record<string, unknown>): Record<string, unknown> {
+  const defaults = TOP_LEVEL_PROP_DEFAULTS[type];
+  let next = props;
+  if (defaults) {
+    const missing: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(defaults)) {
+      if (!(key in next) || next[key] === undefined) missing[key] = value;
+    }
+    if (Object.keys(missing).length > 0) next = { ...next, ...missing };
+  }
+  if (COMPOSITE_TYPES.includes(type) && next.text && typeof next.text === 'object') {
+    const text = next.text as Record<string, unknown>;
+    const missing: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(COMPOSITE_TEXT_DEFAULTS)) {
+      if (!(key in text) || text[key] === undefined) missing[key] = value;
+    }
+    if (Object.keys(missing).length > 0) next = { ...next, text: { ...text, ...missing } };
+  }
+  return next;
+}
 
 // Module types whose top-level props.width was a plain px number before
 // this architecture (now ResponsiveDimension).
@@ -35,17 +94,18 @@ function upgradeWidth(width: unknown): ResponsiveDimension {
   return { desktop: { value: numeric, unit: 'px' } };
 }
 
-function normalizeProps(type: EmailModuleType, props: Record<string, unknown>): Record<string, unknown> {
+function normalizeProps(type: EmailModuleType, rawProps: Record<string, unknown>): Record<string, unknown> {
+  let props = rawProps;
   if (TOP_LEVEL_WIDTH_TYPES.includes(type) && 'width' in props) {
-    return { ...props, width: upgradeWidth(props.width) };
+    props = { ...props, width: upgradeWidth(props.width) };
   }
   if (NESTED_IMAGE_WIDTH_TYPES.includes(type) && props.image && typeof props.image === 'object') {
     const image = props.image as Record<string, unknown>;
     if ('width' in image) {
-      return { ...props, image: { ...image, width: upgradeWidth(image.width) } };
+      props = { ...props, image: { ...image, width: upgradeWidth(image.width) } };
     }
   }
-  return props;
+  return backfillDefaults(type, props);
 }
 
 function asPaddingNumber(value: unknown): number {

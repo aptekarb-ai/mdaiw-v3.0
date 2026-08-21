@@ -7,6 +7,7 @@ validate_content(). The allowed module-type set mirrors Feature 03's
 frontend module registry (frontend/src/emailbuilder/moduleRegistry.tsx);
 Feature 04's module library extends this set, not a redesign of it.
 """
+import re
 
 ALLOWED_MODULE_TYPES = frozenset({
     'layout-1col',
@@ -169,6 +170,7 @@ def validate_module_instance(module_type, props, settings, columns=None, prefix=
     if module_type in LAYOUT_MODULE_TYPES:
         _validate_column_widths(f'{prefix}.props.columnWidths', props.get('columnWidths'), module_type)
 
+    _validate_prop_conventions(f'{prefix}.props', props)
     _validate_settings(f'{prefix}.settings', settings, columns)
     _validate_columns(f'{prefix}.columns', columns, module_type, seen_ids if seen_ids is not None else set())
 
@@ -442,3 +444,77 @@ def _validate_column_widths(prefix, column_widths, module_type):
 
     if abs(total - 100) > COLUMN_WIDTH_TOTAL_TOLERANCE:
         raise EdmValidationError(f'{prefix} must total 100 percent (got {round(total, 2)}).')
+
+
+# --- Feature 06 — Module Element Editor: generic prop-value validation ---
+# The backend never trusted individual prop VALUES before this feature —
+# only the module tree's structural shape (id/type/order/settings/
+# columns). Building a full per-module-type JSON-schema validator for
+# every one of the 53 module prop shapes is out of proportion for this
+# pass (and was never required by any earlier feature either); instead,
+# this validates by KEY PATTERN, uniformly across every module type's
+# props (one level of nesting, matching SchemaField's own documented
+# one-level-nesting scope) — catching exactly the categories instructions
+# 39-42 call out (colors, font ids, unsafe URL schemes, bounded
+# repeatable lists) without a bespoke validator per type.
+HEX_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+UNSAFE_URL_PREFIXES = ('javascript:', 'data:', 'vbscript:')
+# Mirrors frontend/src/emailbuilder/fonts.ts's EMAIL_SAFE_FONTS ids exactly.
+EMAIL_SAFE_FONT_IDS = frozenset({'arial', 'helvetica', 'verdana', 'georgia', 'tahoma', 'trebuchet', 'times'})
+URL_KEY_NAMES = frozenset({'src', 'imageSrc', 'logoSrc'})
+# Mirrors the exact repeatable-list keys the frontend builds a bounded
+# RepeatableItemEditor for (headerCatalog.tsx/socialCatalog.tsx/
+# footerCatalog.tsx/productCatalog.tsx) — same max as each editor's own
+# `maxItems`, plus a generous cap on product `items` as a safety
+# backstop (product's own count is fixed per variant, not user-resizable,
+# but a malformed/tampered payload should still be rejected outright).
+REPEATABLE_LIST_MAX_LENGTH = {
+    'navLinks': 6,
+    'platforms': 6,
+    'socialPlatforms': 6,
+    'items': 12,
+}
+
+
+def _validate_hex_color(prefix, value):
+    if value == '':
+        return  # '' = "no color" — the convention used by every optional color field this feature introduces.
+    if not isinstance(value, str) or not HEX_COLOR_RE.match(value):
+        raise EdmValidationError(f'{prefix} must be a hex color like #003B49, or an empty string.')
+
+
+def _validate_safe_url_value(prefix, value):
+    if not isinstance(value, str):
+        return  # a non-string here is a shape error for something else to catch; this only screens strings.
+    lowered = value.strip().lower()
+    for scheme in UNSAFE_URL_PREFIXES:
+        if lowered.startswith(scheme):
+            raise EdmValidationError(f'{prefix} must not use an unsafe URL scheme ("{scheme}").')
+
+
+def _validate_font_id(prefix, value):
+    if value is None:
+        return
+    if not isinstance(value, str) or value not in EMAIL_SAFE_FONT_IDS:
+        raise EdmValidationError(f'{prefix} must be one of the whitelisted email-safe font ids.')
+
+
+def _validate_prop_conventions(prefix, value, depth=0):
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        key_prefix = f'{prefix}.{key}'
+        if key.lower().endswith('color'):
+            _validate_hex_color(key_prefix, item)
+        elif key == 'fontFamily':
+            _validate_font_id(key_prefix, item)
+        elif key.endswith('Href') or key.endswith('href') or key in URL_KEY_NAMES:
+            _validate_safe_url_value(key_prefix, item)
+        elif key in REPEATABLE_LIST_MAX_LENGTH and isinstance(item, list):
+            max_length = REPEATABLE_LIST_MAX_LENGTH[key]
+            if len(item) > max_length:
+                raise EdmValidationError(f'{key_prefix} must have at most {max_length} items.')
+            for index, entry in enumerate(item):
+                _validate_prop_conventions(f'{key_prefix}[{index}]', entry, depth + 1)
+        elif isinstance(item, dict) and depth < 1:
+            _validate_prop_conventions(key_prefix, item, depth + 1)

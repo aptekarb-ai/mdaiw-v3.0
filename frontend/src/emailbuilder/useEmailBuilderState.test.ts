@@ -132,7 +132,11 @@ describe('useEmailBuilderState', () => {
     expect(result.current.modules).toHaveLength(1);
     const inserted = result.current.modules[0];
     expect(inserted.type).toBe('header-logo-center');
-    expect(inserted.props).toEqual(saved().props);
+    // Feature 06 — normalization backfills new optional fields (e.g.
+    // header's logoHref) that predate this saved module's own creation,
+    // same as loading any older document; expected superset, not
+    // strict equality.
+    expect(inserted.props).toEqual(expect.objectContaining(saved().props));
     expect(inserted.id).not.toBe('');
     expect(result.current.selectedModuleId).toBe(inserted.id);
   });

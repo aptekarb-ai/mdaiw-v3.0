@@ -2,7 +2,34 @@ import type { EmailModuleType, HeaderModuleProps, NavLink } from '../edm';
 import { resolveSpacing } from '../edm';
 import { px } from '../dimensions';
 import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
-import { GENERIC_ONLY, ImagePreview, createResponsiveSettings, type ModuleDefinition, type SchemaField } from '../registryCore';
+import {
+  GENERIC_ONLY, ImagePreview, createResponsiveSettings, type ModuleDefinition, type RepeatableFieldConfig,
+  type SchemaField,
+} from '../registryCore';
+
+const MAX_NAV_LINKS = 6;
+
+const navLinksField: RepeatableFieldConfig<NavLink> = {
+  path: 'navLinks',
+  group: 'content',
+  label: 'Navigation links',
+  itemLabel: (item, index) => item.label.trim() || `Link ${index + 1}`,
+  createItem: () => ({ label: 'New Link', href: '' }),
+  maxItems: MAX_NAV_LINKS,
+  addLabel: 'Add nav link',
+  renderItemFields: (item, update) => (
+    <>
+      <label className="properties-panel__field">
+        <span>Label</span>
+        <input type="text" value={item.label} onChange={(e) => update({ label: e.target.value })} />
+      </label>
+      <label className="properties-panel__field">
+        <span>URL</span>
+        <input type="text" value={item.href} placeholder="https://" onChange={(e) => update({ href: e.target.value })} />
+      </label>
+    </>
+  ),
+};
 
 interface HeaderVariant {
   type: EmailModuleType;
@@ -53,6 +80,7 @@ function editableFields(variant: HeaderVariant): SchemaField[] {
   const fields: SchemaField[] = [
     { key: 'logoSrc', label: 'Logo image URL', kind: 'url', group: 'content' },
     { key: 'logoAlt', label: 'Logo alt text', kind: 'text', group: 'content' },
+    { key: 'logoHref', label: 'Logo link', kind: 'url', group: 'content' },
   ];
   if (variant.showPreheader) {
     fields.push({ key: 'preheaderText', label: 'Preheader text', kind: 'text', group: 'content' });
@@ -66,6 +94,7 @@ function editableFields(variant: HeaderVariant): SchemaField[] {
   fields.push(
     { key: 'logoWidth', label: 'Logo width (px)', kind: 'number', group: 'style' },
     { key: 'backgroundColor', label: 'Background color', kind: 'color', group: 'style' },
+    { key: 'align', label: 'Alignment', kind: 'align', group: 'style' },
   );
   return fields;
 }
@@ -84,10 +113,12 @@ function headerDefinition(variant: HeaderVariant): ModuleDefinition<HeaderModule
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
     editableFields: editableFields(variant),
+    repeatableField: variant.showNav ? navLinksField : undefined,
     createDefaultProps: () => ({
       logoSrc: '',
       logoAlt: 'Company logo',
       logoWidth: 160,
+      logoHref: '',
       preheaderText: 'View this email in your browser',
       navLinks: variant.showNav ? DEFAULT_NAV_LINKS : [],
       ctaText: 'Shop Now',
@@ -134,7 +165,10 @@ function headerDefinition(variant: HeaderVariant): ModuleDefinition<HeaderModule
       const { props, settings } = module;
       const spacing = resolveSpacing(settings, 'desktop');
       const containerStyle = `padding:${spacing.paddingTop}px ${spacing.paddingRight}px ${spacing.paddingBottom}px ${spacing.paddingLeft}px; background-color:${props.backgroundColor};`;
-      const logo = `<img src="${escapeAttribute(sanitizeUrl(props.logoSrc))}" alt="${escapeAttribute(props.logoAlt)}" width="${props.logoWidth}" style="display:block; width:${props.logoWidth}px; max-width:100%; height:auto; border:0;" />`;
+      const logoImg = `<img src="${escapeAttribute(sanitizeUrl(props.logoSrc))}" alt="${escapeAttribute(props.logoAlt)}" width="${props.logoWidth}" style="display:block; width:${props.logoWidth}px; max-width:100%; height:auto; border:0;" />`;
+      const logo = props.logoHref
+        ? `<a href="${escapeAttribute(sanitizeUrl(props.logoHref))}" target="_blank" rel="noopener noreferrer">${logoImg}</a>`
+        : logoImg;
 
       const preheaderRow = variant.showPreheader
         ? `<tr><td align="center" style="font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#66777D; padding-bottom:8px;">${escapeHtml(props.preheaderText)}</td></tr>`

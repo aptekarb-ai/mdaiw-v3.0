@@ -1,7 +1,53 @@
 import type { EmailModuleType, SocialModuleProps, SocialPlatformLink } from '../edm';
 import { DEFAULT_SPACING, resolveSpacing } from '../edm';
 import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
-import { GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition } from '../registryCore';
+import {
+  GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition,
+  type RepeatableFieldConfig,
+} from '../registryCore';
+
+// Feature 06 (instruction 30) — a closed set of common platform names to
+// pick from, plus a free-text option, rather than an unbounded free-text
+// "platform" field. Kept as plain labelled pills (no external icon
+// fonts/brand SVGs — see the module-level docstring below) so this list
+// only drives the label's starting value, never an icon lookup.
+export const SOCIAL_PLATFORM_PRESETS = ['Facebook', 'Instagram', 'LinkedIn', 'X', 'YouTube'];
+const MAX_SOCIAL_LINKS = 6;
+
+function socialLinksField(addLabel: string): RepeatableFieldConfig<SocialPlatformLink> {
+  return {
+    path: 'platforms',
+    group: 'content',
+    label: 'Social links',
+    itemLabel: (item, index) => item.label.trim() || `Link ${index + 1}`,
+    createItem: () => ({ label: 'Facebook', href: '' }),
+    maxItems: MAX_SOCIAL_LINKS,
+    addLabel,
+    renderItemFields: (item, update) => (
+      <>
+        <label className="properties-panel__field">
+          <span>Platform</span>
+          <select value={SOCIAL_PLATFORM_PRESETS.includes(item.label) ? item.label : 'Other'} onChange={(e) => update({ label: e.target.value === 'Other' ? '' : e.target.value })}>
+            {SOCIAL_PLATFORM_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}
+            <option value="Other">Other</option>
+          </select>
+          {!SOCIAL_PLATFORM_PRESETS.includes(item.label) && (
+            <input
+              type="text"
+              value={item.label}
+              placeholder="Platform name"
+              onChange={(e) => update({ label: e.target.value })}
+            />
+          )}
+        </label>
+        <label className="properties-panel__field">
+          <span>URL</span>
+          <input type="text" value={item.href} placeholder="https://" onChange={(e) => update({ href: e.target.value })} />
+        </label>
+      </>
+    ),
+  };
+}
 
 // No brand social-network SVGs are supplied to this project (see
 // MDAIW_Module1_HTML_Assets — no Facebook/Instagram/LinkedIn/X marks), so
@@ -41,7 +87,11 @@ function socialDefinition(variant: SocialVariant): ModuleDefinition<SocialModule
     imagePosition: null,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
-    editableFields: variant.showHeading ? [{ key: 'headingText', label: 'Heading', kind: 'text', group: 'content' }] : [],
+    editableFields: [
+      ...(variant.showHeading ? [{ key: 'headingText', label: 'Heading', kind: 'text' as const, group: 'content' as const }] : []),
+      { key: 'align', label: 'Alignment', kind: 'align' as const, group: 'style' as const },
+    ],
+    repeatableField: socialLinksField('Add social link'),
     createDefaultProps: () => ({
       headingText: 'Follow us',
       platforms: DEFAULT_PLATFORMS,

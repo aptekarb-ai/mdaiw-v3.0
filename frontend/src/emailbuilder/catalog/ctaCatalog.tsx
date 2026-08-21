@@ -38,17 +38,24 @@ function editableFields(layout: CtaLayout): SchemaField[] {
   fields.push(
     { key: 'backgroundColor', label: 'Background color', kind: 'color', group: 'style' },
     { key: 'textColor', label: 'Text color', kind: 'color', group: 'style' },
+    { key: 'ctaBackgroundColor', label: 'Button background color', kind: 'color', group: 'style' },
+    { key: 'ctaTextColor', label: 'Button text color', kind: 'color', group: 'style' },
+    { key: 'align', label: 'Alignment', kind: 'align', group: 'style' },
   );
   return fields;
 }
 
-function buttonPreview(text: string, primary = true) {
+const DEFAULT_PRIMARY_BUTTON_BG = '#76C043';
+const DEFAULT_PRIMARY_BUTTON_TEXT = '#002D38';
+const DEFAULT_SECONDARY_BUTTON_TEXT = '#0082AD';
+
+function buttonPreview(text: string, backgroundColor: string, textColor: string, primary = true) {
   return (
     <span style={{
       display: 'inline-block', padding: '10px 20px', margin: '0 4px',
-      background: primary ? '#76C043' : 'transparent',
-      border: primary ? 'none' : '1px solid #0082AD',
-      color: primary ? '#002D38' : '#0082AD',
+      background: backgroundColor,
+      border: primary ? 'none' : `1px solid ${textColor}`,
+      color: textColor,
       borderRadius: 6, fontWeight: 700, fontSize: 13,
     }}
     >
@@ -57,10 +64,10 @@ function buttonPreview(text: string, primary = true) {
   );
 }
 
-function buttonHtml(text: string, href: string, primary = true): string {
+function buttonHtml(text: string, href: string, backgroundColor: string, textColor: string, primary = true): string {
   const style = primary
-    ? 'background-color:#76C043; color:#002D38;'
-    : 'background-color:transparent; color:#0082AD; border:1px solid #0082AD;';
+    ? `background-color:${backgroundColor}; color:${textColor};`
+    : `background-color:${backgroundColor}; color:${textColor}; border:1px solid ${textColor};`;
   // display:inline-block (not margin) lets the parent cell's
   // text-align:center/right center or align this table — no CSS margin
   // needed. Horizontal gap between two of these (the "dual" layout) is
@@ -101,25 +108,32 @@ function ctaDefinition(variant: CtaVariant): ModuleDefinition<CtaModuleProps> {
       secondaryCtaHref: '',
       backgroundColor: variant.layout === 'banner' ? '#002D38' : '#FFFFFF',
       textColor: variant.layout === 'banner' ? '#FFFFFF' : '#002D38',
+      ctaBackgroundColor: DEFAULT_PRIMARY_BUTTON_BG,
+      ctaTextColor: DEFAULT_PRIMARY_BUTTON_TEXT,
+      secondaryCtaBackgroundColor: '',
+      secondaryCtaTextColor: DEFAULT_SECONDARY_BUTTON_TEXT,
       align: 'center',
     }),
     createDefaultSettings: () => createResponsiveSettings({ paddingTop: 24, paddingRight: 24, paddingBottom: 24, paddingLeft: 24 }),
     renderPreview: (module) => {
       const { props } = module;
+      const primaryBg = props.ctaBackgroundColor || DEFAULT_PRIMARY_BUTTON_BG;
+      const primaryText = props.ctaTextColor || DEFAULT_PRIMARY_BUTTON_TEXT;
+      const secondaryText = props.secondaryCtaTextColor || DEFAULT_SECONDARY_BUTTON_TEXT;
       if (variant.layout === 'text-cta') {
         return (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: props.backgroundColor, color: props.textColor }}>
             <p style={{ margin: 0 }}>{props.text}</p>
-            {buttonPreview(props.ctaText)}
+            {buttonPreview(props.ctaText, primaryBg, primaryText)}
           </div>
         );
       }
       return (
-        <div style={{ textAlign: 'center', background: props.backgroundColor, color: props.textColor, padding: variant.layout === 'banner' ? 16 : 0, borderRadius: variant.layout === 'banner' ? 8 : 0 }}>
+        <div style={{ textAlign: props.align, background: props.backgroundColor, color: props.textColor, padding: variant.layout === 'banner' ? 16 : 0, borderRadius: variant.layout === 'banner' ? 8 : 0 }}>
           {variant.layout !== 'centered' || props.heading ? <h3 style={{ margin: '0 0 6px', fontSize: 18 }}>{props.heading}</h3> : null}
           {props.text && <p style={{ margin: '0 0 12px' }}>{props.text}</p>}
-          {buttonPreview(props.ctaText)}
-          {variant.layout === 'dual' && buttonPreview(props.secondaryCtaText, false)}
+          {buttonPreview(props.ctaText, primaryBg, primaryText)}
+          {variant.layout === 'dual' && buttonPreview(props.secondaryCtaText, props.secondaryCtaBackgroundColor || 'transparent', secondaryText, false)}
         </div>
       );
     },
@@ -133,18 +147,22 @@ function ctaDefinition(variant: CtaVariant): ModuleDefinition<CtaModuleProps> {
       const textHtml = props.text
         ? textLine(escapeHtml(props.text), `font-family:Arial,Helvetica,sans-serif; font-size:14px; color:${props.textColor};`, 16)
         : '';
+      const primaryBg = props.ctaBackgroundColor || DEFAULT_PRIMARY_BUTTON_BG;
+      const primaryText = props.ctaTextColor || DEFAULT_PRIMARY_BUTTON_TEXT;
+      const secondaryBg = props.secondaryCtaBackgroundColor || 'transparent';
+      const secondaryText = props.secondaryCtaTextColor || DEFAULT_SECONDARY_BUTTON_TEXT;
 
       if (variant.layout === 'text-cta') {
         const fallbackText = textLine(escapeHtml(props.text), `font-family:Arial,Helvetica,sans-serif; font-size:14px; color:${props.textColor};`);
         const textCell = cell(`${headingHtml}${textHtml || fallbackText}`, 'width:65%; vertical-align:middle;');
-        const buttonCell = cell(buttonHtml(props.ctaText, props.ctaHref), 'width:35%; vertical-align:middle; text-align:right;');
+        const buttonCell = cell(buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText), 'width:35%; vertical-align:middle; text-align:right;');
         return moduleTableRow(cell(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="${containerStyle}"><tr>${textCell}${buttonCell}</tr></table>`));
       }
 
       const buttons = variant.layout === 'dual'
-        ? `${withHorizontalGap(buttonHtml(props.ctaText, props.ctaHref), 4)}${withHorizontalGap(buttonHtml(props.secondaryCtaText, props.secondaryCtaHref, false), 4)}`
-        : buttonHtml(props.ctaText, props.ctaHref);
-      return moduleTableRow(cell(`${headingHtml}${textHtml}${buttons}`, `${containerStyle} text-align:center;`));
+        ? `${withHorizontalGap(buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText), 4)}${withHorizontalGap(buttonHtml(props.secondaryCtaText, props.secondaryCtaHref, secondaryBg, secondaryText, false), 4)}`
+        : buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText);
+      return moduleTableRow(cell(`${headingHtml}${textHtml}${buttons}`, `${containerStyle} text-align:${props.align};`));
     },
   };
 }

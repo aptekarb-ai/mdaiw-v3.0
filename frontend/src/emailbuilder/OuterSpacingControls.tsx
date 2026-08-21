@@ -21,9 +21,11 @@ interface OuterSpacingControlsProps {
 export function OuterSpacingControls({ settings, viewport, onChange }: OuterSpacingControlsProps) {
   const isMobile = viewport === 'mobile';
   const resolved = resolveOuterSpacing(settings, viewport);
-  const [linked, setLinked] = useState(
-    resolved.left.value === resolved.right.value && resolved.left.unit === resolved.right.unit,
-  );
+  // Left and right must be fully independent by default (e.g. a fresh
+  // module's 0/0 desktop values must NOT be treated as "linked" just
+  // because they happen to be equal) — only an explicit user check on
+  // the "Link left/right values" box below links them.
+  const [linked, setLinked] = useState(false);
 
   // Applies one or both sides in a SINGLE onChange call — two sequential
   // calls would each read the same stale `settings` closure and the

@@ -72,3 +72,14 @@ export function widthAttr(dimension: DimensionValue): string {
 export function widthCssValue(dimension: DimensionValue): string {
   return dimension.unit === '%' ? `${dimension.value}%` : `${dimension.value}px`;
 }
+
+// Builder-canvas-only approximation of an outer-spacing dimension as a
+// pixel margin, for visual feedback while editing (used for both
+// top-level and nested-in-column module previews — see
+// EmailCanvas.tsx/LayoutCanvasModule.tsx). The exported email HTML
+// computes the real spacer <td> from the same DimensionValue instead —
+// see registryCore.ts's wrapWithOuterSpacing, the actual source of
+// truth.
+export function outerSpacingPx(dimension: DimensionValue, referenceWidth: number): number {
+  return dimension.unit === '%' ? Math.round((dimension.value / 100) * referenceWidth) : dimension.value;
+}

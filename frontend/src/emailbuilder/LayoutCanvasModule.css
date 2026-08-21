@@ -28,6 +28,22 @@
   border-color: var(--color-primary-blue);
 }
 
+/* A nested module's own Outer Spacer Columns preview — a dedicated
+   spacer REGION beside the content (flex row), not a CSS margin. Mirrors
+   EmailCanvas.css's top-level equivalent. */
+.layout-canvas__nested-outer-row {
+  display: flex;
+}
+
+.layout-canvas__nested-spacer-region {
+  flex: 0 0 auto;
+}
+
+.layout-canvas__nested-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .layout-canvas__column:focus-visible {
   outline: 2px solid var(--color-primary-blue);
   outline-offset: 2px;

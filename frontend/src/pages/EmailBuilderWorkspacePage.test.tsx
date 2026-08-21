@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -212,7 +212,7 @@ describe('EmailBuilderWorkspacePage', () => {
     expect(within(paddingGrid()).getByLabelText(/Top/)).toHaveValue(20);
   });
 
-  it('outer spacing: setting left/right to 0 keeps the module full-width visually, non-zero applies a margin', async () => {
+  it('outer spacing: setting left/right to 0 keeps the module full-width visually (no spacer region), non-zero adds spacer regions', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
     renderPage();
@@ -223,16 +223,94 @@ describe('EmailBuilderWorkspacePage', () => {
     const outerSection = screen.getAllByText('Outer Spacer Columns', { exact: false })[0].closest('.properties-panel__section') as HTMLElement;
     const outerLeft = within(outerSection).getByLabelText(/^Left/);
     const outerRight = within(outerSection).getByLabelText(/^Right/);
-    const wrapper = () => document.querySelector('.email-canvas__module-outer-spacing') as HTMLElement;
-    expect(wrapper().style.marginLeft).toBe('0px');
+    // Outer Spacer Columns render as a dedicated spacer REGION beside the
+    // content (not a CSS margin) — a side with value 0 omits its region
+    // entirely, so read the region's width when present, else '0px'.
+    const outerRow = () => document.querySelector('.email-canvas__module-outer-row') as HTMLElement;
+    const leftSpacerPx = () => {
+      const first = outerRow().firstElementChild as HTMLElement;
+      return first?.classList.contains('email-canvas__module-spacer-region') ? first.style.width : '0px';
+    };
+    const rightSpacerPx = () => {
+      const last = outerRow().lastElementChild as HTMLElement;
+      return last?.classList.contains('email-canvas__module-spacer-region') ? last.style.width : '0px';
+    };
+    expect(leftSpacerPx()).toBe('0px');
 
     await user.clear(outerLeft);
     await user.type(outerLeft, '20');
     await user.clear(outerRight);
     await user.type(outerRight, '20');
 
-    expect(wrapper().style.marginLeft).toBe('20px');
-    expect(wrapper().style.marginRight).toBe('20px');
+    expect(leftSpacerPx()).toBe('20px');
+    expect(rightSpacerPx()).toBe('20px');
+  });
+
+  it('outer spacer: Left and Right are independent by default (unlinked), and linking is opt-in', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const outerSection = () => screen.getAllByText('Outer Spacer Columns', { exact: false })[0].closest('.properties-panel__section') as HTMLElement;
+    // Outer Spacer Columns render as a dedicated spacer REGION beside the
+    // content (not a CSS margin) — a side with value 0 omits its region
+    // entirely, so read the region's width when present, else '0px'.
+    const outerRow = () => document.querySelector('.email-canvas__module-outer-row') as HTMLElement;
+    const leftSpacerPx = () => {
+      const first = outerRow().firstElementChild as HTMLElement;
+      return first?.classList.contains('email-canvas__module-spacer-region') ? first.style.width : '0px';
+    };
+    const rightSpacerPx = () => {
+      const last = outerRow().lastElementChild as HTMLElement;
+      return last?.classList.contains('email-canvas__module-spacer-region') ? last.style.width : '0px';
+    };
+
+    // Default state (both 0) must be unlinked — the box starts unchecked.
+    expect(within(outerSection()).getByRole('checkbox', { name: 'Link left/right values' })).not.toBeChecked();
+
+    // A. Set Left 30px / Right 0px.
+    let left = within(outerSection()).getByLabelText(/^Left Spacer/);
+    await user.clear(left);
+    await user.type(left, '30');
+
+    // B. Only the left side changed.
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('0px');
+
+    // C. Set Right 20px.
+    const right = within(outerSection()).getByLabelText(/^Right Spacer/);
+    await user.clear(right);
+    await user.type(right, '20');
+
+    // D. Left remains 30px, unaffected by the Right edit.
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('20px');
+
+    // Now opt in to linking — it snaps Right to the current Left value.
+    await user.click(within(outerSection()).getByRole('checkbox', { name: 'Link left/right values' }));
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('30px');
+
+    left = within(outerSection()).getByLabelText(/^Left Spacer/);
+    await user.clear(left);
+    await user.type(left, '15');
+    expect(leftSpacerPx()).toBe('15px');
+    expect(rightSpacerPx()).toBe('15px');
+
+    // Unlinking preserves the current (equal) values rather than resetting them.
+    await user.click(within(outerSection()).getByRole('checkbox', { name: 'Link left/right values' }));
+    expect(leftSpacerPx()).toBe('15px');
+    expect(rightSpacerPx()).toBe('15px');
+
+    // And the two sides are independent again post-unlink.
+    left = within(outerSection()).getByLabelText(/^Left Spacer/);
+    await user.clear(left);
+    await user.type(left, '30');
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('15px');
   });
 
   it('outer spacer: Desktop and Mobile left/right are independent, with an inherit/override reset', async () => {
@@ -244,45 +322,63 @@ describe('EmailBuilderWorkspacePage', () => {
     await user.click(screen.getByRole('tab', { name: 'Settings' }));
 
     const outerSection = () => screen.getAllByText('Outer Spacer Columns', { exact: false })[0].closest('.properties-panel__section') as HTMLElement;
-    const wrapper = () => document.querySelector('.email-canvas__module-outer-spacing') as HTMLElement;
+    // Outer Spacer Columns render as a dedicated spacer REGION beside the
+    // content (not a CSS margin) — a side with value 0 omits its region
+    // entirely, so read the region's width when present, else '0px'.
+    const outerRow = () => document.querySelector('.email-canvas__module-outer-row') as HTMLElement;
+    const leftSpacerPx = () => {
+      const first = outerRow().firstElementChild as HTMLElement;
+      return first?.classList.contains('email-canvas__module-spacer-region') ? first.style.width : '0px';
+    };
+    const rightSpacerPx = () => {
+      const last = outerRow().lastElementChild as HTMLElement;
+      return last?.classList.contains('email-canvas__module-spacer-region') ? last.style.width : '0px';
+    };
 
-    // Left/right start linked (both 0) — uncheck so 30/20 can differ.
-    await user.click(within(outerSection()).getByRole('checkbox', { name: 'Link left/right values' }));
-
-    // Desktop: left 30, right 20.
+    // Desktop: left 30, right 20 (unlinked by default — no checkbox needed).
     let left = within(outerSection()).getByLabelText(/^Left Spacer/);
     let right = within(outerSection()).getByLabelText(/^Right Spacer/);
     await user.clear(left);
     await user.type(left, '30');
     await user.clear(right);
     await user.type(right, '20');
-    expect(wrapper().style.marginLeft).toBe('30px');
-    expect(wrapper().style.marginRight).toBe('20px');
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('20px');
 
     // Switch to Mobile — starts inherited (30/20), no reset button yet.
     await user.click(screen.getByRole('button', { name: 'Mobile' }));
     expect(within(outerSection()).queryByRole('button', { name: 'Use Desktop value' })).not.toBeInTheDocument();
-    expect(wrapper().style.marginLeft).toBe('30px');
-    expect(wrapper().style.marginRight).toBe('20px');
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('20px');
 
     // Override Mobile left only -> Mobile becomes 8 / 20 (right still inherited).
     left = within(outerSection()).getByLabelText(/^Left Spacer/);
     await user.clear(left);
     await user.type(left, '8');
-    expect(wrapper().style.marginLeft).toBe('8px');
-    expect(wrapper().style.marginRight).toBe('20px');
+    expect(leftSpacerPx()).toBe('8px');
+    expect(rightSpacerPx()).toBe('20px');
 
-    // Desktop remains untouched.
+    // Set Mobile right explicitly too (8 / 12), per the independent-mobile-values spec.
+    right = within(outerSection()).getByLabelText(/^Right Spacer/);
+    await user.clear(right);
+    await user.type(right, '12');
+    expect(leftSpacerPx()).toBe('8px');
+    expect(rightSpacerPx()).toBe('12px');
+
+    // Desktop remains untouched (30/20).
     await user.click(screen.getByRole('button', { name: 'Desktop' }));
-    expect(wrapper().style.marginLeft).toBe('30px');
-    expect(wrapper().style.marginRight).toBe('20px');
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('20px');
 
-    // Back to Mobile — override persisted; reset it.
+    // Back to Mobile — both overrides persisted; reset left only.
     await user.click(screen.getByRole('button', { name: 'Mobile' }));
-    expect(wrapper().style.marginLeft).toBe('8px');
-    const resetButton = within(outerSection()).getByRole('button', { name: 'Use Desktop value' });
-    await user.click(resetButton);
-    expect(wrapper().style.marginLeft).toBe('30px');
+    expect(leftSpacerPx()).toBe('8px');
+    expect(rightSpacerPx()).toBe('12px');
+    left = within(outerSection()).getByLabelText(/^Left Spacer/);
+    const leftField = left.closest('.properties-panel__field') as HTMLElement;
+    await user.click(within(leftField).getByRole('button', { name: 'Use Desktop value' }));
+    expect(leftSpacerPx()).toBe('30px');
+    expect(rightSpacerPx()).toBe('12px');
   });
 
   it('reorders modules via drag and drop', async () => {
@@ -570,5 +666,138 @@ describe('EmailBuilderWorkspacePage — Feature 05 Layout Builder', () => {
     renderPage();
 
     expect(await screen.findAllByText('+ Add content')).toHaveLength(2);
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Feature 06 Module Element Editor', () => {
+  it('Text: editing content, font size, color and alignment updates the canvas and marks dirty', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    const textField = screen.getByLabelText('Text');
+    await user.clear(textField);
+    await user.type(textField, 'Hello Feature 06');
+    expect(screen.getByText('Hello Feature 06', { selector: 'p' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    const fontSize = screen.getByLabelText('Font size (px)');
+    fireEvent.change(fontSize, { target: { value: '30' } });
+    expect(fontSize).toHaveValue(30);
+
+    const hexField = screen.getByLabelText('Text color hex value');
+    await user.clear(hexField);
+    await user.type(hexField, '#FF0000');
+    fireEvent.blur(hexField);
+    expect(hexField).toHaveValue('#FF0000');
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+  });
+
+  it('Text: undo reverts a font-size edit', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    const fontSize = screen.getByLabelText('Font size (px)');
+    fireEvent.change(fontSize, { target: { value: '40' } });
+    expect(fontSize).toHaveValue(40);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.getByLabelText('Font size (px)')).toHaveValue(16);
+  });
+
+  it('Image: setting Desktop width to 300px and Mobile width to 100% resolves independently per viewport', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Images');
+    await user.click(await screen.findByRole('button', { name: 'Add Image' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    const unitSelect = screen.getByLabelText('Unit');
+    await user.selectOptions(unitSelect, 'px');
+    const widthValue = screen.getByLabelText(/^Width/);
+    fireEvent.change(widthValue, { target: { value: '300' } });
+    expect(screen.getByLabelText(/^Width/)).toHaveValue(300);
+  });
+
+  it('Button: width mode, border and padding controls are editable and reflected in the canvas', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    await user.selectOptions(screen.getByLabelText('Width'), 'full');
+    expect(screen.getByText('Shop Now').closest('span')).toHaveStyle({ display: 'block' });
+
+    const borderWidth = screen.getByLabelText('Width (px)');
+    await user.clear(borderWidth);
+    await user.type(borderWidth, '2');
+    expect(borderWidth).toHaveValue(2);
+  });
+
+  it('Header: adding a nav link inserts it, editing its label updates it, and removing it works', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Header');
+    await user.click(await screen.findByRole('button', { name: 'Add Logo + Navigation' }));
+
+    expect(screen.getByRole('button', { name: /^Shop/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Add nav link/ }));
+    expect(screen.getAllByRole('button', { name: /^New Link|^Shop|^About|^Contact/ })).toHaveLength(4);
+
+    // Adding an item auto-expands it, so it is already open here.
+    const labelInput = screen.getByLabelText('Label');
+    await user.clear(labelInput);
+    await user.type(labelInput, 'Careers');
+    expect(screen.getByRole('button', { name: /^Careers/ })).toBeInTheDocument();
+
+    const removeButton = screen.getByRole('button', { name: /^Remove Careers/ });
+    await user.click(removeButton);
+    expect(screen.queryByRole('button', { name: /^Careers/ })).not.toBeInTheDocument();
+  });
+
+  it('Product: selecting a card and editing its name updates only that card', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Products');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Product Cards' }));
+
+    const nameInput = screen.getByLabelText('Product name');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Wireless Headphones');
+    const canvas = document.querySelector('.email-canvas__surface') as HTMLElement;
+    expect(within(canvas).getByText('Wireless Headphones')).toBeInTheDocument();
+    expect(within(canvas).getByText('Product Name 2')).toBeInTheDocument();
+  });
+
+  it('Nested module editing: a Text module inside a layout column edits identically to a top-level module', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    const addContentButtons = screen.getAllByText('+ Add content');
+    await user.click(addContentButtons[0]);
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    const fontSize = screen.getByLabelText('Font size (px)');
+    fireEvent.change(fontSize, { target: { value: '22' } });
+    expect(fontSize).toHaveValue(22);
+    expect(screen.getByText((_, element) => (
+      element?.tagName === 'P' && element.textContent === '2 Columns 50/50 › Column 1 › Text'
+    ))).toBeInTheDocument();
   });
 });
