@@ -10,14 +10,19 @@ class EmailDocumentViewSet(
     mixins.CreateModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
     viewsets.GenericViewSet,
 ):
-    """List/create/retrieve/update a user's own email drafts. Same
+    """List/create/retrieve/update/delete a user's own email drafts. Same
     ownership boundary as landingpages.LandingPageProjectViewSet: another
     user's document id is filtered out before lookup, so it 404s rather
     than 403s. Update (PATCH) exists for Feature 03's builder to persist
-    `content` — delete still isn't exposed; that belongs to the later "My
-    Emails" feature, not the builder."""
+    `content`; rename reuses the same PATCH (`name` is a writable
+    serializer field). Delete backs the dashboard's row action — no
+    dashboard-only model, this is the same EmailDocument the builder
+    reads/writes. Duplicate has no dedicated endpoint: the frontend
+    composes it from create + update (fresh row, then the cloned/
+    fresh-ID content), so the API surface stays exactly these five verbs."""
 
     serializer_class = EmailDocumentSerializer
     permission_classes = [IsAuthenticated]

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import type {
   ButtonModuleProps, ButtonWidthMode, ColumnContainerSettings, CompositeModuleProps, EmailColumn, EmailModule,
-  EmailModuleSettings, HorizontalAlign, ImageModuleProps, TextModuleProps,
+  EmailModuleSettings, HorizontalAlign, ImageModuleProps, ModuleVisibility, TextModuleProps,
 } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import { IMAGE_WIDTH_PX_BOUNDS, getPath, setPath, type BuilderViewMode } from './registryCore';
@@ -73,6 +73,101 @@ export function AlignField({ value, onChange }: { value: HorizontalAlign; onChan
         <option value="right">Right</option>
       </select>
     </label>
+  );
+}
+
+// Feature 07 — per-module responsive visibility (instruction 10/30/31).
+// A single Desktop/Mobile-aware select rather than two independent
+// checkboxes — 'all'/'hideMobile'/'hideDesktop' is a mutually exclusive
+// choice, not two independently-toggleable flags, so a select avoids the
+// invalid "hide on both" state entirely instead of needing to guard
+// against it.
+function VisibilitySettings({ module, viewport, onChange }: {
+  module: EmailModule; viewport: BuilderViewMode; onChange: (patch: Partial<EmailModuleSettings>) => void;
+}) {
+  const visibility = module.settings.visibility ?? 'all';
+  return (
+    <>
+      <label className="properties-panel__field">
+        <span>Show this module on</span>
+        <select value={visibility} onChange={(event) => onChange({ visibility: event.target.value as ModuleVisibility })}>
+          <option value="all">All devices</option>
+          <option value="hideMobile">Hide on Mobile</option>
+          <option value="hideDesktop">Hide on Desktop</option>
+        </select>
+      </label>
+      {visibility !== 'all' && (
+        <p className="properties-panel__hint">
+          {visibility === 'hideMobile'
+            ? 'Hidden at the Mobile breakpoint in the exported email. Still visible on Desktop and in Desktop preview.'
+            : 'Hidden by default (Desktop is the structural fallback) and revealed again at the Mobile breakpoint.'}
+          {' '}The module stays in this email — it is never deleted.
+        </p>
+      )}
+      {viewport === 'mobile' && visibility === 'hideMobile' && (
+        <p className="properties-panel__hint">Canvas: hidden in this Mobile preview.</p>
+      )}
+      {viewport === 'desktop' && visibility === 'hideDesktop' && (
+        <p className="properties-panel__hint">Canvas: hidden in this Desktop preview.</p>
+      )}
+    </>
+  );
+}
+
+// Feature 07 — instruction 32: one module-level action clearing every
+// Mobile override back to inheritance (never touches Desktop). Only
+// shown in Mobile view, and only when the module actually has something
+// to reset. A lightweight inline confirm (click-to-arm, second click to
+// confirm) rather than a modal — consistent with this panel's existing
+// reset buttons, but this one can clear several fields at once so it
+// gets the extra confirmation step the others don't need.
+const MOBILE_PROP_OVERRIDE_KEYS = ['mobileFontSize', 'mobileLineHeight', 'mobileAlign', 'mobileWidthMode', 'mobileHeight'] as const;
+
+function countMobileOverrides(module: EmailModule): number {
+  let count = Object.keys(module.settings.mobile).length + Object.keys(module.settings.outerSpacing.mobile).length;
+  const props = module.props as Record<string, unknown>;
+  for (const key of MOBILE_PROP_OVERRIDE_KEYS) {
+    if (props[key] !== undefined) count += 1;
+  }
+  const width = props.width as { mobile?: unknown } | undefined;
+  if (width?.mobile !== undefined) count += 1;
+  return count;
+}
+
+function ResetMobileOverridesSection({ module, viewport, onUpdateSettings, onUpdateProps }: {
+  module: EmailModule; viewport: BuilderViewMode;
+  onUpdateSettings: (patch: Partial<EmailModuleSettings>) => void;
+  onUpdateProps: (patch: Record<string, unknown>) => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const overrideCount = countMobileOverrides(module);
+  if (viewport !== 'mobile' || overrideCount === 0) return null;
+
+  function reset() {
+    onUpdateSettings({ mobile: {}, outerSpacing: { ...module.settings.outerSpacing, mobile: {} } });
+    const propPatch: Record<string, unknown> = {};
+    for (const key of MOBILE_PROP_OVERRIDE_KEYS) propPatch[key] = undefined;
+    const width = (module.props as { width?: { desktop: unknown; mobile?: unknown } }).width;
+    if (width?.mobile !== undefined) propPatch.width = { desktop: width.desktop };
+    onUpdateProps(propPatch);
+    setConfirming(false);
+  }
+
+  return (
+    <PropertySection title="Reset">
+      {confirming ? (
+        <div className="properties-panel__typography-row">
+          <button type="button" className="properties-panel__inherit-reset" onClick={reset}>
+            Confirm reset ({overrideCount} override{overrideCount === 1 ? '' : 's'})
+          </button>
+          <button type="button" className="properties-panel__inherit-reset" onClick={() => setConfirming(false)}>Cancel</button>
+        </div>
+      ) : (
+        <button type="button" className="properties-panel__inherit-reset" onClick={() => setConfirming(true)}>
+          Reset Mobile Overrides
+        </button>
+      )}
+    </PropertySection>
   );
 }
 
@@ -175,6 +270,13 @@ export function PropertiesPanel({
               </PropertySection>
             ) : tab === 'settings' ? (
               <>
+                <PropertySection title="Visibility">
+                  <VisibilitySettings
+                    module={module}
+                    viewport={viewport}
+                    onChange={(patch) => onUpdateSettings(module.id, patch)}
+                  />
+                </PropertySection>
                 <PropertySection title="Outer Spacer Columns">
                   <OuterSpacingControls
                     key={module.id}
@@ -202,6 +304,12 @@ export function PropertiesPanel({
                     <MobileStackingSettings module={module} onChange={(patch) => onUpdateSettings(module.id, patch)} />
                   </PropertySection>
                 )}
+                <ResetMobileOverridesSection
+                  module={module}
+                  viewport={viewport}
+                  onUpdateSettings={(patch) => onUpdateSettings(module.id, patch)}
+                  onUpdateProps={(patch) => onUpdateProps(module.id, patch)}
+                />
               </>
             ) : isLayout ? (
               tab === 'content' ? (
@@ -235,11 +343,11 @@ function ModuleEditor({ module, tab, viewport, onUpdateProps }: ModuleEditorProp
 
   switch (definition.propertyEditor) {
     case 'text':
-      return <TextEditor module={module as unknown as EmailModule<TextModuleProps>} tab={tab} update={update} />;
+      return <TextEditor module={module as unknown as EmailModule<TextModuleProps>} tab={tab} viewport={viewport} update={update} />;
     case 'image':
       return <ImageEditor module={module as unknown as EmailModule<ImageModuleProps>} tab={tab} viewport={viewport} update={update} />;
     case 'button':
-      return <ButtonEditor module={module as unknown as EmailModule<ButtonModuleProps>} tab={tab} update={update} />;
+      return <ButtonEditor module={module as unknown as EmailModule<ButtonModuleProps>} tab={tab} viewport={viewport} update={update} />;
     case 'composite':
       return <CompositeEditor module={module as unknown as EmailModule<CompositeModuleProps>} tab={tab} viewport={viewport} update={update} />;
     case 'schema':
@@ -381,8 +489,8 @@ function SchemaEditor({ module, tab, update }: {
   );
 }
 
-function TextEditor({ module, tab, update }: {
-  module: EmailModule<TextModuleProps>; tab: 'content' | 'style';
+function TextEditor({ module, tab, viewport, update }: {
+  module: EmailModule<TextModuleProps>; tab: 'content' | 'style'; viewport: BuilderViewMode;
   update: (patch: Record<string, unknown>) => void;
 }) {
   const { props } = module;
@@ -398,19 +506,65 @@ function TextEditor({ module, tab, update }: {
       </label>
     );
   }
+  const isMobile = viewport === 'mobile';
+  // Feature 07 — selected responsive typography overrides (instruction
+  // 18: font size, line height, text alignment). fontFamily/fontWeight/
+  // color intentionally stay Desktop-only — "do not automatically make
+  // every typography field responsive" (instruction 18) and colors are
+  // explicitly excluded from responsive support (instruction 9).
+  const fontSizeOverridden = props.mobileFontSize !== undefined;
+  const lineHeightOverridden = props.mobileLineHeight !== undefined;
+  const alignOverridden = props.mobileAlign !== undefined;
+  const anyMobileTypographyOverride = fontSizeOverridden || lineHeightOverridden || alignOverridden;
   return (
     <>
       <PropertySection title="Typography">
         <TypographyControls
           fontFamily={{ value: props.fontFamily ?? DEFAULT_FONT_ID, onChange: (fontFamily) => update({ fontFamily }) }}
-          fontSize={{ value: props.fontSize, onChange: (fontSize) => update({ fontSize }) }}
+          fontSize={{
+            value: isMobile ? props.mobileFontSize ?? props.fontSize : props.fontSize,
+            onChange: (fontSize) => update(isMobile ? { mobileFontSize: fontSize } : { fontSize }),
+            label: isMobile ? `Font size (px) — Mobile ${fontSizeOverridden ? '(override)' : '(inherited)'}` : undefined,
+          }}
           fontWeight={{ value: props.fontWeight, onChange: (fontWeight) => update({ fontWeight }) }}
-          lineHeight={{ value: props.lineHeight, onChange: (lineHeight) => update({ lineHeight }) }}
+          lineHeight={{
+            value: isMobile ? props.mobileLineHeight ?? props.lineHeight : props.lineHeight,
+            onChange: (lineHeight) => update(isMobile ? { mobileLineHeight: lineHeight } : { lineHeight }),
+            label: isMobile ? `Line height (px) — Mobile ${lineHeightOverridden ? '(override)' : '(inherited)'}` : undefined,
+          }}
           color={{ value: props.color, onChange: (color) => update({ color }) }}
         />
+        {isMobile && anyMobileTypographyOverride && (
+          <button
+            type="button"
+            className="properties-panel__inherit-reset"
+            onClick={() => update({ mobileFontSize: undefined, mobileLineHeight: undefined })}
+          >
+            Use Desktop typography
+          </button>
+        )}
       </PropertySection>
       <PropertySection title="Alignment & Background">
-        <AlignField value={props.align} onChange={(align) => update({ align })} />
+        <label className="properties-panel__field">
+          <span>
+            Alignment{isMobile ? ` — Mobile ${alignOverridden ? '(override)' : '(inherited)'}` : ''}
+          </span>
+          <select
+            value={isMobile ? props.mobileAlign ?? props.align : props.align}
+            onChange={(event) => update(isMobile
+              ? { mobileAlign: event.target.value as HorizontalAlign }
+              : { align: event.target.value as HorizontalAlign })}
+          >
+            <option value="left">Left</option>
+            <option value="center">Center</option>
+            <option value="right">Right</option>
+          </select>
+        </label>
+        {isMobile && alignOverridden && (
+          <button type="button" className="properties-panel__inherit-reset" onClick={() => update({ mobileAlign: undefined })}>
+            Use Desktop value
+          </button>
+        )}
         <ColorControl label="Background color" value={props.backgroundColor ?? ''} onChange={(backgroundColor) => update({ backgroundColor })} allowNone />
       </PropertySection>
     </>
@@ -479,11 +633,14 @@ function ImageEditor({ module, tab, viewport, update }: {
 
 const BUTTON_WIDTH_MODE_LABELS: Record<ButtonWidthMode, string> = { auto: 'Auto', fixed: 'Fixed', full: 'Full Width' };
 
-function ButtonEditor({ module, tab, update }: {
-  module: EmailModule<ButtonModuleProps>; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
+function ButtonEditor({ module, tab, viewport, update }: {
+  module: EmailModule<ButtonModuleProps>; tab: 'content' | 'style'; viewport: BuilderViewMode;
+  update: (patch: Record<string, unknown>) => void;
 }) {
   const { props } = module;
   const widthMode: ButtonWidthMode = props.widthMode ?? 'auto';
+  const isMobile = viewport === 'mobile';
+  const mobileWidthModeOverridden = props.mobileWidthMode !== undefined;
   if (tab === 'content') {
     return (
       <>
@@ -515,6 +672,24 @@ function ButtonEditor({ module, tab, update }: {
             <span>Fixed width (px)</span>
             <input type="number" min={40} max={600} value={props.fixedWidth ?? 200} onChange={(e) => update({ fixedWidth: Number(e.target.value) })} />
           </label>
+        )}
+        {isMobile && (
+          <label className="properties-panel__field">
+            <span>Width — Mobile {mobileWidthModeOverridden ? '(override)' : '(inherited)'}</span>
+            <select
+              value={props.mobileWidthMode ?? widthMode}
+              onChange={(e) => update({ mobileWidthMode: e.target.value as ButtonWidthMode })}
+            >
+              {(Object.keys(BUTTON_WIDTH_MODE_LABELS) as ButtonWidthMode[]).map((mode) => (
+                <option key={mode} value={mode}>{BUTTON_WIDTH_MODE_LABELS[mode]}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        {isMobile && mobileWidthModeOverridden && (
+          <button type="button" className="properties-panel__inherit-reset" onClick={() => update({ mobileWidthMode: undefined })}>
+            Use Desktop value
+          </button>
         )}
         <label className="properties-panel__field">
           <span>Font size (px)</span>
@@ -672,7 +847,7 @@ function SpacerEditor({ module, tab, viewport, update }: {
   return (
     <>
       <label className="properties-panel__field">
-        <span>Height ({isMobile ? 'Mobile' : 'Desktop'}) (px)</span>
+        <span>Height (px) — {isMobile ? `Mobile (${overridden ? 'override' : 'inherited'})` : 'Desktop'}</span>
         <input
           type="number"
           min={4}

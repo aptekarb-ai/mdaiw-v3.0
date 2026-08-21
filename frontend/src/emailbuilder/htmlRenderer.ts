@@ -1,5 +1,6 @@
 import type { EmailDocumentContent } from './edm';
 import { renderModuleWithOuterStructure } from './registryCore';
+import { renderResponsiveStyles } from './responsiveStyles';
 
 export interface RenderableEmail {
   width: number;
@@ -39,6 +40,12 @@ export function renderEmailBody(document: RenderableEmail): string {
 
 export function renderEmailDocument(document: RenderableEmail): string {
   const body = renderEmailBody(document);
+  // Feature 07 — the ONE controlled responsive <style> block for the
+  // whole document (instruction 45), generated purely from the EDM by
+  // responsiveStyles.ts's centralized generator — never arbitrary user
+  // CSS (instruction 49), and '' (nothing emitted) when the document has
+  // no responsive overrides at all.
+  const responsiveStyles = renderResponsiveStyles(document.content);
   return (
     '<!doctype html>\n'
     + '<html xmlns="http://www.w3.org/1999/xhtml">\n'
@@ -47,6 +54,7 @@ export function renderEmailDocument(document: RenderableEmail): string {
     + '<meta name="viewport" content="width=device-width, initial-scale=1.0" />\n'
     + '<meta http-equiv="X-UA-Compatible" content="IE=edge" />\n'
     + '<title></title>\n'
+    + responsiveStyles
     + '</head>\n'
     // No margin/padding reset on <body> — background-color matches the
     // outer wrapper table exactly, so any client-default body margin is

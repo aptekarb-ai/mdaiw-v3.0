@@ -90,3 +90,10 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
 ];
 
 export const DEFAULT_PLATFORM: EmailPlatform = 'generic';
+
+// Dashboard row/badge display — reuses this same centralized list instead
+// of a second platform → label map, so "how is SFMC display-named" only
+// has one answer anywhere in the app.
+export function getPlatformLabel(platform: EmailPlatform): string {
+  return PLATFORM_OPTIONS.find((option) => option.value === platform)?.label ?? platform;
+}

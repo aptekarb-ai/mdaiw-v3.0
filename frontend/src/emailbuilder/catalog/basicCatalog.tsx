@@ -3,7 +3,7 @@ import type {
   SpacerModuleProps, TextModuleProps,
 } from '../edm';
 import { DEFAULT_SPACING, resolveSpacing } from '../edm';
-import { percent, px, resolveDimension, widthAttr, widthCssValue } from '../dimensions';
+import { percent, px, resolveDimension, resolveResponsiveValue, widthAttr, widthCssValue } from '../dimensions';
 import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
 import { DEFAULT_FONT_ID, fontStackFor } from '../fonts';
 import {
@@ -35,22 +35,33 @@ const textDefinition: ModuleDefinition<TextModuleProps> = {
     width: { desktop: percent(100) },
   }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
-  renderPreview: (module) => (
-    <p
-      style={{
-        margin: 0,
-        textAlign: module.props.align,
-        fontFamily: fontStackFor(module.props.fontFamily),
-        fontSize: module.props.fontSize,
-        fontWeight: module.props.fontWeight,
-        color: module.props.color,
-        lineHeight: `${module.props.lineHeight}px`,
-        backgroundColor: module.props.backgroundColor || undefined,
-      }}
-    >
-      {module.props.text}
-    </p>
-  ),
+  // viewport-aware (instruction 37: Mobile preview chrome must show
+  // Mobile font sizes/alignment) — resolves each of Feature 07's
+  // optional mobile typography overrides via the shared
+  // resolveResponsiveValue, same inheritance rule as every other
+  // Desktop/Mobile field.
+  renderPreview: (module, viewport = 'desktop') => {
+    const { props } = module;
+    const fontSize = resolveResponsiveValue(props.fontSize, props.mobileFontSize, viewport);
+    const lineHeight = resolveResponsiveValue(props.lineHeight, props.mobileLineHeight, viewport);
+    const align = resolveResponsiveValue(props.align, props.mobileAlign, viewport);
+    return (
+      <p
+        style={{
+          margin: 0,
+          textAlign: align,
+          fontFamily: fontStackFor(props.fontFamily),
+          fontSize,
+          fontWeight: props.fontWeight,
+          color: props.color,
+          lineHeight: `${lineHeight}px`,
+          backgroundColor: props.backgroundColor || undefined,
+        }}
+      >
+        {props.text}
+      </p>
+    );
+  },
   renderEmailHtml: (module) => {
     const { props, settings } = module;
     const resolvedWidth = resolveDimension(props.width ?? { desktop: percent(100) }, 'desktop');
@@ -142,9 +153,11 @@ const buttonDefinition: ModuleDefinition<ButtonModuleProps> = {
     paddingVertical: 12,
   }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
-  renderPreview: (module) => {
+  // viewport-aware (instruction 37/29) — mobileWidthMode resolves the
+  // same way every other Desktop/Mobile override does.
+  renderPreview: (module, viewport = 'desktop') => {
     const { props } = module;
-    const widthMode: ButtonWidthMode = props.widthMode ?? 'auto';
+    const widthMode: ButtonWidthMode = resolveResponsiveValue(props.widthMode ?? 'auto', props.mobileWidthMode, viewport);
     const paddingH = props.paddingHorizontal ?? 24;
     const paddingV = props.paddingVertical ?? 12;
     return (

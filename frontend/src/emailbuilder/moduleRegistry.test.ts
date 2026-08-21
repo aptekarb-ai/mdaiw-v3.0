@@ -121,8 +121,12 @@ describe('module registry (Feature 04 catalog)', () => {
   });
 
   it('every registered module (all 53+) renders the centralized outer-module spacer TDs correctly — 0/0, left-only, right-only, both', () => {
-    const OUTER_TABLE_OPEN = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>';
-    const countOf = (haystack: string) => haystack.split(OUTER_TABLE_OPEN).length - 1;
+    // Matches the module outer-wrapper table (bare, or with a
+    // `class="m-eb-ID"` responsive attribute) but NOT renderEmailBody's
+    // own unrelated outer content table, which shares the same literal
+    // prefix but always carries a `style=` attribute instead.
+    const OUTER_TABLE_OPEN = /<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"(?: class="[^"]*")?><tr>/g;
+    const countOf = (haystack: string) => (haystack.match(OUTER_TABLE_OPEN) ?? []).length;
 
     for (const definition of definitions) {
       // 0/0 — the standard outer module table is STILL present (one
@@ -180,5 +184,56 @@ describe('module registry (Feature 04 catalog)', () => {
     for (const definition of definitions) {
       expect(getModuleDefinition(definition.type)).toBe(definition);
     }
+  });
+});
+
+// Feature 07 — instruction 37: "Mobile preview chrome must show ... Mobile
+// font sizes ... Mobile alignment". renderPreview() must itself resolve
+// mobileFontSize/mobileLineHeight/mobileAlign/mobileWidthMode for the
+// given viewport — it's not enough for the DATA MODEL and the EXPORTED
+// HTML to be responsive if the canvas the user is actually looking at
+// silently ignores the viewport and always shows Desktop.
+describe('module registry — Feature 07 canvas preview is viewport-aware', () => {
+  it('Text: renderPreview resolves mobile font-size/line-height/align independently of Desktop', () => {
+    const definition = getModuleDefinition('text');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic module factory result narrowed per-test
+    const module = createModule('text', 0) as any;
+    module.props = {
+      ...module.props, fontSize: 32, lineHeight: 40, align: 'left',
+      mobileFontSize: 24, mobileLineHeight: 30, mobileAlign: 'center',
+    };
+    const desktopPreview = definition.renderPreview(module, 'desktop') as { props: { style: Record<string, unknown> } };
+    expect(desktopPreview.props.style.fontSize).toBe(32);
+    expect(desktopPreview.props.style.lineHeight).toBe('40px');
+    expect(desktopPreview.props.style.textAlign).toBe('left');
+
+    const mobilePreview = definition.renderPreview(module, 'mobile') as { props: { style: Record<string, unknown> } };
+    expect(mobilePreview.props.style.fontSize).toBe(24);
+    expect(mobilePreview.props.style.lineHeight).toBe('30px');
+    expect(mobilePreview.props.style.textAlign).toBe('center');
+  });
+
+  it('Text: Mobile preview falls back to Desktop values when no mobile override is set', () => {
+    const definition = getModuleDefinition('text');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic module factory result narrowed per-test
+    const module = createModule('text', 0) as any;
+    module.props = { ...module.props, fontSize: 18, lineHeight: 26, align: 'right' };
+    const mobilePreview = definition.renderPreview(module, 'mobile') as { props: { style: Record<string, unknown> } };
+    expect(mobilePreview.props.style.fontSize).toBe(18);
+    expect(mobilePreview.props.style.lineHeight).toBe('26px');
+    expect(mobilePreview.props.style.textAlign).toBe('right');
+  });
+
+  it('Button: renderPreview resolves mobileWidthMode independently of Desktop widthMode', () => {
+    const definition = getModuleDefinition('button');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic module factory result narrowed per-test
+    const module = createModule('button', 0) as any;
+    module.props = { ...module.props, widthMode: 'auto', mobileWidthMode: 'full' };
+    const desktopPreview = definition.renderPreview(module, 'desktop') as { props: { children: { props: { style: Record<string, unknown> } } } };
+    expect(desktopPreview.props.children.props.style.display).toBe('inline-block');
+
+    const mobilePreview = definition.renderPreview(module, 'mobile') as { props: { children: { props: { style: Record<string, unknown> } } } };
+    expect(mobilePreview.props.children.props.style.display).toBe('block');
+    expect(mobilePreview.props.children.props.style.width).toBe('100%');
   });
 });

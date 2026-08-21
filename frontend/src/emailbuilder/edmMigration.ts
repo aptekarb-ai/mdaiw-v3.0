@@ -164,12 +164,33 @@ function normalizeColumnGutter(raw: unknown): ResponsiveDimension | undefined {
   return mobile ? { desktop: value.desktop, mobile } : { desktop: value.desktop };
 }
 
+const MODULE_VISIBILITY_VALUES = new Set(['all', 'hideMobile', 'hideDesktop']);
+
+// Feature 07 — both new settings keys are optional; absent means the
+// module's existing (pre-Feature-07) behavior exactly (visible on both
+// viewports, no mobile column gap). No destructive migration/version
+// bump needed (instruction 41) — every pre-Feature-07 document simply
+// has neither key.
+function normalizeVisibility(raw: unknown): EmailModuleSettings['visibility'] {
+  return typeof raw === 'string' && MODULE_VISIBILITY_VALUES.has(raw)
+    ? (raw as EmailModuleSettings['visibility'])
+    : undefined;
+}
+
+function normalizeMobileColumnGap(raw: unknown): EmailModuleSettings['mobileColumnGap'] {
+  return isDimensionValue(raw) ? raw : undefined;
+}
+
 function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const settings = (rawSettings ?? {}) as Record<string, unknown>;
   const columnGutter = normalizeColumnGutter(settings.columnGutter);
   const mobileColumnOrder = Array.isArray(settings.mobileColumnOrder)
     ? (settings.mobileColumnOrder as number[])
     : undefined;
+  // Feature 07 — same "independent of desktop/mobile-vs-legacy-flat
+  // shape" convention as columnGutter/mobileColumnOrder above.
+  const visibility = normalizeVisibility(settings.visibility);
+  const mobileColumnGap = normalizeMobileColumnGap(settings.mobileColumnGap);
 
   if ('desktop' in settings) {
     // Already the current shape — still backfill any field an even-older
@@ -188,6 +209,8 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
       mobileStack: typeof settings.mobileStack === 'boolean' ? settings.mobileStack : true,
       ...(columnGutter ? { columnGutter } : {}),
       ...(mobileColumnOrder ? { mobileColumnOrder } : {}),
+      ...(visibility ? { visibility } : {}),
+      ...(mobileColumnGap ? { mobileColumnGap } : {}),
     };
   }
 
@@ -205,6 +228,8 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
     mobileStack: true,
     ...(columnGutter ? { columnGutter } : {}),
     ...(mobileColumnOrder ? { mobileColumnOrder } : {}),
+    ...(visibility ? { visibility } : {}),
+    ...(mobileColumnGap ? { mobileColumnGap } : {}),
   };
 }
 

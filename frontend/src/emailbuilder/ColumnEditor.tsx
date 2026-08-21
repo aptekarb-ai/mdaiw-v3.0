@@ -2,6 +2,7 @@ import type { ColumnContainerSettings, ColumnVerticalAlign, EmailColumn, EmailMo
 import { MAX_PADDING, MIN_PADDING, resolveColumnGutter, resolveSpacing } from './edm';
 import type { BuilderViewMode } from './registryCore';
 import { ResponsiveDimensionField } from './DimensionControl';
+import { ColorControl } from './ColorControl';
 import {
   COLUMN_GUTTER_PX_BOUNDS, COLUMN_VALIGN_OPTIONS, LOW_COLUMN_WIDTH_WARNING_PERCENT, MIN_COLUMN_WIDTH_PERCENT,
   balanceColumnWidths, hasLowWidthWarning, validateColumnWidths,
@@ -176,6 +177,8 @@ export function MobileStackingSettings({ module, onChange }: {
     onChange({ mobileColumnOrder: next });
   }
 
+  const gap = module.settings.mobileColumnGap?.value ?? 0;
+
   return (
     <div className="properties-panel__field-group">
       <label className="properties-panel__checkbox-field">
@@ -186,35 +189,58 @@ export function MobileStackingSettings({ module, onChange }: {
         />
         <span>Stack columns on Mobile</span>
       </label>
+      {!stack && (
+        <p className="properties-panel__hint">
+          Columns stay side-by-side on Mobile. On narrow screens ({columnCount >= 3 ? 'especially with 3+ columns' : 'depending on content'}) this can be hard to read — consider turning stacking back on unless this layout is intentional.
+        </p>
+      )}
       {stack && (
-        <div className="properties-panel__mobile-order">
-          <span className="properties-panel__field-group-label">Mobile order</span>
-          <ol>
-            {order.map((columnIndex, position) => (
-              <li key={columnIndex}>
-                <span>Column {columnIndex + 1}</span>
-                <div className="properties-panel__mobile-order-controls">
-                  <button
-                    type="button"
-                    aria-label={`Move Column ${columnIndex + 1} up`}
-                    disabled={position === 0}
-                    onClick={() => move(position, -1)}
-                  >
-                    <span className="mdaiw-icon mdaiw-icon--chevron-down properties-panel__mobile-order-icon--up" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Move Column ${columnIndex + 1} down`}
-                    disabled={position === order.length - 1}
-                    onClick={() => move(position, 1)}
-                  >
-                    <span className="mdaiw-icon mdaiw-icon--chevron-down" aria-hidden="true" />
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
+        <>
+          <label className="properties-panel__field">
+            <span>Mobile column gap (px)</span>
+            <input
+              type="number"
+              min={0}
+              max={COLUMN_GUTTER_PX_BOUNDS.pxMax}
+              value={gap}
+              onChange={(event) => {
+                const value = Math.max(0, Math.round(Number(event.target.value) || 0));
+                onChange({ mobileColumnGap: { value, unit: 'px' } });
+              }}
+            />
+          </label>
+          <div className="properties-panel__mobile-order">
+            <span className="properties-panel__field-group-label">Mobile order (preview only)</span>
+            <p className="properties-panel__hint">
+              Reorders the builder preview only. The exported email keeps columns in Desktop order (Desktop left-to-right becomes Mobile top-to-bottom).
+            </p>
+            <ol>
+              {order.map((columnIndex, position) => (
+                <li key={columnIndex}>
+                  <span>Column {columnIndex + 1}</span>
+                  <div className="properties-panel__mobile-order-controls">
+                    <button
+                      type="button"
+                      aria-label={`Move Column ${columnIndex + 1} up`}
+                      disabled={position === 0}
+                      onClick={() => move(position, -1)}
+                    >
+                      <span className="mdaiw-icon mdaiw-icon--chevron-down properties-panel__mobile-order-icon--up" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move Column ${columnIndex + 1} down`}
+                      disabled={position === order.length - 1}
+                      onClick={() => move(position, 1)}
+                    >
+                      <span className="mdaiw-icon mdaiw-icon--chevron-down" aria-hidden="true" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </>
       )}
     </div>
   );
@@ -255,21 +281,13 @@ export function ColumnEditor({
             <span>%</span>
           </div>
         </label>
-        <label className="properties-panel__field">
-          <span>Background color</span>
-          <input
-            type="color"
-            value={column.settings.backgroundColor || '#ffffff'}
-            onChange={(event) => onChangeColumnSettings({ backgroundColor: event.target.value })}
-          />
-        </label>
-        <button
-          type="button"
-          className="properties-panel__inherit-reset"
-          onClick={() => onChangeColumnSettings({ backgroundColor: '' })}
-        >
-          No background
-        </button>
+        <ColorControl
+          label="Background color"
+          value={column.settings.backgroundColor}
+          onChange={(backgroundColor) => onChangeColumnSettings({ backgroundColor })}
+          allowNone
+          noneLabel="No background"
+        />
         <label className="properties-panel__field">
           <span>Vertical alignment</span>
           <select

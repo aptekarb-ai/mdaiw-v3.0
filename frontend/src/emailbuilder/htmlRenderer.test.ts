@@ -115,11 +115,15 @@ describe('renderEmailBody — outer left/right spacing', () => {
     // No spacer <td> (0/0 means no spacer columns, not no outer table).
     expect(html).not.toMatch(/font-size:0; line-height:0;">&nbsp;<\/td>/);
     // The outer wrapper table IS present: renderEmailBody's own output
-    // must contain exactly one MORE occurrence of the outer-table-open
-    // literal than the module's raw (unwrapped) renderEmailHtml does —
-    // i.e. the outer wrapper was prepended, not skipped.
-    const OUTER_TABLE_OPEN = '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>';
-    const countOf = (haystack: string) => haystack.split(OUTER_TABLE_OPEN).length - 1;
+    // must contain exactly one MORE occurrence of the module outer-wrapper
+    // table than the module's raw (unwrapped) renderEmailHtml does — i.e.
+    // the outer wrapper was prepended, not skipped. Matches the bare form
+    // (no responsive class) or with a `class="m-eb-ID"` attribute — but
+    // NOT renderEmailBody's own unrelated outer content table, which
+    // shares the same literal prefix but always carries a `style=`
+    // attribute instead (see htmlRenderer.ts).
+    const OUTER_TABLE_OPEN = /<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"(?: class="[^"]*")?><tr>/g;
+    const countOf = (haystack: string) => (haystack.match(OUTER_TABLE_OPEN) ?? []).length;
     const rawHtml = getModuleDefinition('text').renderEmailHtml(textModule);
     expect(countOf(html)).toBe(countOf(rawHtml) + 1);
   });
@@ -288,7 +292,8 @@ describe('Feature 05 — nested layout rendering', () => {
     const layout = createModule('layout-2col-50-50', 0);
     layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
     const html = renderEmailBody(withModules([layout]));
-    expect(html).toContain('<td width="20" style="width:20px; font-size:0; line-height:0;">&nbsp;</td>');
+    expect(html).toContain('width="20"');
+    expect(html).toContain('style="width:20px; font-size:0; line-height:0;">&nbsp;</td>');
   });
 
   it('omits the gutter <td> entirely when columnGutter is 0 (or unset)', () => {

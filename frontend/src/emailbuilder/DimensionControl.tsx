@@ -98,13 +98,13 @@ export function ResponsiveDimensionField({
   return (
     <div className="properties-panel__field">
       <span>
-        {label} ({isMobile ? 'Mobile' : 'Desktop'})
+        {label} ({isMobile ? `Mobile — ${overridden ? 'override' : 'inherited'}` : 'Desktop'})
       </span>
       <DimensionControl
         value={resolved}
         pxBounds={pxBounds}
         allowedUnits={allowedUnits}
-        ariaLabel={`${label} (${isMobile ? 'Mobile' : 'Desktop'})`}
+        ariaLabel={`${label} (${isMobile ? `Mobile — ${overridden ? 'override' : 'inherited'}` : 'Desktop'})`}
         onChange={(next) => {
           if (isMobile) {
             onChange({ ...dimension, mobile: next });

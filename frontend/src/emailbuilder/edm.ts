@@ -132,10 +132,33 @@ export interface EmailModuleSettings {
   // Layout modules only (Feature 05) — the order columns are shown in
   // when mobileStack is on, as an array of desktop column indexes (e.g.
   // [1, 0] shows desktop column 2 first). Canvas-preview + data-model
-  // only for this feature, same as mobileStack itself — not yet emitted
-  // as @media CSS in the static export (Feature 07 scope). Absent/undefined
+  // only — see MOBILE_COLUMN_ORDER_LIMITATION in responsiveStyles.ts for
+  // why true DOM reordering is not emitted in the static export (no
+  // flex/grid `order` allowed, and duplicating markup per breakpoint was
+  // judged unsafe/unproven for Feature 07's scope). Absent/undefined
   // means "desktop order" (identity).
   mobileColumnOrder?: number[];
+  // Feature 07 — layout modules only. Vertical gap between stacked
+  // columns on Mobile (instruction 24), rendered as a real spacer <tr>
+  // between stacked column rows — never CSS margin. Undefined/0 means no
+  // gap.
+  mobileColumnGap?: DimensionValue;
+  // Feature 07 — per-module responsive visibility (instruction 10).
+  // 'all' (or undefined) is visible on both viewports — the default for
+  // every existing module, so this is purely additive/backward-compatible.
+  // Desktop is still the STRUCTURAL fallback either way (the module
+  // always renders in the base HTML); hiding is layered on top via the
+  // responsive <style> block (see responsiveStyles.ts) rather than never
+  // rendering the module at all — never deletes it from the EDM.
+  visibility?: ModuleVisibility;
+}
+
+export type ModuleVisibility = 'all' | 'hideMobile' | 'hideDesktop';
+
+export function resolveVisible(settings: EmailModuleSettings, viewport: 'desktop' | 'mobile'): boolean {
+  const visibility = settings.visibility ?? 'all';
+  if (viewport === 'mobile') return visibility !== 'hideMobile';
+  return visibility !== 'hideDesktop';
 }
 
 // --- Feature 05 — Layout Builder: nested column content -----------------
@@ -252,6 +275,14 @@ export interface TextModuleProps {
   // Feature 06 — optional; undefined/omitted behaves exactly as before
   // (fluid, no explicit width attribute/style beyond 100% content flow).
   width?: ResponsiveDimension;
+  // Feature 07 — selected responsive typography overrides (instruction
+  // 18: "Font size, Line height, Text alignment... where the schema
+  // declares them responsive" — Text is the one module family that
+  // declares them). Flat `mobileX?` fields, same convention as
+  // SpacerModuleProps.mobileHeight; undefined inherits the desktop value.
+  mobileFontSize?: number;
+  mobileLineHeight?: number;
+  mobileAlign?: HorizontalAlign;
 }
 
 export interface ImageModuleProps {
@@ -283,6 +314,9 @@ export interface ButtonModuleProps {
   borderWidth?: number;
   paddingHorizontal?: number;
   paddingVertical?: number;
+  // Feature 07 — instruction 29: "Desktop Auto, Mobile Full Width".
+  // Undefined inherits the desktop widthMode (no responsive override).
+  mobileWidthMode?: ButtonWidthMode;
 }
 
 export interface LayoutModuleProps {

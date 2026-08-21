@@ -14,6 +14,12 @@ function clamp(value: number, min: number, max: number): number {
 interface FieldBinding<T> {
   value: T;
   onChange: (next: T) => void;
+  // Feature 07 — optional label override so a responsive-aware caller
+  // (e.g. Text's Style tab in Mobile view) can append an
+  // "(inherited)"/"(override)" indicator, same convention as
+  // PaddingControls/OuterSpacingControls, without every non-responsive
+  // caller needing to know about it.
+  label?: string;
 }
 
 // Clamping on every keystroke corrupts multi-digit typing (e.g. typing
@@ -62,7 +68,6 @@ export interface TypographyControlsProps {
 export function TypographyControls({ fontFamily, fontSize, fontWeight, lineHeight, color }: TypographyControlsProps) {
   return (
     <div className="properties-panel__field-group">
-      <span className="properties-panel__field-group-label">Typography</span>
       {fontFamily && (
         <label className="properties-panel__field">
           <span>Font family</span>
@@ -72,7 +77,7 @@ export function TypographyControls({ fontFamily, fontSize, fontWeight, lineHeigh
         </label>
       )}
       <div className="properties-panel__typography-row">
-        <NumberField label="Font size (px)" value={fontSize.value} onChange={fontSize.onChange} min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} />
+        <NumberField label={fontSize.label ?? 'Font size (px)'} value={fontSize.value} onChange={fontSize.onChange} min={FONT_SIZE_MIN} max={FONT_SIZE_MAX} />
         {fontWeight && (
           <label className="properties-panel__field">
             <span>Font weight</span>
@@ -84,7 +89,7 @@ export function TypographyControls({ fontFamily, fontSize, fontWeight, lineHeigh
         )}
       </div>
       {lineHeight && (
-        <NumberField label="Line height (px)" value={lineHeight.value} onChange={lineHeight.onChange} min={LINE_HEIGHT_MIN} max={LINE_HEIGHT_MAX} />
+        <NumberField label={lineHeight.label ?? 'Line height (px)'} value={lineHeight.value} onChange={lineHeight.onChange} min={LINE_HEIGHT_MIN} max={LINE_HEIGHT_MAX} />
       )}
       {color && <ColorControl label="Text color" value={color.value} onChange={color.onChange} />}
     </div>

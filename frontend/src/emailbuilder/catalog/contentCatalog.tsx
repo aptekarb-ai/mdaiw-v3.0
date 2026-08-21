@@ -1,13 +1,13 @@
 import type {
   ArticleTeaserModuleProps, ContentBlockModuleProps, EmailModuleType, FeatureListModuleProps,
-  IconTextRowsModuleProps, QuoteModuleProps,
+  IconTextRow, IconTextRowsModuleProps, QuoteModuleProps,
 } from '../edm';
 import { DEFAULT_SPACING, resolveSpacing } from '../edm';
 import { px, resolveDimension, widthAttr, widthCssValue } from '../dimensions';
 import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
 import {
   GENERIC_ONLY, ImagePreview, cell, createResponsiveSettings, moduleTableRow, textLine, type AnyModuleDefinition,
-  type ModuleDefinition, type ModuleImagePosition, type SchemaField,
+  type ModuleDefinition, type ModuleImagePosition, type RepeatableFieldConfig, type SchemaField,
 } from '../registryCore';
 
 // --- Heading + Text (+ optional image, + optional CTA) -----------------
@@ -334,6 +334,30 @@ const featureListDefinition: ModuleDefinition<FeatureListModuleProps> = {
 
 // --- Icon + Text rows ------------------------------------------------------
 
+const MAX_ICON_TEXT_ROWS = 8;
+
+const iconTextRowsField: RepeatableFieldConfig<IconTextRow> = {
+  path: 'items',
+  group: 'content',
+  label: 'Rows',
+  itemLabel: (item, index) => item.title.trim() || `Row ${index + 1}`,
+  createItem: () => ({ title: 'New row', text: '' }),
+  maxItems: MAX_ICON_TEXT_ROWS,
+  addLabel: 'Add row',
+  renderItemFields: (item, update) => (
+    <>
+      <label className="properties-panel__field">
+        <span>Title</span>
+        <input type="text" value={item.title} onChange={(e) => update({ title: e.target.value })} />
+      </label>
+      <label className="properties-panel__field">
+        <span>Text</span>
+        <input type="text" value={item.text} onChange={(e) => update({ text: e.target.value })} />
+      </label>
+    </>
+  ),
+};
+
 const iconTextRowsDefinition: ModuleDefinition<IconTextRowsModuleProps> = {
   type: 'content-icon-text-rows',
   label: 'Icon + Text Rows',
@@ -347,6 +371,7 @@ const iconTextRowsDefinition: ModuleDefinition<IconTextRowsModuleProps> = {
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'schema',
   editableFields: [],
+  repeatableField: iconTextRowsField,
   createDefaultProps: () => ({
     items: [
       { title: 'Step one', text: 'Create your account.' },

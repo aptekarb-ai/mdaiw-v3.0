@@ -61,7 +61,7 @@ export function OuterSpacingControls({ settings, viewport, onChange }: OuterSpac
   return (
     <div className="properties-panel__field-group">
       <span className="properties-panel__field-group-label">
-        Outer Spacer Columns — {isMobile ? 'Mobile' : 'Desktop'}
+        {isMobile ? 'Mobile' : 'Desktop'}
       </span>
       <label className="properties-panel__field">
         <span>

@@ -274,6 +274,15 @@ def _validate_settings(prefix, settings, columns=None):
     _validate_column_gutter(f'{prefix}.columnGutter', settings.get('columnGutter'))
     _validate_mobile_column_order(f'{prefix}.mobileColumnOrder', settings.get('mobileColumnOrder'), columns)
 
+    # Feature 07 — same "independent of shape" convention as columnGutter/
+    # mobileColumnOrder above; all optional, absent = safe default.
+    _validate_enum(f'{prefix}.visibility', settings.get('visibility'), MODULE_VISIBILITY_VALUES)
+    mobile_stack = settings.get('mobileStack')
+    if mobile_stack is not None and not isinstance(mobile_stack, bool):
+        raise EdmValidationError(f'{prefix}.mobileStack must be a boolean.')
+    if settings.get('mobileColumnGap') is not None:
+        _validate_gutter_dimension(f'{prefix}.mobileColumnGap', settings['mobileColumnGap'])
+
     if 'desktop' in settings or 'mobile' in settings or 'outerSpacing' in settings:
         # Current (Desktop/Mobile + outer-spacing) shape.
         _validate_padding_keys(f'{prefix}.desktop', settings.get('desktop', {}), required=True)
@@ -475,6 +484,17 @@ REPEATABLE_LIST_MAX_LENGTH = {
     'items': 12,
 }
 
+# Feature 07 — mirrors frontend/src/emailbuilder/TypographyControls.tsx's
+# FONT_SIZE_MIN/MAX and LINE_HEIGHT_MIN/MAX exactly, applied generically
+# to ANY key ending in "FontSize"/"LineHeight" (fontSize, mobileFontSize,
+# lineHeight, mobileLineHeight, ...) so a future responsive-typography
+# field gets the same bound for free.
+FONT_SIZE_BOUNDS = (8, 72)
+LINE_HEIGHT_BOUNDS = (10, 120)
+BUTTON_WIDTH_MODES = frozenset({'auto', 'fixed', 'full'})
+HORIZONTAL_ALIGN_VALUES = frozenset({'left', 'center', 'right'})
+MODULE_VISIBILITY_VALUES = frozenset({'all', 'hideMobile', 'hideDesktop'})
+
 
 def _validate_hex_color(prefix, value):
     if value == '':
@@ -499,6 +519,25 @@ def _validate_font_id(prefix, value):
         raise EdmValidationError(f'{prefix} must be one of the whitelisted email-safe font ids.')
 
 
+def _validate_bounded_number(prefix, value, bounds):
+    if value is None:
+        return
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise EdmValidationError(f'{prefix} must be a number.')
+    if value != value or value in (float('inf'), float('-inf')):  # NaN/Infinity
+        raise EdmValidationError(f'{prefix} must be a finite number.')
+    low, high = bounds
+    if value < low or value > high:
+        raise EdmValidationError(f'{prefix} must be between {low} and {high}.')
+
+
+def _validate_enum(prefix, value, allowed):
+    if value is None:
+        return
+    if value not in allowed:
+        raise EdmValidationError(f'{prefix} must be one of {sorted(allowed)}.')
+
+
 def _validate_prop_conventions(prefix, value, depth=0):
     if not isinstance(value, dict):
         return
@@ -510,6 +549,14 @@ def _validate_prop_conventions(prefix, value, depth=0):
             _validate_font_id(key_prefix, item)
         elif key.endswith('Href') or key.endswith('href') or key in URL_KEY_NAMES:
             _validate_safe_url_value(key_prefix, item)
+        elif key.lower().endswith('fontsize'):
+            _validate_bounded_number(key_prefix, item, FONT_SIZE_BOUNDS)
+        elif key.lower().endswith('lineheight'):
+            _validate_bounded_number(key_prefix, item, LINE_HEIGHT_BOUNDS)
+        elif key.lower().endswith('widthmode'):
+            _validate_enum(key_prefix, item, BUTTON_WIDTH_MODES)
+        elif key.endswith('Align') or key == 'align':
+            _validate_enum(key_prefix, item, HORIZONTAL_ALIGN_VALUES)
         elif key in REPEATABLE_LIST_MAX_LENGTH and isinstance(item, list):
             max_length = REPEATABLE_LIST_MAX_LENGTH[key]
             if len(item) > max_length:

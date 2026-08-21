@@ -144,6 +144,12 @@ export async function updateEmailDocument(
   });
 }
 
+export async function deleteEmailDocument(id: number | string): Promise<void> {
+  await apiRequest<void>(`/api/v1/email-builder/emails/${id}/`, {
+    method: 'DELETE',
+  });
+}
+
 export async function listSavedModules(): Promise<SavedEmailModule[]> {
   return apiRequest<SavedEmailModule[]>('/api/v1/email-builder/saved-modules/');
 }

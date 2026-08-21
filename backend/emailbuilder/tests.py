@@ -455,6 +455,153 @@ class EmailDocumentBuilderPatchTests(TestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class EmailDocumentRenameTests(TestCase):
+    """Dashboard rename — reuses the same PATCH endpoint the builder uses
+    for content; `name` is just another writable serializer field, so no
+    new endpoint is needed."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='john.roe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='Original Name', platform='generic', width=700, start_type='blank',
+        )
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_owner_can_rename(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'name': 'Renamed Newsletter'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['name'], 'Renamed Newsletter')
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.name, 'Renamed Newsletter')
+
+    def test_rename_trims_whitespace(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'name': '  Spaced Rename  '})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['name'], 'Spaced Rename')
+
+    def test_rename_rejects_empty_name(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'name': ''})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.name, 'Original Name')
+
+    def test_rename_rejects_whitespace_only_name(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'name': '   '})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+
+    def test_rename_preserves_content(self):
+        self.document.content = {'version': 1, 'modules': [_module()]}
+        self.document.save()
+        self.client.force_login(self.user)
+        response = self._patch_json({'name': 'Renamed, Content Preserved'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['content'], {'version': 1, 'modules': [_module()]})
+
+    def test_non_owner_cannot_rename(self):
+        self.client.force_login(self.other_user)
+        response = self._patch_json({'name': 'Hijacked'})
+        self.assertEqual(response.status_code, 404)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.name, 'Original Name')
+
+    def test_anonymous_cannot_rename(self):
+        response = self._patch_json({'name': 'Hijacked'})
+        self.assertEqual(response.status_code, 403)
+
+
+class EmailDocumentDeleteTests(TestCase):
+    """Dashboard delete row action — same ownership boundary as every
+    other EmailDocument view."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='john.roe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='To Delete', platform='generic', width=700, start_type='blank',
+        )
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+
+    def test_owner_can_delete_own_document(self):
+        self.client.force_login(self.user)
+        response = self.client.delete(self.url)
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(EmailDocument.objects.filter(pk=self.document.id).exists())
+
+    def test_deleted_document_no_longer_listed(self):
+        self.client.force_login(self.user)
+        self.client.delete(self.url)
+        response = self.client.get('/api/v1/email-builder/emails/')
+        self.assertEqual(response.json(), [])
+
+    def test_non_owner_cannot_delete(self):
+        self.client.force_login(self.other_user)
+        response = self.client.delete(self.url)
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(EmailDocument.objects.filter(pk=self.document.id).exists())
+
+    def test_anonymous_cannot_delete(self):
+        response = self.client.delete(self.url)
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(EmailDocument.objects.filter(pk=self.document.id).exists())
+
+
+class EmailDocumentDuplicateViaCreateThenPatchTests(TestCase):
+    """Duplicate has no dedicated endpoint — the frontend composes it from
+    a plain create() followed by a content-only patch() (see
+    frontend/src/emailbuilder/duplicateEmailDocument.ts). These tests
+    cover that exact two-call sequence end-to-end against the real API,
+    the same way the frontend actually calls it."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.source = EmailDocument.objects.create(
+            user=self.user, name='Source Email', platform='sfmc', width=650, start_type='blank',
+            content={'version': 1, 'modules': [_module(module_id='m-original')]},
+        )
+
+    def test_duplicate_sequence_creates_independent_document(self):
+        self.client.force_login(self.user)
+        create_response = self.client.post(
+            '/api/v1/email-builder/emails/',
+            data=json.dumps({
+                'name': 'Copy of Source Email', 'platform': self.source.platform,
+                'width': self.source.width, 'start_type': self.source.start_type,
+            }),
+            content_type='application/json',
+        )
+        self.assertEqual(create_response.status_code, 201)
+        new_id = create_response.json()['id']
+        self.assertNotEqual(new_id, self.source.id)
+
+        cloned_content = {'version': 1, 'modules': [_module(module_id='m-fresh-clone')]}
+        patch_response = self.client.patch(
+            f'/api/v1/email-builder/emails/{new_id}/',
+            data=json.dumps({'content': cloned_content}),
+            content_type='application/json',
+        )
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(patch_response.json()['name'], 'Copy of Source Email')
+        self.assertEqual(patch_response.json()['content'], cloned_content)
+
+        self.source.refresh_from_db()
+        self.assertEqual(self.source.name, 'Source Email')
+        self.assertEqual(self.source.content, {'version': 1, 'modules': [_module(module_id='m-original')]})
+        self.assertEqual(EmailDocument.objects.filter(user=self.user).count(), 2)
+
+
 def _column(column_id='col-a', modules=None, background='', valign='top'):
     return {
         'id': column_id,
@@ -735,6 +882,160 @@ class ModuleElementEditorValidationTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+class ResponsiveEditorValidationTests(TestCase):
+    """Feature 07 — responsive-field validation (visibility, mobile
+    typography/width-mode bounds, mobileStack/mobileColumnGap, and
+    backward compatibility for documents with no responsive fields)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='Responsive Draft', platform='generic', width=700, start_type='blank',
+        )
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+        self.client.force_login(self.user)
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def _responsive_settings(self, **overrides):
+        settings = {
+            'desktop': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20},
+            'mobile': {},
+            'outerSpacing': {'desktop': {'left': {'value': 0, 'unit': 'px'}, 'right': {'value': 0, 'unit': 'px'}}, 'mobile': {}},
+        }
+        settings.update(overrides)
+        return settings
+
+    # --- visibility ---------------------------------------------------------
+
+    def test_valid_visibility_values_accepted(self):
+        for value in ('all', 'hideMobile', 'hideDesktop'):
+            module = _module(settings=self._responsive_settings(visibility=value))
+            response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+            self.assertEqual(response.status_code, 200, value)
+
+    def test_invalid_visibility_value_rejected(self):
+        module = _module(settings=self._responsive_settings(visibility='hideEverywhere'))
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_absent_visibility_defaults_to_valid_all(self):
+        module = _module(settings=self._responsive_settings())
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    # --- mobileStack / mobileColumnGap (layout-shaped, but validated for any module) ---
+
+    def test_mobile_stack_must_be_boolean(self):
+        module = _module(settings=self._responsive_settings(mobileStack='yes'))
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_mobile_stack_boolean_accepted(self):
+        module = _module(settings=self._responsive_settings(mobileStack=False))
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_mobile_column_gap_valid_dimension_accepted(self):
+        module = _module(settings=self._responsive_settings(mobileColumnGap={'value': 12, 'unit': 'px'}))
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_mobile_column_gap_percent_unit_rejected(self):
+        module = _module(settings=self._responsive_settings(mobileColumnGap={'value': 12, 'unit': '%'}))
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_mobile_column_gap_negative_value_rejected(self):
+        module = _module(settings=self._responsive_settings(mobileColumnGap={'value': -5, 'unit': 'px'}))
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    # --- mobile typography bounds (Text module) ------------------------------
+
+    def _text_module_with_props(self, **prop_overrides):
+        props = {
+            'text': 'Hello', 'align': 'left', 'fontFamily': 'arial', 'fontSize': 16,
+            'fontWeight': 400, 'color': '#333333', 'lineHeight': 24, 'backgroundColor': '',
+        }
+        props.update(prop_overrides)
+        return _module(module_type='text', props=props, settings=self._responsive_settings())
+
+    def test_mobile_font_size_within_bounds_accepted(self):
+        module = self._text_module_with_props(mobileFontSize=24)
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_mobile_font_size_out_of_bounds_rejected(self):
+        module = self._text_module_with_props(mobileFontSize=300)
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_mobile_line_height_out_of_bounds_rejected(self):
+        module = self._text_module_with_props(mobileLineHeight=1)
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_mobile_align_invalid_value_rejected(self):
+        module = self._text_module_with_props(mobileAlign='justify')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_mobile_align_valid_value_accepted(self):
+        module = self._text_module_with_props(mobileAlign='center')
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    # --- mobile button width mode --------------------------------------------
+
+    def test_mobile_width_mode_valid_accepted(self):
+        module = _module(module_type='button', props={
+            'text': 'Shop', 'href': 'https://example.com', 'align': 'center',
+            'backgroundColor': '#0082AD', 'textColor': '#FFFFFF', 'fontSize': 15, 'borderRadius': 6,
+            'widthMode': 'auto', 'mobileWidthMode': 'full',
+        }, settings=self._responsive_settings())
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_mobile_width_mode_invalid_rejected(self):
+        module = _module(module_type='button', props={
+            'text': 'Shop', 'href': 'https://example.com', 'align': 'center',
+            'backgroundColor': '#0082AD', 'textColor': '#FFFFFF', 'fontSize': 15, 'borderRadius': 6,
+            'widthMode': 'auto', 'mobileWidthMode': 'huge',
+        }, settings=self._responsive_settings())
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 400)
+
+    # --- backward compatibility -----------------------------------------------
+
+    def test_legacy_document_with_no_responsive_fields_still_saves(self):
+        # No visibility/mobileStack/mobileColumnGap/mobile typography at
+        # all — exactly what every pre-Feature-07 document looks like.
+        module = _module(settings={'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20})
+        response = self._patch_json({'content': {'version': 1, 'modules': [module]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_nested_module_inside_layout_column_validates_responsive_fields_too(self):
+        nested_text = self._text_module_with_props(mobileFontSize=999)
+        layout = _module(module_type='layout-2col-50-50', props={'columnWidths': [50, 50]}, settings=self._responsive_settings())
+        layout['columns'] = [
+            {'id': 'c1', 'modules': [nested_text], 'settings': {
+                'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0}, 'mobile': {},
+                'backgroundColor': '', 'verticalAlign': 'top',
+            }},
+            {'id': 'c2', 'modules': [], 'settings': {
+                'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0}, 'mobile': {},
+                'backgroundColor': '', 'verticalAlign': 'top',
+            }},
+        ]
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+
 def _saved_module_payload(**overrides):
     payload = {
         'name': 'My Reusable Header',
@@ -809,6 +1110,34 @@ class SavedEmailModuleTests(TestCase):
         response = self._post_json(_saved_module_payload(settings=settings))
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()['settings'], settings)
+
+    def test_feature07_responsive_fields_persist_on_saved_module(self):
+        # Instruction 40 — Saved Modules must preserve visibility, mobile
+        # typography overrides, and everything else Feature 07 added,
+        # not just the pre-existing desktop/mobile padding shape.
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 24, 'paddingRight': 24, 'paddingBottom': 24, 'paddingLeft': 24},
+            'mobile': {'paddingTop': 12},
+            'outerSpacing': {
+                'desktop': {'left': {'value': 30, 'unit': 'px'}, 'right': {'value': 20, 'unit': 'px'}},
+                'mobile': {'left': {'value': 8, 'unit': 'px'}, 'right': {'value': 8, 'unit': 'px'}},
+            },
+            'visibility': 'hideMobile',
+        }
+        props = {
+            'text': 'Hello', 'align': 'left', 'fontFamily': 'arial', 'fontSize': 32,
+            'fontWeight': 400, 'color': '#333333', 'lineHeight': 40, 'backgroundColor': '',
+            'mobileFontSize': 24, 'mobileLineHeight': 30, 'mobileAlign': 'center',
+        }
+        response = self._post_json(_saved_module_payload(module_type='text', props=props, settings=settings))
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body['settings']['visibility'], 'hideMobile')
+        self.assertEqual(body['settings']['mobile']['paddingTop'], 12)
+        self.assertEqual(body['settings']['outerSpacing']['mobile']['left']['value'], 8)
+        self.assertEqual(body['props']['mobileFontSize'], 24)
+        self.assertEqual(body['props']['mobileAlign'], 'center')
 
     def test_outer_spacing_percent_over_100_rejected(self):
         self.client.force_login(self.user)

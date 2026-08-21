@@ -80,6 +80,20 @@ export function widthCssValue(dimension: DimensionValue): string {
 // computes the real spacer <td> from the same DimensionValue instead —
 // see registryCore.ts's wrapWithOuterSpacing, the actual source of
 // truth.
+// Feature 07 — ONE generic Desktop/Mobile resolver for every new flat
+// `mobileX?` scalar override field (typography, button width mode,
+// spacer height, ...), matching the exact inheritance rule already used
+// by every dedicated {desktop, mobile} resolver in this codebase
+// (resolveDimension/resolveSpacing/resolveOuterSpacing/resolveColumnGutter):
+// mobile inherits desktop unless an explicit mobile value is present.
+// Kept generic (desktop/mobile passed as plain values, not a wrapper
+// object) so it drops into the existing flat-field convention (e.g.
+// SpacerModuleProps.mobileHeight) without a data-shape migration.
+export function resolveResponsiveValue<T>(desktop: T, mobile: T | undefined, viewport: 'desktop' | 'mobile'): T {
+  if (viewport === 'mobile' && mobile !== undefined) return mobile;
+  return desktop;
+}
+
 export function outerSpacingPx(dimension: DimensionValue, referenceWidth: number): number {
   return dimension.unit === '%' ? Math.round((dimension.value / 100) * referenceWidth) : dimension.value;
 }

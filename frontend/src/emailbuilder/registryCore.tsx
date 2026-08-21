@@ -233,22 +233,49 @@ export function textLine(content: string, style = '', gapBelow = 0): string {
 // presentation table, never CSS margin on a div. Takes an
 // already-resolved {left,right} pair — callers resolve the viewport via
 // edm.ts::resolveOuterSpacing first, so this stays viewport-agnostic.
-export function wrapWithOuterSpacing(bodyHtml: string, outerSpacing: OuterSpacingSides | undefined): string {
+// Feature 07 — optional, purely additive. `mobileOuterSpacing` only
+// widens WHICH sides get a spacer <td> in the base (Desktop) HTML — a
+// side that is 0 on Desktop but > 0 on Mobile still needs a real <td> in
+// the DOM (at 0 width on Desktop) for the responsive <style> block to be
+// able to widen it later; it never changes the Desktop-rendered WIDTH
+// itself. `className` (from responsiveStyles.ts's moduleResponsiveClassName)
+// tags the table/cells so the responsive generator can target this exact
+// module instance; omitted when the module needs no responsive rules at
+// all, keeping the base HTML byte-identical to pre-Feature-07 output.
+export interface WrapOuterSpacingOptions {
+  mobileOuterSpacing?: OuterSpacingSides;
+  className?: string;
+}
+
+export function wrapWithOuterSpacing(
+  bodyHtml: string, outerSpacing: OuterSpacingSides | undefined, options: WrapOuterSpacingOptions = {},
+): string {
   const left = outerSpacing?.left;
   const right = outerSpacing?.right;
-  const leftActive = Boolean(left && left.value > 0);
-  const rightActive = Boolean(right && right.value > 0);
+  const mobileLeft = options.mobileOuterSpacing?.left;
+  const mobileRight = options.mobileOuterSpacing?.right;
+  const leftActive = Boolean(left && left.value > 0) || Boolean(mobileLeft && mobileLeft.value > 0);
+  const rightActive = Boolean(right && right.value > 0) || Boolean(mobileRight && mobileRight.value > 0);
+  // class is appended AFTER the existing attributes (never inserted
+  // before them) so the literal outer-table-open prefix used throughout
+  // the test suite/tooling (`<table role="presentation" width="100%"
+  // cellpadding="0" cellspacing="0" border="0"><tr>`) stays byte-identical
+  // whether or not a className is present — adding responsive classes
+  // must never change how existing structural checks locate this table.
+  const cls = options.className;
+  const classAttr = (suffix: string) => (cls ? ` class="${cls}${suffix}"` : '');
 
-  const spacerCell = (dimension: DimensionValue) => {
-    const widthValue = dimension.unit === '%' ? `${dimension.value}%` : String(Math.round(dimension.value));
-    return `<td width="${widthValue}" style="width:${widthCssValue(dimension)}; font-size:0; line-height:0;">&nbsp;</td>`;
+  const spacerCell = (dimension: DimensionValue | undefined, suffix: string) => {
+    const resolved = dimension ?? { value: 0, unit: 'px' as const };
+    const widthValue = resolved.unit === '%' ? `${resolved.value}%` : String(Math.round(resolved.value));
+    return `<td width="${widthValue}"${classAttr(suffix)} style="width:${widthCssValue(resolved)}; font-size:0; line-height:0;">&nbsp;</td>`;
   };
 
   return (
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
-    + (leftActive ? spacerCell(left as DimensionValue) : '')
-    + `<td>${bodyHtml}</td>`
-    + (rightActive ? spacerCell(right as DimensionValue) : '')
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"${classAttr('')}><tr>`
+    + (leftActive ? spacerCell(left, '-l') : '')
+    + `<td${classAttr('-c')}>${bodyHtml}</td>`
+    + (rightActive ? spacerCell(right, '-r') : '')
     + '</tr></table>'
   );
 }
@@ -264,11 +291,26 @@ export function wrapWithOuterSpacing(bodyHtml: string, outerSpacing: OuterSpacin
 // outer spacer columns. Desktop is the resolution source of truth here,
 // same convention as every other Desktop/Mobile property in the static
 // HTML export (see edm.ts's EmailModuleSettings docstring).
+// Feature 07 — deterministic, safe CSS class for one module instance
+// (instruction 6: "do not expose raw database/module IDs directly if
+// unsafe characters are possible"). Strips everything but letters/digits
+// from the id and prefixes with a letter so the class is always a valid
+// CSS identifier even if the id itself started with a digit (e.g. a raw
+// UUID). Renderer metadata only — never persisted, never the EDM source
+// of truth (see responsiveStyles.ts).
+export function moduleResponsiveClassName(moduleId: string): string {
+  return `m-eb-${moduleId.replace(/[^a-zA-Z0-9]/g, '')}`;
+}
+
 export function renderModuleWithOuterStructure(module: EmailModule): string {
   const definition = resolveModuleDefinition(module.type);
   if (!definition) return '';
   const resolvedOuterSpacing = resolveOuterSpacing(module.settings, 'desktop');
-  return wrapWithOuterSpacing(definition.renderEmailHtml(module), resolvedOuterSpacing);
+  const mobileOuterSpacing = resolveOuterSpacing(module.settings, 'mobile');
+  return wrapWithOuterSpacing(definition.renderEmailHtml(module), resolvedOuterSpacing, {
+    mobileOuterSpacing,
+    className: moduleResponsiveClassName(module.id),
+  });
 }
 
 // Builder-canvas-only: shown whenever no image URL is set yet, or the

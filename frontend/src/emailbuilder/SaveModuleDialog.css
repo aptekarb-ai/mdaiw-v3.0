@@ -54,6 +54,12 @@
   border-color: var(--color-primary-blue);
 }
 
+.save-module-dialog__error {
+  margin: var(--space-2) 0 0;
+  font-size: 13px;
+  color: var(--color-error);
+}
+
 .save-module-dialog__actions {
   display: flex;
   justify-content: flex-end;

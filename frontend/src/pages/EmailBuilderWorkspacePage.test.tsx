@@ -801,3 +801,141 @@ describe('EmailBuilderWorkspacePage — Feature 06 Module Element Editor', () =>
     ))).toBeInTheDocument();
   });
 });
+
+describe('EmailBuilderWorkspacePage — Feature 07 Responsive Editor', () => {
+  it('Image: Desktop 300px / Mobile 100% resolve independently and switching back to Desktop leaves it untouched', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Images');
+    await user.click(await screen.findByRole('button', { name: 'Add Image' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    await user.selectOptions(screen.getByLabelText('Unit'), 'px');
+    const width = screen.getByLabelText(/^Width/);
+    fireEvent.change(width, { target: { value: '300' } });
+    expect(width).toHaveValue(300);
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    await user.selectOptions(screen.getByLabelText('Unit'), '%');
+    fireEvent.change(screen.getByLabelText(/^Width/), { target: { value: '100' } });
+    expect(screen.getByLabelText(/^Width/)).toHaveValue(100);
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(screen.getByLabelText(/^Width/)).toHaveValue(300);
+  });
+
+  it('Outer spacers: Desktop 30/20, Mobile 8/8 resolve independently per viewport', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const outerSection = () => screen.getAllByText('Outer Spacer Columns', { exact: false })[0].closest('.properties-panel__section') as HTMLElement;
+    fireEvent.change(within(outerSection()).getByLabelText(/^Left Spacer/), { target: { value: '30' } });
+    fireEvent.change(within(outerSection()).getByLabelText(/^Right Spacer/), { target: { value: '20' } });
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    fireEvent.change(within(outerSection()).getByLabelText(/^Left Spacer/), { target: { value: '8' } });
+    fireEvent.change(within(outerSection()).getByLabelText(/^Right Spacer/), { target: { value: '8' } });
+    expect(within(outerSection()).getByLabelText(/^Left Spacer/)).toHaveValue(8);
+    expect(within(outerSection()).getByLabelText(/^Right Spacer/)).toHaveValue(8);
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(within(outerSection()).getByLabelText(/^Left Spacer/)).toHaveValue(30);
+    expect(within(outerSection()).getByLabelText(/^Right Spacer/)).toHaveValue(20);
+  });
+
+  it('Typography: Text Desktop font-size/line-height/align, Mobile override independently, with inherited/override indicators', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    fireEvent.change(screen.getByLabelText(/^Font size/), { target: { value: '32' } });
+    fireEvent.change(screen.getByLabelText(/^Line height/), { target: { value: '40' } });
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(screen.getByLabelText(/^Font size.*inherited/)).toHaveValue(32);
+    fireEvent.change(screen.getByLabelText(/^Font size/), { target: { value: '24' } });
+    fireEvent.change(screen.getByLabelText(/^Line height/), { target: { value: '30' } });
+    expect(screen.getByLabelText(/^Font size.*override/)).toHaveValue(24);
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(screen.getByLabelText(/^Font size \(px\)$/)).toHaveValue(32);
+  });
+
+  it('Visibility: Hide on Mobile keeps the module visible on Desktop and is not deleted from the document', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    await user.selectOptions(screen.getByLabelText('Show this module on'), 'hideMobile');
+    expect(screen.getByLabelText('Show this module on')).toHaveValue('hideMobile');
+    // Still present/selected — never deleted from the EDM.
+    expect(screen.getByRole('tab', { name: 'Settings' })).toBeInTheDocument();
+  });
+
+  it('Reset Mobile Overrides clears padding/outer-spacer Mobile overrides back to inheritance without touching Desktop', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const outerSection = () => screen.getAllByText('Outer Spacer Columns', { exact: false })[0].closest('.properties-panel__section') as HTMLElement;
+    fireEvent.change(within(outerSection()).getByLabelText(/^Left Spacer/), { target: { value: '30' } });
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    fireEvent.change(within(outerSection()).getByLabelText(/^Left Spacer/), { target: { value: '8' } });
+    expect(within(outerSection()).getByLabelText(/^Left Spacer/)).toHaveValue(8);
+
+    await user.click(screen.getByRole('button', { name: 'Reset Mobile Overrides' }));
+    await user.click(await screen.findByRole('button', { name: /Confirm reset/ }));
+    expect(within(outerSection()).getByLabelText(/^Left Spacer/)).toHaveValue(30);
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(within(outerSection()).getByLabelText(/^Left Spacer/)).toHaveValue(30);
+  });
+
+  it('2-column stacking: Stack off shows a narrow-width compatibility hint without blocking the setting', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Stack columns on Mobile' })).toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: 'Stack columns on Mobile' }));
+    expect(screen.getByRole('checkbox', { name: 'Stack columns on Mobile' })).not.toBeChecked();
+    expect(screen.getByText(/side-by-side on Mobile/)).toBeInTheDocument();
+  });
+
+  it('Nested module: a Text module inside a Layout column supports its own independent Mobile font-size override', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    const addContentButtons = screen.getAllByText('+ Add content');
+    await user.click(addContentButtons[0]);
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    fireEvent.change(screen.getByLabelText(/^Font size/), { target: { value: '20' } });
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    fireEvent.change(screen.getByLabelText(/^Font size/), { target: { value: '16' } });
+    expect(screen.getByLabelText(/^Font size.*override/)).toHaveValue(16);
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(screen.getByLabelText(/^Font size \(px\)$/)).toHaveValue(20);
+  });
+});
