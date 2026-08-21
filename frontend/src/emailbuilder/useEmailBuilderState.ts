@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { EmailModule, EmailModuleSettings, EmailModuleType } from './edm';
-import { cloneModuleWithNewId, createModule } from './moduleFactory';
+import { cloneModuleWithNewId, createModule, createModuleFromSaved } from './moduleFactory';
+import type { SavedEmailModule } from './types';
 
 const HISTORY_LIMIT = 50;
 // Property-panel edits (typing in a text/color/number field) fire one
@@ -29,6 +30,8 @@ export interface UseEmailBuilderState {
   loadModules: (modules: EmailModule[]) => void;
   addModule: (type: EmailModuleType) => void;
   insertModuleAt: (type: EmailModuleType, index: number) => void;
+  addSavedModule: (saved: SavedEmailModule) => void;
+  insertSavedModuleAt: (saved: SavedEmailModule, index: number) => void;
   selectModule: (id: string | null) => void;
   deleteModule: (id: string) => void;
   duplicateModule: (id: string) => void;
@@ -102,6 +105,22 @@ export function useEmailBuilderState(): UseEmailBuilderState {
   const insertModuleAt = useCallback((type: EmailModuleType, index: number) => {
     const current = modulesRef.current;
     const newModule = createModule(type, index);
+    const positioned = [...current];
+    positioned.splice(index, 0, newModule);
+    commit(reindex(positioned));
+    setSelectedModuleId(newModule.id);
+  }, [commit]);
+
+  const addSavedModule = useCallback((saved: SavedEmailModule) => {
+    const current = modulesRef.current;
+    const newModule = createModuleFromSaved(saved, current.length);
+    commit([...current, newModule]);
+    setSelectedModuleId(newModule.id);
+  }, [commit]);
+
+  const insertSavedModuleAt = useCallback((saved: SavedEmailModule, index: number) => {
+    const current = modulesRef.current;
+    const newModule = createModuleFromSaved(saved, index);
     const positioned = [...current];
     positioned.splice(index, 0, newModule);
     commit(reindex(positioned));
@@ -190,6 +209,8 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     loadModules,
     addModule,
     insertModuleAt,
+    addSavedModule,
+    insertSavedModuleAt,
     selectModule,
     deleteModule,
     duplicateModule,

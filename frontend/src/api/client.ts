@@ -5,7 +5,10 @@ import type {
   LoginSuccessResponse,
 } from '../types/auth';
 import type { RegistrationResponse } from '../types/registration';
-import type { CreateEmailDocumentInput, EmailDocument, UpdateEmailDocumentInput } from '../emailbuilder/types';
+import type {
+  CreateEmailDocumentInput, CreateSavedModuleInput, EmailDocument, SavedEmailModule,
+  UpdateEmailDocumentInput,
+} from '../emailbuilder/types';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -138,5 +141,22 @@ export async function updateEmailDocument(
   return apiRequest<EmailDocument>(`/api/v1/email-builder/emails/${id}/`, {
     method: 'PATCH',
     body: JSON.stringify(input),
+  });
+}
+
+export async function listSavedModules(): Promise<SavedEmailModule[]> {
+  return apiRequest<SavedEmailModule[]>('/api/v1/email-builder/saved-modules/');
+}
+
+export async function createSavedModule(input: CreateSavedModuleInput): Promise<SavedEmailModule> {
+  return apiRequest<SavedEmailModule>('/api/v1/email-builder/saved-modules/', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteSavedModule(id: number | string): Promise<void> {
+  await apiRequest<void>(`/api/v1/email-builder/saved-modules/${id}/`, {
+    method: 'DELETE',
   });
 }

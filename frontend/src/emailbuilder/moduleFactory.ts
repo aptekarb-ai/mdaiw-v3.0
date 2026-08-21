@@ -1,5 +1,7 @@
 import type { EmailModule, EmailModuleType } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
+import { normalizeModule } from './edmMigration';
+import type { SavedEmailModule } from './types';
 
 let counter = 0;
 
@@ -33,4 +35,21 @@ export function cloneModuleWithNewId(module: EmailModule, order: number): EmailM
     props: { ...module.props },
     settings: { ...module.settings },
   };
+}
+
+// Feature 04 — insert a Saved Module. Unlike createModule() (fresh
+// default props from the registry), this clones the saved instance's own
+// captured props/settings — only the EDM instance id is fresh, so two
+// insertions of the same saved module never collide. Normalized on the
+// way in too — a module saved before the Desktop/Mobile + outer-spacing
+// architecture must upgrade cleanly, same as loading an old document.
+export function createModuleFromSaved(saved: SavedEmailModule, order: number): EmailModule {
+  const normalized = normalizeModule({
+    id: '',
+    type: saved.module_type as EmailModuleType,
+    order,
+    props: { ...saved.props },
+    settings: { ...saved.settings },
+  });
+  return { ...normalized, id: generateModuleId(), order };
 }

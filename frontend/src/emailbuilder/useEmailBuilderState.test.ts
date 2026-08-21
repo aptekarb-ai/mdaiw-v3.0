@@ -2,6 +2,21 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { useEmailBuilderState } from './useEmailBuilderState';
 import type { TextModuleProps } from './edm';
+import { createResponsiveSettings } from './registryCore';
+import type { SavedEmailModule } from './types';
+
+function saved(overrides: Partial<SavedEmailModule> = {}): SavedEmailModule {
+  return {
+    id: 1,
+    name: 'My Header',
+    module_type: 'header-logo-center',
+    props: { logoSrc: 'https://example.com/logo.png', logoAlt: 'Logo', logoWidth: 200 },
+    settings: createResponsiveSettings({ paddingTop: 24, paddingRight: 24, paddingBottom: 24, paddingLeft: 24 }),
+    created_at: '2026-08-20T10:00:00Z',
+    updated_at: '2026-08-20T10:00:00Z',
+    ...overrides,
+  };
+}
 
 describe('useEmailBuilderState', () => {
   it('starts empty, clean, with no undo/redo history', () => {
@@ -108,6 +123,60 @@ describe('useEmailBuilderState', () => {
     expect(result.current.dirty).toBe(false);
     expect(result.current.modules).toHaveLength(1);
     expect(result.current.canUndo).toBe(true);
+  });
+
+  it('addSavedModule inserts the saved instance props/settings with a fresh id', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addSavedModule(saved()));
+
+    expect(result.current.modules).toHaveLength(1);
+    const inserted = result.current.modules[0];
+    expect(inserted.type).toBe('header-logo-center');
+    expect(inserted.props).toEqual(saved().props);
+    expect(inserted.id).not.toBe('');
+    expect(result.current.selectedModuleId).toBe(inserted.id);
+  });
+
+  it('addSavedModule preserves the saved module\'s Desktop/Mobile outer-spacer values', () => {
+    const savedWithSpacing = saved({
+      settings: {
+        ...createResponsiveSettings({ paddingTop: 24, paddingRight: 24, paddingBottom: 24, paddingLeft: 24 }),
+        outerSpacing: {
+          desktop: { left: { value: 20, unit: 'px' }, right: { value: 30, unit: 'px' } },
+          mobile: { left: { value: 8, unit: 'px' } },
+        },
+      },
+    });
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addSavedModule(savedWithSpacing));
+
+    const inserted = result.current.modules[0];
+    expect(inserted.settings.outerSpacing).toEqual({
+      desktop: { left: { value: 20, unit: 'px' }, right: { value: 30, unit: 'px' } },
+      mobile: { left: { value: 8, unit: 'px' } },
+    });
+  });
+
+  it('two insertions of the same saved module never share an instance id', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => {
+      result.current.addSavedModule(saved());
+      result.current.addSavedModule(saved());
+    });
+    const [first, second] = result.current.modules;
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it('insertSavedModuleAt inserts at the given index and reindexes order', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => {
+      result.current.addModule('text');
+      result.current.addModule('button');
+    });
+
+    act(() => result.current.insertSavedModuleAt(saved(), 1));
+    expect(result.current.modules.map((m) => m.type)).toEqual(['text', 'header-logo-center', 'button']);
+    expect(result.current.modules.map((m) => m.order)).toEqual([0, 1, 2]);
   });
 
   it('loadModules resets modules, selection, dirty state and history', () => {

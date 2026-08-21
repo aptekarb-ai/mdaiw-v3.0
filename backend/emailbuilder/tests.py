@@ -3,7 +3,7 @@ import json
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from .models import EmailDocument
+from .models import EmailDocument, SavedEmailModule
 
 
 class EmailDocumentCreateTests(TestCase):
@@ -271,3 +271,314 @@ class EmailDocumentBuilderPatchTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['platform'], 'sfmc')
         self.assertEqual(response.json()['width'], 750)
+
+    def test_feature_04_module_types_accepted(self):
+        self.client.force_login(self.user)
+        for module_type in [
+            'layout-6col', 'header-logo-nav', 'hero-background-image', 'content-quote',
+            'product-three-cards', 'cta-dual', 'social-follow-us', 'footer-preference-unsubscribe',
+        ]:
+            content = {'version': 1, 'modules': [_module(module_type=module_type)]}
+            response = self._patch_json({'content': content})
+            self.assertEqual(response.status_code, 200, module_type)
+
+    def test_responsive_settings_shape_accepted(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20},
+            'mobile': {'paddingLeft': 12, 'paddingRight': 12},
+            'outerSpacing': {'left': {'value': 20, 'unit': 'px'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['content'], content)
+
+    def test_responsive_settings_desktop_missing_key_rejected(self):
+        self.client.force_login(self.user)
+        settings = {'desktop': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20}, 'mobile': {}}
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_outer_spacing_percent_over_100_rejected(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 150, 'unit': '%'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_outer_spacing_percent_sum_over_100_rejected(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 60, 'unit': '%'}, 'right': {'value': 45, 'unit': '%'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_outer_spacing_percent_sum_under_100_accepted(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 5, 'unit': '%'}, 'right': {'value': 10, 'unit': '%'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+
+    def test_outer_spacing_negative_value_rejected(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': -5, 'unit': 'px'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_outer_spacing_invalid_unit_rejected(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 20, 'unit': 'em'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_legacy_flat_settings_shape_still_accepted(self):
+        # Pre-Feature-04.5 drafts — no `desktop`/`mobile`/`outerSpacing`
+        # keys at all. Must keep saving without a forced migration.
+        self.client.force_login(self.user)
+        content = {'version': 1, 'modules': [_module(settings={
+            'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20,
+        })]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+
+    def test_outer_spacing_desktop_mobile_shape_accepted(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {
+                'desktop': {'left': {'value': 20, 'unit': 'px'}, 'right': {'value': 30, 'unit': 'px'}},
+                'mobile': {'left': {'value': 10, 'unit': 'px'}},
+            },
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['content'], content)
+
+    def test_outer_spacing_desktop_missing_side_rejected(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'desktop': {'left': {'value': 20, 'unit': 'px'}}, 'mobile': {}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_outer_spacing_mobile_partial_override_accepted(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {
+                'desktop': {'left': {'value': 20, 'unit': 'px'}, 'right': {'value': 30, 'unit': 'px'}},
+                'mobile': {'right': {'value': 12, 'unit': 'px'}},
+            },
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+
+    def test_outer_spacing_resolved_mobile_percent_sum_over_100_rejected(self):
+        # Desktop alone (5% / 90%) is fine, but a mobile override that
+        # pushes the RESOLVED mobile pair over budget must still be
+        # rejected — not just the desktop pair in isolation.
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {
+                'desktop': {'left': {'value': 5, 'unit': '%'}, 'right': {'value': 90, 'unit': '%'}},
+                'mobile': {'left': {'value': 50, 'unit': '%'}},
+            },
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('content', response.json()['errors'])
+
+    def test_outer_spacing_legacy_flat_shape_still_accepted(self):
+        # Feature-04.5's first pass — outerSpacing was flat {left,right},
+        # no desktop/mobile split yet. Must keep saving.
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 20, 'unit': 'px'}, 'right': {'value': 20, 'unit': 'px'}},
+        }
+        content = {'version': 1, 'modules': [_module(settings=settings)]}
+        response = self._patch_json({'content': content})
+        self.assertEqual(response.status_code, 200)
+
+
+def _saved_module_payload(**overrides):
+    payload = {
+        'name': 'My Reusable Header',
+        'module_type': 'header-logo-center',
+        'props': {'logoSrc': '', 'logoAlt': 'Logo', 'logoWidth': 160},
+        'settings': {'paddingTop': 24, 'paddingRight': 24, 'paddingBottom': 24, 'paddingLeft': 24},
+    }
+    payload.update(overrides)
+    return payload
+
+
+class SavedEmailModuleTests(TestCase):
+    """Feature 04 — personal Saved Modules library."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='john.roe', password='StrongPass123')
+        self.url = '/api/v1/email-builder/saved-modules/'
+
+    def _post_json(self, data):
+        return self.client.post(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_unauthenticated_create_rejected(self):
+        response = self._post_json(_saved_module_payload())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(SavedEmailModule.objects.count(), 0)
+
+    def test_authenticated_create_succeeds(self):
+        self.client.force_login(self.user)
+        response = self._post_json(_saved_module_payload())
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body['name'], 'My Reusable Header')
+        self.assertEqual(body['module_type'], 'header-logo-center')
+        saved = SavedEmailModule.objects.get(pk=body['id'])
+        self.assertEqual(saved.user_id, self.user.id)
+
+    def test_owner_never_settable_from_client(self):
+        self.client.force_login(self.user)
+        response = self._post_json(_saved_module_payload())
+        saved = SavedEmailModule.objects.get(pk=response.json()['id'])
+        self.assertEqual(saved.user_id, self.user.id)
+        self.assertNotEqual(saved.user_id, self.other_user.id)
+
+    def test_invalid_module_type_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(_saved_module_payload(module_type='carousel'))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('module_type', response.json()['errors'])
+        self.assertEqual(SavedEmailModule.objects.count(), 0)
+
+    def test_invalid_props_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(_saved_module_payload(props='not-an-object'))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('module_type', response.json()['errors'])
+
+    def test_invalid_settings_padding_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(_saved_module_payload(settings={'paddingTop': -20}))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('module_type', response.json()['errors'])
+
+    def test_responsive_settings_shape_accepted(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 24, 'paddingRight': 24, 'paddingBottom': 24, 'paddingLeft': 24},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 0, 'unit': 'px'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+        response = self._post_json(_saved_module_payload(settings=settings))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['settings'], settings)
+
+    def test_outer_spacing_percent_over_100_rejected(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 24, 'paddingRight': 24, 'paddingBottom': 24, 'paddingLeft': 24},
+            'mobile': {},
+            'outerSpacing': {'left': {'value': 200, 'unit': '%'}, 'right': {'value': 0, 'unit': 'px'}},
+        }
+        response = self._post_json(_saved_module_payload(settings=settings))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('module_type', response.json()['errors'])
+
+    def test_saved_module_retains_desktop_and_mobile_outer_spacing(self):
+        self.client.force_login(self.user)
+        settings = {
+            'desktop': {'paddingTop': 24, 'paddingRight': 24, 'paddingBottom': 24, 'paddingLeft': 24},
+            'mobile': {},
+            'outerSpacing': {
+                'desktop': {'left': {'value': 20, 'unit': 'px'}, 'right': {'value': 30, 'unit': 'px'}},
+                'mobile': {'left': {'value': 8, 'unit': 'px'}, 'right': {'value': 12, 'unit': 'px'}},
+            },
+        }
+        response = self._post_json(_saved_module_payload(settings=settings))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['settings'], settings)
+
+    def test_name_required(self):
+        self.client.force_login(self.user)
+        response = self._post_json(_saved_module_payload(name=''))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+
+    def test_list_only_returns_own_modules(self):
+        SavedEmailModule.objects.create(user=self.user, **{k: v for k, v in _saved_module_payload().items() if k != 'name'}, name='Mine')
+        SavedEmailModule.objects.create(user=self.other_user, **{k: v for k, v in _saved_module_payload().items() if k != 'name'}, name='Not mine')
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        names = [item['name'] for item in response.json()]
+        self.assertEqual(names, ['Mine'])
+
+    def test_unauthenticated_list_rejected(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_owner_can_delete_own_module(self):
+        self.client.force_login(self.user)
+        saved = SavedEmailModule.objects.create(user=self.user, **_saved_module_payload())
+        response = self.client.delete(f'{self.url}{saved.id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(SavedEmailModule.objects.filter(pk=saved.id).exists())
+
+    def test_non_owner_cannot_delete_another_users_module(self):
+        saved = SavedEmailModule.objects.create(user=self.other_user, **_saved_module_payload())
+        self.client.force_login(self.user)
+        response = self.client.delete(f'{self.url}{saved.id}/')
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(SavedEmailModule.objects.filter(pk=saved.id).exists())
+
+    def test_anonymous_cannot_delete(self):
+        saved = SavedEmailModule.objects.create(user=self.user, **_saved_module_payload())
+        response = self.client.delete(f'{self.url}{saved.id}/')
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(SavedEmailModule.objects.filter(pk=saved.id).exists())

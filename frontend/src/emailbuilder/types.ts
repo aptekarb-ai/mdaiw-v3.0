@@ -1,4 +1,4 @@
-import type { EmailDocumentContent } from './edm';
+import type { EmailDocumentContent, EmailModuleSettings, EmailModuleType } from './edm';
 
 export type EmailPlatform = 'generic' | 'sfmc' | 'marketo' | 'hubspot' | 'pardot' | 'other';
 
@@ -30,6 +30,27 @@ export interface CreateEmailDocumentInput {
 
 export interface UpdateEmailDocumentInput {
   content: EmailDocumentContent;
+}
+
+// Feature 04 — a personal Saved Module, as returned by
+// /api/v1/email-builder/saved-modules/. `props`/`settings` are typed
+// loosely (Record<string, unknown>) here because a saved module can wrap
+// any registry module type's own Props shape.
+export interface SavedEmailModule {
+  id: number;
+  name: string;
+  module_type: EmailModuleType;
+  props: Record<string, unknown>;
+  settings: EmailModuleSettings;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateSavedModuleInput {
+  name: string;
+  module_type: EmailModuleType;
+  props: Record<string, unknown>;
+  settings: EmailModuleSettings;
 }
 
 export interface RecentEmailSummary {

@@ -4,13 +4,17 @@ import type {
   ImageModuleProps, TextModuleProps,
 } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
+import { IMAGE_WIDTH_PX_BOUNDS, getPath, setPath, type BuilderViewMode } from './registryCore';
 import { PaddingControls } from './PaddingControls';
+import { OuterSpacingControls } from './OuterSpacingControls';
+import { ResponsiveDimensionField } from './DimensionControl';
 import './PropertiesPanel.css';
 
 type PropertiesTab = 'content' | 'style' | 'settings';
 
 interface PropertiesPanelProps {
   module: EmailModule | null;
+  viewport: BuilderViewMode;
   onUpdateProps: (id: string, patch: Record<string, unknown>) => void;
   onUpdateSettings: (id: string, patch: Partial<EmailModuleSettings>) => void;
   collapsed: boolean;
@@ -40,7 +44,7 @@ function AlignField({ value, onChange }: { value: HorizontalAlign; onChange: (va
 }
 
 export function PropertiesPanel({
-  module, onUpdateProps, onUpdateSettings, collapsed, onToggleCollapsed,
+  module, viewport, onUpdateProps, onUpdateSettings, collapsed, onToggleCollapsed,
 }: PropertiesPanelProps) {
   const [tab, setTab] = useState<PropertiesTab>('content');
 
@@ -113,14 +117,24 @@ export function PropertiesPanel({
             className="properties-panel__body"
           >
             {tab === 'settings' ? (
-              <PropertySection title="Spacing">
-                <PaddingControls
-                  settings={module.settings}
-                  onChange={(patch) => onUpdateSettings(module.id, patch)}
-                />
-              </PropertySection>
+              <>
+                <PropertySection title="Outer Spacer Columns">
+                  <OuterSpacingControls
+                    settings={module.settings}
+                    viewport={viewport}
+                    onChange={(patch) => onUpdateSettings(module.id, patch)}
+                  />
+                </PropertySection>
+                <PropertySection title="Internal Padding">
+                  <PaddingControls
+                    settings={module.settings}
+                    viewport={viewport}
+                    onChange={(patch) => onUpdateSettings(module.id, patch)}
+                  />
+                </PropertySection>
+              </>
             ) : (
-              <ModuleEditor module={module} tab={tab} onUpdateProps={onUpdateProps} />
+              <ModuleEditor module={module} tab={tab} viewport={viewport} onUpdateProps={onUpdateProps} />
             )}
           </div>
         </>
@@ -132,10 +146,11 @@ export function PropertiesPanel({
 interface ModuleEditorProps {
   module: EmailModule;
   tab: 'content' | 'style';
+  viewport: BuilderViewMode;
   onUpdateProps: (id: string, patch: Record<string, unknown>) => void;
 }
 
-function ModuleEditor({ module, tab, onUpdateProps }: ModuleEditorProps) {
+function ModuleEditor({ module, tab, viewport, onUpdateProps }: ModuleEditorProps) {
   const definition = getModuleDefinition(module.type);
   const update = (patch: Record<string, unknown>) => onUpdateProps(module.id, patch);
 
@@ -143,14 +158,83 @@ function ModuleEditor({ module, tab, onUpdateProps }: ModuleEditorProps) {
     case 'text':
       return <TextEditor module={module as unknown as EmailModule<TextModuleProps>} tab={tab} update={update} />;
     case 'image':
-      return <ImageEditor module={module as unknown as EmailModule<ImageModuleProps>} tab={tab} update={update} />;
+      return <ImageEditor module={module as unknown as EmailModule<ImageModuleProps>} tab={tab} viewport={viewport} update={update} />;
     case 'button':
       return <ButtonEditor module={module as unknown as EmailModule<ButtonModuleProps>} tab={tab} update={update} />;
     case 'composite':
-      return <CompositeEditor module={module as unknown as EmailModule<CompositeModuleProps>} tab={tab} update={update} />;
+      return <CompositeEditor module={module as unknown as EmailModule<CompositeModuleProps>} tab={tab} viewport={viewport} update={update} />;
+    case 'schema':
+      return <SchemaEditor module={module} tab={tab} update={update} />;
     default:
       return <BasicEditor module={module} tab={tab} update={update} />;
   }
+}
+
+// Feature 04 — generic content/style editor for catalog modules that
+// declare `editableFields` (registryCore.ts's SchemaField[]) instead of a
+// bespoke React editor. Only scalar leaf fields are editable this way —
+// repeating list fields (nav links, product items, ...) are Feature 06
+// (Module Element Editor) scope; see registryCore.ts's SchemaField docstring.
+function SchemaEditor({ module, tab, update }: {
+  module: EmailModule; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
+}) {
+  const definition = getModuleDefinition(module.type);
+  const fields = (definition.editableFields ?? []).filter((field) => field.group === tab);
+
+  if (fields.length === 0) {
+    return (
+      <p className="properties-panel__hint">
+        Detailed editing for this module arrives in a future update.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {fields.map((field) => {
+        const rawValue = getPath(module.props, field.key);
+        const onChange = (nextValue: string | number) => {
+          update(setPath(module.props as Record<string, unknown>, field.key, nextValue));
+        };
+
+        if (field.kind === 'textarea') {
+          return (
+            <label key={field.key} className="properties-panel__field">
+              <span>{field.label}</span>
+              <textarea rows={3} value={String(rawValue ?? '')} onChange={(e) => onChange(e.target.value)} />
+            </label>
+          );
+        }
+        if (field.kind === 'color') {
+          return (
+            <label key={field.key} className="properties-panel__field">
+              <span>{field.label}</span>
+              <input type="color" value={String(rawValue ?? '#000000')} onChange={(e) => onChange(e.target.value)} />
+            </label>
+          );
+        }
+        if (field.kind === 'number') {
+          return (
+            <label key={field.key} className="properties-panel__field">
+              <span>{field.label}</span>
+              <input type="number" value={Number(rawValue ?? 0)} onChange={(e) => onChange(Number(e.target.value))} />
+            </label>
+          );
+        }
+        return (
+          <label key={field.key} className="properties-panel__field">
+            <span>{field.label}</span>
+            <input
+              type="text"
+              value={String(rawValue ?? '')}
+              placeholder={field.kind === 'url' ? 'https://' : undefined}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          </label>
+        );
+      })}
+    </>
+  );
 }
 
 function TextEditor({ module, tab, update }: {
@@ -199,8 +283,9 @@ function TextEditor({ module, tab, update }: {
   );
 }
 
-function ImageEditor({ module, tab, update }: {
-  module: EmailModule<ImageModuleProps>; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
+function ImageEditor({ module, tab, viewport, update }: {
+  module: EmailModule<ImageModuleProps>; tab: 'content' | 'style'; viewport: BuilderViewMode;
+  update: (patch: Record<string, unknown>) => void;
 }) {
   const { props } = module;
   if (tab === 'content') {
@@ -223,10 +308,13 @@ function ImageEditor({ module, tab, update }: {
   }
   return (
     <>
-      <label className="properties-panel__field">
-        <span>Width (px)</span>
-        <input type="number" min={20} max={1200} value={props.width} onChange={(e) => update({ width: Number(e.target.value) })} />
-      </label>
+      <ResponsiveDimensionField
+        label="Width"
+        dimension={props.width}
+        viewport={viewport}
+        pxBounds={IMAGE_WIDTH_PX_BOUNDS}
+        onChange={(width) => update({ width })}
+      />
       <AlignField value={props.align} onChange={(align) => update({ align })} />
     </>
   );
@@ -277,8 +365,9 @@ function ButtonEditor({ module, tab, update }: {
   );
 }
 
-function CompositeEditor({ module, tab, update }: {
-  module: EmailModule<CompositeModuleProps>; tab: 'content' | 'style'; update: (patch: Record<string, unknown>) => void;
+function CompositeEditor({ module, tab, viewport, update }: {
+  module: EmailModule<CompositeModuleProps>; tab: 'content' | 'style'; viewport: BuilderViewMode;
+  update: (patch: Record<string, unknown>) => void;
 }) {
   const { props } = module;
   if (tab === 'content') {
@@ -313,13 +402,13 @@ function CompositeEditor({ module, tab, update }: {
   }
   return (
     <>
-      <label className="properties-panel__field">
-        <span>Image width (px)</span>
-        <input
-          type="number" min={20} max={1200} value={props.image.width}
-          onChange={(e) => update({ image: { ...props.image, width: Number(e.target.value) } })}
-        />
-      </label>
+      <ResponsiveDimensionField
+        label="Image width"
+        dimension={props.image.width}
+        viewport={viewport}
+        pxBounds={IMAGE_WIDTH_PX_BOUNDS}
+        onChange={(width) => update({ image: { ...props.image, width } })}
+      />
       <AlignField value={props.text.align} onChange={(align) => update({ text: { ...props.text, align } })} />
     </>
   );

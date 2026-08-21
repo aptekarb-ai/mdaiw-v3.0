@@ -116,6 +116,10 @@
   outline-offset: -2px;
 }
 
+.email-canvas__module-outer-spacing {
+  transition: margin var(--transition-fast);
+}
+
 .email-canvas__module-toolbar {
   position: absolute;
   top: -32px;
@@ -162,6 +166,10 @@
 .email-canvas__layout-columns {
   display: flex;
   gap: 4px;
+}
+
+.email-canvas__layout-columns--stacked {
+  flex-direction: column;
 }
 
 .email-canvas__layout-column {

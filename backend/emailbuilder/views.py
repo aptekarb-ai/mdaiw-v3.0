@@ -1,8 +1,8 @@
 from rest_framework import mixins, viewsets
 from rest_framework.permissions import IsAuthenticated
 
-from .models import EmailDocument
-from .serializers import EmailDocumentSerializer
+from .models import EmailDocument, SavedEmailModule
+from .serializers import EmailDocumentSerializer, SavedEmailModuleSerializer
 
 
 class EmailDocumentViewSet(
@@ -24,6 +24,29 @@ class EmailDocumentViewSet(
 
     def get_queryset(self):
         return EmailDocument.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class SavedEmailModuleViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Feature 04 — a user's personal reusable module library. Same
+    ownership boundary as EmailDocumentViewSet: another user's saved
+    module id is filtered out before lookup (404, not 403). No update
+    endpoint — rename/re-save is out of scope for Feature 04; delete and
+    re-save covers it."""
+
+    serializer_class = SavedEmailModuleSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return SavedEmailModule.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

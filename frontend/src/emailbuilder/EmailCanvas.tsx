@@ -1,10 +1,22 @@
 import { useState, type DragEvent } from 'react';
 import type { EmailModule, EmailModuleType } from './edm';
+import { resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
-import { NEW_MODULE_DRAG_MIME, REORDER_DRAG_MIME } from './dragTypes';
+import type { BuilderViewMode } from './registryCore';
+import { NEW_MODULE_DRAG_MIME, REORDER_DRAG_MIME, SAVED_MODULE_DRAG_MIME } from './dragTypes';
+import type { DimensionValue } from './dimensions';
+import type { SavedEmailModule } from './types';
 import './EmailCanvas.css';
 
-export type BuilderViewMode = 'desktop' | 'mobile';
+// Builder-canvas-only approximation of an outer-spacing dimension as a
+// pixel margin, for visual feedback while editing. The exported email
+// HTML computes the real spacer <td> from the same DimensionValue — see
+// registryCore.ts's wrapWithOuterSpacing, the actual source of truth.
+function outerSpacingPx(dimension: DimensionValue, canvasWidth: number): number {
+  return dimension.unit === '%' ? Math.round((dimension.value / 100) * canvasWidth) : dimension.value;
+}
+
+export type { BuilderViewMode };
 
 const MOBILE_CANVAS_WIDTH = 375;
 
@@ -13,30 +25,41 @@ interface EmailCanvasProps {
   selectedModuleId: string | null;
   width: number;
   viewMode: BuilderViewMode;
+  savedModules: SavedEmailModule[];
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
   onDuplicate: (id: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onDropNewModule: (type: EmailModuleType, index: number) => void;
+  onDropSavedModule: (saved: SavedEmailModule, index: number) => void;
+  onSaveModule: (id: string) => void;
   onAddFirstModule: () => void;
 }
 
-function readDropIndex(event: DragEvent, fallback: number): { index: number; isReorder: boolean } | null {
+type DropInfo =
+  | { kind: 'reorder'; index: number }
+  | { kind: 'new'; index: number }
+  | { kind: 'saved'; index: number };
+
+function readDropIndex(event: DragEvent, fallback: number): DropInfo | null {
   if (event.dataTransfer.types.includes(REORDER_DRAG_MIME)) {
     const raw = event.dataTransfer.getData(REORDER_DRAG_MIME);
     const from = Number(raw);
     if (Number.isNaN(from)) return null;
-    return { index: from, isReorder: true };
+    return { kind: 'reorder', index: from };
+  }
+  if (event.dataTransfer.types.includes(SAVED_MODULE_DRAG_MIME)) {
+    return { kind: 'saved', index: fallback };
   }
   if (event.dataTransfer.types.includes(NEW_MODULE_DRAG_MIME)) {
-    return { index: fallback, isReorder: false };
+    return { kind: 'new', index: fallback };
   }
   return null;
 }
 
 export function EmailCanvas({
-  modules, selectedModuleId, width, viewMode, onSelect, onDelete, onDuplicate, onReorder, onDropNewModule,
-  onAddFirstModule,
+  modules, selectedModuleId, width, viewMode, savedModules, onSelect, onDelete, onDuplicate, onReorder,
+  onDropNewModule, onDropSavedModule, onSaveModule, onAddFirstModule,
 }: EmailCanvasProps) {
   const canvasWidth = viewMode === 'mobile' ? MOBILE_CANVAS_WIDTH : width;
   // Builder-UI-only drag feedback — an insertion line showing where a
@@ -47,27 +70,34 @@ export function EmailCanvas({
     setDropIndicator(null);
   }
 
-  function handleRowDrop(event: DragEvent, targetIndex: number) {
-    event.preventDefault();
-    event.stopPropagation();
-    clearIndicator();
-    const dropped = readDropIndex(event, targetIndex);
-    if (!dropped) return;
-    if (dropped.isReorder) {
+  function applyDrop(event: DragEvent, dropped: DropInfo, targetIndex: number) {
+    if (dropped.kind === 'reorder') {
       onReorder(dropped.index, targetIndex);
+    } else if (dropped.kind === 'saved') {
+      const savedId = Number(event.dataTransfer.getData(SAVED_MODULE_DRAG_MIME));
+      const saved = savedModules.find((item) => item.id === savedId);
+      if (saved) onDropSavedModule(saved, targetIndex);
     } else {
       const type = event.dataTransfer.getData(NEW_MODULE_DRAG_MIME) as EmailModuleType;
       onDropNewModule(type, targetIndex);
     }
   }
 
+  function handleRowDrop(event: DragEvent, targetIndex: number) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearIndicator();
+    const dropped = readDropIndex(event, targetIndex);
+    if (!dropped) return;
+    applyDrop(event, dropped, targetIndex);
+  }
+
   function handleCanvasDrop(event: DragEvent) {
     event.preventDefault();
     clearIndicator();
     const dropped = readDropIndex(event, modules.length);
-    if (!dropped || dropped.isReorder) return;
-    const type = event.dataTransfer.getData(NEW_MODULE_DRAG_MIME) as EmailModuleType;
-    onDropNewModule(type, modules.length);
+    if (!dropped || dropped.kind === 'reorder') return;
+    applyDrop(event, dropped, modules.length);
   }
 
   const sortedModules = modules.slice().sort((a, b) => a.order - b.order);
@@ -79,7 +109,12 @@ export function EmailCanvas({
         style={{ width: canvasWidth }}
         onDragOver={(event) => {
           event.preventDefault();
-          if (event.dataTransfer.types.includes(NEW_MODULE_DRAG_MIME)) setDropIndicator(modules.length);
+          if (
+            event.dataTransfer.types.includes(NEW_MODULE_DRAG_MIME)
+            || event.dataTransfer.types.includes(SAVED_MODULE_DRAG_MIME)
+          ) {
+            setDropIndicator(modules.length);
+          }
         }}
         onDragLeave={(event) => {
           if (event.currentTarget === event.target) clearIndicator();
@@ -143,6 +178,14 @@ export function EmailCanvas({
                       </button>
                       <button
                         type="button"
+                        aria-label={`Save ${definition.label} as reusable module`}
+                        title="Save as reusable module"
+                        onClick={() => onSaveModule(module.id)}
+                      >
+                        <span className="mdaiw-icon mdaiw-icon--upload" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
                         aria-label={`Delete ${definition.label}`}
                         title="Delete"
                         onClick={() => onDelete(module.id)}
@@ -152,15 +195,37 @@ export function EmailCanvas({
                     </div>
                   )}
                   <div
-                    className="email-canvas__module-content"
-                    style={{
-                      paddingTop: module.settings.paddingTop,
-                      paddingRight: module.settings.paddingRight,
-                      paddingBottom: module.settings.paddingBottom,
-                      paddingLeft: module.settings.paddingLeft,
-                    }}
+                    className="email-canvas__module-outer-spacing"
+                    style={(() => {
+                      // Builder-only approximation: % outer spacing is
+                      // shown against the current canvas width so it
+                      // stays visually meaningful at both Desktop and
+                      // Mobile canvas sizes. Real px is exact either way.
+                      // Resolves the CURRENT viewport's outer spacing —
+                      // switching Desktop/Mobile visibly changes this
+                      // without touching the other viewport's stored
+                      // values (see edm.ts's resolveOuterSpacing).
+                      const resolvedOuter = resolveOuterSpacing(module.settings, viewMode);
+                      return {
+                        marginLeft: outerSpacingPx(resolvedOuter.left, canvasWidth),
+                        marginRight: outerSpacingPx(resolvedOuter.right, canvasWidth),
+                      };
+                    })()}
                   >
-                    {definition.renderPreview(module)}
+                    <div
+                      className="email-canvas__module-content"
+                      style={(() => {
+                        const spacing = resolveSpacing(module.settings, viewMode);
+                        return {
+                          paddingTop: spacing.paddingTop,
+                          paddingRight: spacing.paddingRight,
+                          paddingBottom: spacing.paddingBottom,
+                          paddingLeft: spacing.paddingLeft,
+                        };
+                      })()}
+                    >
+                      {definition.renderPreview(module, viewMode)}
+                    </div>
                   </div>
                 </div>
               </div>

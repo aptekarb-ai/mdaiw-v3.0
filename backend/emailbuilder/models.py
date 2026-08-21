@@ -81,3 +81,30 @@ class EmailDocument(models.Model):
 
     def __str__(self):
         return f'{self.name} (user={self.user_id})'
+
+
+class SavedEmailModule(models.Model):
+    """Feature 04 — a single user's personal reusable module library.
+    Captures one configured canvas module's (type, props, settings) so it
+    can be re-inserted into any email later with fresh instance ids.
+    Ownership is direct and manual-checked (`user`), same convention as
+    EmailDocument — another user's saved module id 404s, never 403s.
+    Personal only for Feature 04; no team/shared libraries yet."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='saved_email_modules',
+    )
+    name = models.CharField(max_length=120)
+    module_type = models.CharField(max_length=40)
+    props = models.JSONField(default=dict)
+    settings = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'{self.name} (user={self.user_id})'

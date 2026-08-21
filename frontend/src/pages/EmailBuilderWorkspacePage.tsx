@@ -2,11 +2,15 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router';
 import { getEmailDocument, updateEmailDocument } from '../api/client';
 import type { EmailDocument as EmailDocumentRecord } from '../emailbuilder/types';
+import { normalizeContent } from '../emailbuilder/edmMigration';
 import { useEmailBuilderState } from '../emailbuilder/useEmailBuilderState';
+import { useSavedModules } from '../emailbuilder/useSavedModules';
 import { BuilderToolbar, type SaveStatus } from '../emailbuilder/BuilderToolbar';
 import { ModulePanel } from '../emailbuilder/ModulePanel';
 import { EmailCanvas, type BuilderViewMode } from '../emailbuilder/EmailCanvas';
 import { PropertiesPanel } from '../emailbuilder/PropertiesPanel';
+import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
+import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
 import type { ApiError } from '../types/auth';
 import './EmailBuilderWorkspacePage.css';
 
@@ -23,8 +27,11 @@ export function EmailBuilderWorkspacePage() {
   // over-engineered per the refinement brief), just extra canvas room.
   const [modulesPanelCollapsed, setModulesPanelCollapsed] = useState(false);
   const [propertiesPanelCollapsed, setPropertiesPanelCollapsed] = useState(false);
+  const [saveModuleTargetId, setSaveModuleTargetId] = useState<string | null>(null);
+  const [savingModule, setSavingModule] = useState(false);
 
   const builder = useEmailBuilderState();
+  const savedModulesState = useSavedModules();
 
   useEffect(() => {
     let cancelled = false;
@@ -34,8 +41,9 @@ export function EmailBuilderWorkspacePage() {
     getEmailDocument(id)
       .then((loaded) => {
         if (cancelled) return;
-        setDocument(loaded);
-        builder.loadModules(loaded.content.modules);
+        const normalizedContent = normalizeContent(loaded.content);
+        setDocument({ ...loaded, content: normalizedContent });
+        builder.loadModules(normalizedContent.modules);
         setLoadStatus('ready');
       })
       .catch((caught) => {
@@ -93,6 +101,25 @@ export function EmailBuilderWorkspacePage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [builder, handleSave]);
 
+  const saveModuleTarget = saveModuleTargetId
+    ? builder.modules.find((module) => module.id === saveModuleTargetId) ?? null
+    : null;
+
+  const handleConfirmSaveModule = useCallback(async (name: string) => {
+    if (!saveModuleTarget) return;
+    setSavingModule(true);
+    try {
+      await savedModulesState.saveModule(name, saveModuleTarget);
+      setSaveModuleTargetId(null);
+    } catch {
+      // useSavedModules surfaces load errors via `error`; a save failure
+      // here just leaves the dialog open so the user can retry.
+    } finally {
+      setSavingModule(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveModuleTarget, savedModulesState.saveModule]);
+
   if (loadStatus === 'loading') {
     return (
       <div className="email-builder-workspace__status">
@@ -144,6 +171,9 @@ export function EmailBuilderWorkspacePage() {
       <div className="email-builder-workspace__body">
         <ModulePanel
           onAddModule={builder.addModule}
+          savedModules={savedModulesState.savedModules}
+          onAddSavedModule={builder.addSavedModule}
+          onDeleteSavedModule={savedModulesState.removeModule}
           collapsed={modulesPanelCollapsed}
           onToggleCollapsed={() => setModulesPanelCollapsed((current) => !current)}
         />
@@ -152,21 +182,34 @@ export function EmailBuilderWorkspacePage() {
           selectedModuleId={builder.selectedModuleId}
           width={document.width}
           viewMode={viewMode}
+          savedModules={savedModulesState.savedModules}
           onSelect={builder.selectModule}
           onDelete={builder.deleteModule}
           onDuplicate={builder.duplicateModule}
           onReorder={builder.reorderModules}
           onDropNewModule={builder.insertModuleAt}
+          onDropSavedModule={builder.insertSavedModuleAt}
+          onSaveModule={setSaveModuleTargetId}
           onAddFirstModule={() => builder.addModule('text')}
         />
         <PropertiesPanel
           module={builder.selectedModule}
+          viewport={viewMode}
           onUpdateProps={builder.updateModuleProps}
           onUpdateSettings={builder.updateModuleSettings}
           collapsed={propertiesPanelCollapsed}
           onToggleCollapsed={() => setPropertiesPanelCollapsed((current) => !current)}
         />
       </div>
+
+      {saveModuleTarget && (
+        <SaveModuleDialog
+          moduleLabel={getModuleDefinition(saveModuleTarget.type).label}
+          saving={savingModule}
+          onSave={handleConfirmSaveModule}
+          onCancel={() => setSaveModuleTargetId(null)}
+        />
+      )}
     </div>
   );
 }

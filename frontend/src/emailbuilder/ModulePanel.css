@@ -3,6 +3,12 @@
   flex-direction: column;
   width: 268px;
   flex-shrink: 0;
+  /* Flex-row children default to min-height:auto, which lets a tall
+     child grow past its container instead of being clamped to it — the
+     same gotcha fixed for .app-frame__body. Without this, .module-panel
+     grows to fit ALL its content (defeating .module-panel__categories'
+     own overflow-y:auto) and the whole page scrolls instead. */
+  min-height: 0;
   background: var(--color-white);
   border-right: 1px solid var(--color-border);
   overflow: hidden;
@@ -236,6 +242,104 @@
   background: var(--color-primary-blue);
   border-radius: 2px;
   opacity: 0.85;
+}
+
+.module-panel__saved-item-wrapper {
+  position: relative;
+}
+
+.module-panel__saved-item-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-white);
+  box-shadow: 0 1px 3px rgba(0, 45, 56, 0.2);
+  cursor: pointer;
+}
+
+.module-panel__saved-item-delete .mdaiw-icon {
+  width: 10px;
+  height: 10px;
+  background-color: var(--color-error);
+}
+
+.module-panel__search-results {
+  display: flex;
+  flex-direction: column;
+}
+
+.module-panel__search-result-count {
+  margin: 0 0 var(--space-2) var(--space-1);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-subtle);
+}
+
+.module-panel__search-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-3);
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+.module-panel__search-empty .mdaiw-icon {
+  width: 24px;
+  height: 24px;
+  background-color: var(--color-text-subtle);
+}
+
+.module-panel__search-empty p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.module-panel__view-all {
+  width: 100%;
+  height: 32px;
+  margin-top: var(--space-1);
+  border: 1px dashed var(--color-primary-blue);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-primary-blue);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.module-panel__view-all:hover {
+  background: var(--color-info-bg);
+}
+
+.module-panel__footer {
+  flex-shrink: 0;
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.module-panel__browse-all {
+  width: 100%;
+  height: 34px;
+  border: 1px solid var(--color-primary-blue);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-primary-blue);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.module-panel__browse-all:hover {
+  background: var(--color-info-bg);
 }
 
 @media (max-width: 1279px) {
