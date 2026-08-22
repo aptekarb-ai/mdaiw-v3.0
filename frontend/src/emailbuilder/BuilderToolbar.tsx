@@ -31,6 +31,7 @@ interface BuilderToolbarProps {
   onSave: () => void;
   onViewModeChange: (mode: BuilderViewMode) => void;
   onEditorModeChange: (mode: EditorMode) => void;
+  onOpenPlatformDialog: () => void;
 }
 
 function statusLabel(saveStatus: SaveStatus, dirty: boolean): string {
@@ -46,7 +47,7 @@ function Separator() {
 
 export function BuilderToolbar({
   name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode, editorMode,
-  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange,
+  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onOpenPlatformDialog,
 }: BuilderToolbarProps) {
   const navigate = useNavigate();
 
@@ -66,7 +67,15 @@ export function BuilderToolbar({
 
         <div className="builder-toolbar__meta">
           <span className="builder-toolbar__email-name" title={name}>{name}</span>
-          <span className="builder-toolbar__chip">{PLATFORM_LABELS[platform]}</span>
+          <button
+            type="button"
+            className="builder-toolbar__chip builder-toolbar__chip--button"
+            onClick={onOpenPlatformDialog}
+            title="Change platform / environment"
+          >
+            <span className="mdaiw-icon mdaiw-icon--settings" aria-hidden="true" />
+            {PLATFORM_LABELS[platform]}
+          </button>
           <span className="builder-toolbar__chip">{width}px</span>
         </div>
       </div>

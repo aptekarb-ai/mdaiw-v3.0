@@ -29,12 +29,14 @@ export interface CreateEmailDocumentInput {
 }
 
 // Feature 03 sends `content` only (builder autosave). The dashboard's
-// rename action sends `name` only — same PATCH endpoint, `name` is just
-// another writable serializer field (see backend EmailDocumentSerializer),
-// so no new endpoint is needed for rename.
+// rename action sends `name` only. Feature 10 sends `platform` only when
+// applying a platform switch. Same PATCH endpoint for all three — each is
+// just another writable serializer field (see backend
+// EmailDocumentSerializer), so no new endpoint was needed for any of them.
 export interface UpdateEmailDocumentInput {
   content?: EmailDocumentContent;
   name?: string;
+  platform?: EmailPlatform;
 }
 
 // Feature 04 — a personal Saved Module, as returned by
