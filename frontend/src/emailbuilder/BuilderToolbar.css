@@ -140,6 +140,11 @@
   color: var(--color-white);
 }
 
+.builder-toolbar__view-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .builder-toolbar__future-actions {
   display: flex;
   gap: var(--space-2);

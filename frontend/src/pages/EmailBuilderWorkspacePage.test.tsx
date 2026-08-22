@@ -19,6 +19,18 @@ vi.mock('../api/client', async () => {
   };
 });
 
+// Feature 09 — EmailBuilderWorkspacePage now imports CodeEditorPanel
+// (Visual/Code toggle), which pulls in the real @monaco-editor/react
+// package transitively even for tests that never switch to Code mode.
+// Real Monaco doesn't run under jsdom (same reason
+// LandingPageValidatorPage.test.tsx mocks it) — reuse the same shared
+// test double.
+vi.mock('@monaco-editor/react', async () => {
+  const { buildMonacoEditorReactMock } = await import('../testUtils/monacoEditorMock');
+  return buildMonacoEditorReactMock();
+});
+vi.mock('../landingpages/monacoSetup', () => ({ ensureMonacoConfigured: vi.fn() }));
+
 function savedModule(overrides: Partial<SavedEmailModule> = {}): SavedEmailModule {
   return {
     id: 1,
@@ -937,5 +949,99 @@ describe('EmailBuilderWorkspacePage — Feature 07 Responsive Editor', () => {
 
     await user.click(screen.getByRole('button', { name: 'Desktop' }));
     expect(screen.getByLabelText(/^Font size \(px\)$/)).toHaveValue(20);
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Feature 09 Code Editor', () => {
+  it('Visual mode is the default — module panel, canvas, and properties panel are present, no code editor', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    renderPage();
+    await screen.findByText('August Newsletter');
+    expect(screen.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByLabelText('Generated email HTML (read-only)')).not.toBeInTheDocument();
+  });
+
+  it('switching to Code hides the module/canvas/properties panels and shows the generated HTML', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Code' }));
+    expect(within(editorModeGroup).getByRole('button', { name: 'Code' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByLabelText('Generated email HTML (read-only)')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search modules')).not.toBeInTheDocument();
+  });
+
+  it('the Code view reflects a module added in Visual mode after switching back', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('<table');
+  });
+
+  it('switching back to Visual restores the module panel/canvas/properties panel', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    await screen.findByLabelText('Generated email HTML (read-only)');
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+
+    expect(screen.queryByLabelText('Generated email HTML (read-only)')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('Desktop/Mobile device buttons are disabled while in Code mode', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    expect(screen.getByRole('button', { name: 'Desktop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
+  });
+
+  it('shows the four compatibility checks in Code mode', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+
+    expect(await screen.findByText('HTML Valid')).toBeInTheDocument();
+    expect(screen.getByText('Inline CSS')).toBeInTheDocument();
+    expect(screen.getByText('No DIV Usage')).toBeInTheDocument();
+    expect(screen.getByText('Outlook Safe')).toBeInTheDocument();
+  });
+
+  it('Ctrl+Z (undo) while in Code mode still updates the live HTML — the code view has no separate history', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    const withModule = textarea.value;
+
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    await waitFor(() => {
+      expect((screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value)
+        .not.toBe(withModule);
+    });
   });
 });
