@@ -79,3 +79,24 @@ describe('BuilderToolbar — Platform Environment entry point (Feature 10)', () 
     expect(onOpenPlatformDialog).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('BuilderToolbar — Preview Studio entry point (Feature 11)', () => {
+  it('clicking Preview calls onEditorModeChange("preview")', async () => {
+    const user = userEvent.setup();
+    const { onEditorModeChange } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(onEditorModeChange).toHaveBeenCalledWith('preview');
+  });
+
+  it('reflects editorMode="preview" as active', () => {
+    renderToolbar({ editorMode: 'preview' });
+    expect(screen.getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('Desktop/Mobile device buttons are disabled in Preview mode, same as Code mode', () => {
+    renderToolbar({ editorMode: 'preview' });
+    expect(screen.getByRole('button', { name: 'Desktop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
+  });
+});

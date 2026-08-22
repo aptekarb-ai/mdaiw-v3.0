@@ -11,6 +11,7 @@ import { EmailCanvas, type BuilderViewMode } from '../emailbuilder/EmailCanvas';
 import { PropertiesPanel, type SelectedColumnContext } from '../emailbuilder/PropertiesPanel';
 import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
 import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
+import { PreviewStudioPanel } from '../emailbuilder/PreviewStudioPanel';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
 import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
@@ -289,6 +290,11 @@ export function EmailBuilderWorkspacePage() {
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
             platform={document.platform}
+          />
+        ) : editorMode === 'preview' ? (
+          <PreviewStudioPanel
+            width={document.width}
+            content={{ version: 1, modules: builder.modules }}
           />
         ) : (
         <>

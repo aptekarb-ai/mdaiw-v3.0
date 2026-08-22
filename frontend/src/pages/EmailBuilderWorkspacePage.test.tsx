@@ -1122,3 +1122,62 @@ describe('EmailBuilderWorkspacePage — Feature 10 Platform Environment', () => 
     expect(client.updateEmailDocument).not.toHaveBeenCalled();
   });
 });
+
+describe('EmailBuilderWorkspacePage — Feature 11 Preview Studio', () => {
+  it('switching to Preview hides the module/canvas/properties panels and shows the Desktop preview', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Preview' }));
+
+    expect(within(editorModeGroup).getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByTitle('Desktop preview')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search modules')).not.toBeInTheDocument();
+  });
+
+  it('the Preview reflects a module added in Visual mode after switching back and forth', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Preview' }));
+    const iframe = await screen.findByTitle('Desktop preview') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain('Add your heading or paragraph text here.');
+  });
+
+  it('switching back to Visual from Preview restores the module panel/canvas/properties panel', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Preview' }));
+    await screen.findByTitle('Desktop preview');
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Visual' }));
+
+    expect(screen.queryByTitle('Desktop preview')).not.toBeInTheDocument();
+    expect(within(editorModeGroup).getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('the Email Clients tab in Preview shows every client as Compatible for a document with no modules', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [] } }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Preview' }));
+    await user.click(screen.getByRole('tab', { name: 'Email Clients' }));
+
+    expect(await screen.findByText(/of \d+ clients compatible\./)).toBeInTheDocument();
+  });
+});

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderEmailBody, renderEmailDocument } from './htmlRenderer';
 import { createModule } from './moduleFactory';
 import { getModuleDefinition } from './moduleRegistry';
+import { computeCompatibilityChecks } from './htmlCompatibilityChecks';
 import type { EmailModule, TextModuleProps, ButtonModuleProps, ImageModuleProps } from './edm';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper accepts modules narrowed to any specific Props type
@@ -36,6 +37,34 @@ describe('renderEmailBody', () => {
   it('wraps the email content in an outer width table sized to the document width', () => {
     const html = renderEmailBody(withModules([], 750));
     expect(html).toContain('width="750"');
+  });
+
+  it('the real (non-Outlook) content table is fluid: width=100% with max-width in CSS, not a fixed pixel width', () => {
+    const html = renderEmailBody(withModules([], 750));
+    // Strip the MSO-only conditional comment first — everything inside it
+    // is inert to every non-Outlook client and must not satisfy this
+    // assertion on its own.
+    const withoutMsoBlock = html.replace(/<!--\[if mso\]>.*?<!\[endif\]-->/gs, '');
+    expect(withoutMsoBlock).toContain('width="100%"');
+    expect(withoutMsoBlock).toContain('max-width:750px');
+    expect(withoutMsoBlock).not.toMatch(/width="750"/);
+    expect(withoutMsoBlock).not.toMatch(/style="width:750px/);
+  });
+
+  it('gives Outlook its own fixed-width table via an MSO conditional comment, invisible to every other client', () => {
+    const html = renderEmailBody(withModules([], 750));
+    expect(html).toMatch(/<!--\[if mso\]><table[^>]+width="750"[^>]*>.*?<!\[endif\]-->/s);
+  });
+
+  it('a real browser (non-Outlook) sees the MSO block only as an inert HTML comment', () => {
+    const html = renderEmailBody(withModules([], 750));
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    // Every 700-fixed-width table from the conditional block was parsed as
+    // a comment, not an element — the only <table width="750"> a real
+    // browser's DOM would ever contain is none at all (the real content
+    // table is width="100%").
+    const fixedWidthTables = Array.from(doc.querySelectorAll('table[width="750"]'));
+    expect(fixedWidthTables).toHaveLength(0);
   });
 
   it('escapes user-entered text content', () => {
@@ -251,6 +280,20 @@ describe('renderEmailDocument', () => {
     expect(html).toContain('<html');
     expect(html).toContain('<body');
     expect(html).not.toContain('<script');
+  });
+
+  it('the fluid-width outer table fix still passes every compatibility check (Outlook Safe included)', () => {
+    const modules = [
+      createModule('layout-2col-50-50', 0),
+      createModule('text', 1),
+      createModule('button', 2),
+      createModule('image', 3),
+    ];
+    const html = renderEmailDocument(withModules(modules, 700));
+    const checks = computeCompatibilityChecks(html);
+    for (const check of checks) {
+      expect(check.ok, `${check.id}: ${check.detail}`).toBe(true);
+    }
   });
 });
 
