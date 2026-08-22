@@ -6,8 +6,9 @@ import type {
 } from '../types/auth';
 import type { RegistrationResponse } from '../types/registration';
 import type {
-  CreateEmailDocumentInput, CreateSavedModuleInput, EmailDocument, SavedEmailModule,
-  UpdateEmailDocumentInput,
+  CreateEmailAssetExternalInput, CreateEmailAssetUploadInput, CreateEmailDocumentInput,
+  CreateSavedModuleInput, EmailAsset, EmailDocument, SavedEmailModule,
+  UpdateEmailAssetInput, UpdateEmailDocumentInput,
 } from '../emailbuilder/types';
 
 export const API_BASE_URL: string =
@@ -163,6 +164,68 @@ export async function createSavedModule(input: CreateSavedModuleInput): Promise<
 
 export async function deleteSavedModule(id: number | string): Promise<void> {
   await apiRequest<void>(`/api/v1/email-builder/saved-modules/${id}/`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listEmailAssets(
+  params: { search?: string; category?: string } = {},
+): Promise<EmailAsset[]> {
+  const query = new URLSearchParams();
+  if (params.search) query.set('search', params.search);
+  if (params.category) query.set('category', params.category);
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return apiRequest<EmailAsset[]>(`/api/v1/email-builder/assets/${suffix}`);
+}
+
+export async function createEmailAssetUpload(input: CreateEmailAssetUploadInput): Promise<EmailAsset> {
+  const formData = new FormData();
+  formData.set('name', input.name);
+  formData.set('category', input.category);
+  formData.set('source_type', 'upload');
+  formData.set('alt_text', input.alt_text ?? '');
+  formData.set('file', input.file);
+  return apiRequest<EmailAsset>('/api/v1/email-builder/assets/', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export async function createEmailAssetExternal(input: CreateEmailAssetExternalInput): Promise<EmailAsset> {
+  return apiRequest<EmailAsset>('/api/v1/email-builder/assets/', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: input.name,
+      category: input.category,
+      source_type: 'external',
+      alt_text: input.alt_text ?? '',
+      external_url: input.external_url,
+    }),
+  });
+}
+
+export async function updateEmailAsset(
+  id: number | string, input: UpdateEmailAssetInput,
+): Promise<EmailAsset> {
+  if (input.file) {
+    const formData = new FormData();
+    if (input.name !== undefined) formData.set('name', input.name);
+    if (input.category !== undefined) formData.set('category', input.category);
+    if (input.alt_text !== undefined) formData.set('alt_text', input.alt_text);
+    formData.set('file', input.file);
+    return apiRequest<EmailAsset>(`/api/v1/email-builder/assets/${id}/`, {
+      method: 'PATCH',
+      body: formData,
+    });
+  }
+  return apiRequest<EmailAsset>(`/api/v1/email-builder/assets/${id}/`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteEmailAsset(id: number | string): Promise<void> {
+  await apiRequest<void>(`/api/v1/email-builder/assets/${id}/`, {
     method: 'DELETE',
   });
 }

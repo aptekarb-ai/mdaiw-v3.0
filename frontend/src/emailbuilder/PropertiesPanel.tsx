@@ -15,6 +15,7 @@ import { ColorControl } from './ColorControl';
 import { TypographyControls } from './TypographyControls';
 import { RepeatableItemEditor } from './RepeatableItemEditor';
 import { DEFAULT_FONT_ID, EMAIL_SAFE_FONTS } from './fonts';
+import { AssetManagerDialog, type AssetSelection } from './AssetManagerDialog';
 import './PropertiesPanel.css';
 
 type PropertiesTab = 'content' | 'style' | 'settings';
@@ -593,6 +594,37 @@ function TextWidthSettings({ module, viewport, update }: {
   );
 }
 
+// Feature 08 — a plain URL input plus a "Browse" button that opens the
+// Asset Manager; `onAssetSelected` receives the whole {url, alt_text}
+// selection so callers can patch src+alt together in one `update()` call
+// (one undo/redo step) instead of two separate patches.
+function ImageSourceField({ label, value, onChangeValue, onAssetSelected }: {
+  label: string; value: string; onChangeValue: (value: string) => void;
+  onAssetSelected: (selection: AssetSelection) => void;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  return (
+    <>
+      <label className="properties-panel__field">
+        <span>{label}</span>
+        <div className="properties-panel__image-source-row">
+          <input type="text" value={value} onChange={(event) => onChangeValue(event.target.value)} />
+          <button
+            type="button"
+            className="properties-panel__browse-button"
+            onClick={() => setDialogOpen(true)}
+          >
+            Browse
+          </button>
+        </div>
+      </label>
+      {dialogOpen && (
+        <AssetManagerDialog onSelect={onAssetSelected} onClose={() => setDialogOpen(false)} />
+      )}
+    </>
+  );
+}
+
 function ImageEditor({ module, tab, viewport, update }: {
   module: EmailModule<ImageModuleProps>; tab: 'content' | 'style'; viewport: BuilderViewMode;
   update: (patch: Record<string, unknown>) => void;
@@ -601,10 +633,12 @@ function ImageEditor({ module, tab, viewport, update }: {
   if (tab === 'content') {
     return (
       <>
-        <label className="properties-panel__field">
-          <span>Image URL</span>
-          <input type="text" value={props.src} onChange={(e) => update({ src: e.target.value })} />
-        </label>
+        <ImageSourceField
+          label="Image URL"
+          value={props.src}
+          onChangeValue={(src) => update({ src })}
+          onAssetSelected={(selection) => update({ src: selection.url, alt: props.alt || selection.alt_text })}
+        />
         <label className="properties-panel__field">
           <span>Alt text</span>
           <input type="text" value={props.alt} onChange={(e) => update({ alt: e.target.value })} />
@@ -740,14 +774,14 @@ function CompositeEditor({ module, tab, viewport, update }: {
   if (tab === 'content') {
     return (
       <>
-        <label className="properties-panel__field">
-          <span>Image URL</span>
-          <input
-            type="text"
-            value={props.image.src}
-            onChange={(e) => update({ image: { ...props.image, src: e.target.value } })}
-          />
-        </label>
+        <ImageSourceField
+          label="Image URL"
+          value={props.image.src}
+          onChangeValue={(src) => update({ image: { ...props.image, src } })}
+          onAssetSelected={(selection) => update({
+            image: { ...props.image, src: selection.url, alt: props.image.alt || selection.alt_text },
+          })}
+        />
         <label className="properties-panel__field">
           <span>Alt text</span>
           <input

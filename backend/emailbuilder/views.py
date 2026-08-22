@@ -1,8 +1,9 @@
 from rest_framework import mixins, viewsets
+from rest_framework.filters import SearchFilter
 from rest_framework.permissions import IsAuthenticated
 
-from .models import EmailDocument, SavedEmailModule
-from .serializers import EmailDocumentSerializer, SavedEmailModuleSerializer
+from .models import EmailAsset, EmailDocument, SavedEmailModule
+from .serializers import EmailAssetSerializer, EmailDocumentSerializer, SavedEmailModuleSerializer
 
 
 class EmailDocumentViewSet(
@@ -52,6 +53,37 @@ class SavedEmailModuleViewSet(
 
     def get_queryset(self):
         return SavedEmailModule.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class EmailAssetViewSet(
+    mixins.ListModelMixin,
+    mixins.CreateModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.UpdateModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Feature 08 — a user's personal reusable image library for the email
+    builder. Same ownership boundary as the other two viewsets in this
+    module. `?search=` (name, case-insensitive) and `?category=` (exact:
+    image/logo/icon/other) both compose with the base queryset — the
+    frontend's My Assets tab combines them the same way the dashboard's
+    Recent Emails search/filter toolbar already does for EmailDocument."""
+
+    serializer_class = EmailAssetSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [SearchFilter]
+    search_fields = ['name']
+
+    def get_queryset(self):
+        queryset = EmailAsset.objects.filter(user=self.request.user)
+        category = self.request.query_params.get('category')
+        if category:
+            queryset = queryset.filter(category=category)
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

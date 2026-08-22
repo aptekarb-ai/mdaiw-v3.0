@@ -1,7 +1,11 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from .edm import EdmValidationError, validate_edm, validate_module_instance
-from .models import MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailDocument, SavedEmailModule
+from .edm import UNSAFE_URL_PREFIXES, EdmValidationError, validate_edm, validate_module_instance
+from .models import (
+    MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, SavedEmailModule,
+)
+from .validators import validate_asset_image
 
 
 class EmailDocumentSerializer(serializers.ModelSerializer):
@@ -78,4 +82,79 @@ class SavedEmailModuleSerializer(serializers.ModelSerializer):
             validate_module_instance(module_type, props, module_settings, columns=columns, prefix='module')
         except EdmValidationError as error:
             raise serializers.ValidationError({'module_type': [str(error)]}) from error
+        return attrs
+
+
+class EmailAssetSerializer(serializers.ModelSerializer):
+    """`user` is never writable — set from `request.user` in the view,
+    same convention as EmailDocumentSerializer/SavedEmailModuleSerializer.
+
+    `file` is write-only (accepted on create for `source_type=upload`);
+    `url` is the one read field callers actually need — an absolute URL
+    for uploads, `external_url` verbatim for external assets — so the
+    frontend never has to know which storage a given asset uses."""
+
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EmailAsset
+        fields = [
+            'id', 'name', 'category', 'source_type', 'file', 'external_url', 'url',
+            'alt_text', 'content_type', 'file_size', 'width', 'height',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'content_type', 'file_size', 'width', 'height', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'file': {'write_only': True, 'required': False},
+            'external_url': {'required': False},
+        }
+
+    def get_url(self, instance):
+        if instance.source_type == EmailAssetSourceType.EXTERNAL:
+            return instance.external_url
+        if not instance.file:
+            return ''
+        request = self.context.get('request')
+        return request.build_absolute_uri(instance.file.url) if request else instance.file.url
+
+    def validate_name(self, value):
+        trimmed = value.strip()
+        if not trimmed:
+            raise serializers.ValidationError('Asset name is required.')
+        return trimmed
+
+    def validate_external_url(self, value):
+        lowered = value.strip().lower()
+        for scheme in UNSAFE_URL_PREFIXES:
+            if lowered.startswith(scheme):
+                raise serializers.ValidationError(f'External URL must not use an unsafe scheme ("{scheme}").')
+        return value.strip()
+
+    def validate(self, attrs):
+        source_type = attrs.get('source_type', getattr(self.instance, 'source_type', None))
+        file_value = attrs.get('file', serializers.empty)
+        external_url = attrs.get('external_url', getattr(self.instance, 'external_url', ''))
+
+        if source_type == EmailAssetSourceType.UPLOAD:
+            uploaded = file_value if file_value is not serializers.empty else getattr(self.instance, 'file', None)
+            if not uploaded:
+                raise serializers.ValidationError({'file': ['An uploaded file is required for this asset type.']})
+            if file_value is not serializers.empty and file_value:
+                try:
+                    content_type, width, height = validate_asset_image(file_value)
+                except DjangoValidationError as error:
+                    raise serializers.ValidationError({'file': error.messages}) from error
+                attrs['content_type'] = content_type
+                attrs['width'] = width
+                attrs['height'] = height
+                attrs['file_size'] = file_value.size
+            attrs['external_url'] = ''
+        elif source_type == EmailAssetSourceType.EXTERNAL:
+            if not external_url:
+                raise serializers.ValidationError({'external_url': ['An external URL is required for this asset type.']})
+            attrs['file'] = None
+            attrs['content_type'] = ''
+            attrs['width'] = None
+            attrs['height'] = None
+            attrs['file_size'] = None
         return attrs

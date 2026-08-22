@@ -1,9 +1,20 @@
+import io
 import json
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
 
-from .models import EmailDocument, SavedEmailModule
+from PIL import Image
+
+from .models import EmailAsset, EmailDocument, SavedEmailModule
+
+
+def _asset_image_bytes(image_format='JPEG', size=(20, 20)):
+    buffer = io.BytesIO()
+    Image.new('RGB', size, color='blue').save(buffer, format=image_format)
+    return buffer.getvalue()
 
 
 class EmailDocumentCreateTests(TestCase):
@@ -1250,3 +1261,226 @@ class SavedEmailModuleTests(TestCase):
         delete_response = self.client.delete(f'{self.url}{saved_id}/')
         self.assertEqual(delete_response.status_code, 404)
         self.assertTrue(SavedEmailModule.objects.filter(pk=saved_id).exists())
+
+
+class EmailAssetTests(TestCase):
+    """Feature 08 — personal Asset Manager library (uploads + external URLs)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='john.roe', password='StrongPass123')
+        self.url = '/api/v1/email-builder/assets/'
+
+    def _upload_payload(self, **overrides):
+        payload = {
+            'name': 'Hero banner',
+            'category': 'image',
+            'source_type': 'upload',
+            'file': SimpleUploadedFile('hero.jpg', _asset_image_bytes('JPEG'), content_type='image/jpeg'),
+        }
+        payload.update(overrides)
+        return payload
+
+    def _external_payload(self, **overrides):
+        payload = {
+            'name': 'CDN logo',
+            'category': 'logo',
+            'source_type': 'external',
+            'external_url': 'https://cdn.example.com/logo.png',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_unauthenticated_create_rejected(self):
+        response = self.client.post(self.url, data=self._upload_payload())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(EmailAsset.objects.count(), 0)
+
+    def test_authenticated_upload_succeeds(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, data=self._upload_payload())
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body['name'], 'Hero banner')
+        self.assertEqual(body['category'], 'image')
+        self.assertEqual(body['source_type'], 'upload')
+        self.assertEqual(body['content_type'], 'image/jpeg')
+        self.assertEqual(body['width'], 20)
+        self.assertEqual(body['height'], 20)
+        self.assertTrue(body['file_size'] > 0)
+        self.assertTrue(body['url'].startswith('http'))
+        self.assertNotIn('file', body)
+        asset = EmailAsset.objects.get(pk=body['id'])
+        self.assertEqual(asset.user_id, self.user.id)
+
+    def test_authenticated_external_url_succeeds(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self.url, data=json.dumps(self._external_payload()), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 201)
+        body = response.json()
+        self.assertEqual(body['source_type'], 'external')
+        self.assertEqual(body['url'], 'https://cdn.example.com/logo.png')
+        self.assertIsNone(body['width'])
+        self.assertIsNone(body['file_size'])
+
+    def test_owner_never_settable_from_client(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, data=self._upload_payload())
+        asset = EmailAsset.objects.get(pk=response.json()['id'])
+        self.assertEqual(asset.user_id, self.user.id)
+        self.assertNotEqual(asset.user_id, self.other_user.id)
+
+    def test_name_required(self):
+        self.client.force_login(self.user)
+        response = self.client.post(self.url, data=self._upload_payload(name=''))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+
+    def test_upload_without_file_rejected(self):
+        self.client.force_login(self.user)
+        payload = self._upload_payload()
+        del payload['file']
+        response = self.client.post(self.url, data=payload)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.json()['errors'])
+
+    def test_external_without_url_rejected(self):
+        self.client.force_login(self.user)
+        payload = self._external_payload()
+        del payload['external_url']
+        response = self.client.post(
+            self.url, data=json.dumps(payload), content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('external_url', response.json()['errors'])
+
+    def test_unsafe_external_url_scheme_rejected(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self.url,
+            data=json.dumps(self._external_payload(external_url='javascript:alert(1)')),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('external_url', response.json()['errors'])
+
+    def test_oversized_upload_rejected(self):
+        self.client.force_login(self.user)
+        oversized = SimpleUploadedFile(
+            'huge.jpg', b'\x00' * (6 * 1024 * 1024), content_type='image/jpeg',
+        )
+        response = self.client.post(self.url, data=self._upload_payload(file=oversized))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.json()['errors'])
+        self.assertEqual(EmailAsset.objects.count(), 0)
+
+    def test_non_image_upload_rejected(self):
+        self.client.force_login(self.user)
+        fake = SimpleUploadedFile('not-image.jpg', b'not a real image', content_type='image/jpeg')
+        response = self.client.post(self.url, data=self._upload_payload(file=fake))
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('file', response.json()['errors'])
+
+    def test_gif_upload_accepted(self):
+        self.client.force_login(self.user)
+        gif = SimpleUploadedFile('anim.gif', _asset_image_bytes('GIF'), content_type='image/gif')
+        response = self.client.post(self.url, data=self._upload_payload(file=gif, name='Animated banner'))
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['content_type'], 'image/gif')
+
+    def test_list_only_returns_own_assets(self):
+        self.client.force_login(self.user)
+        self.client.post(self.url, data=self._upload_payload(name='Mine'))
+        self.client.logout()
+        self.client.force_login(self.other_user)
+        self.client.post(self.url, data=self._upload_payload(name='Not mine'))
+        self.client.logout()
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        names = [item['name'] for item in response.json()]
+        self.assertIn('Mine', names)
+        self.assertNotIn('Not mine', names)
+
+    def test_search_filters_by_name(self):
+        self.client.force_login(self.user)
+        self.client.post(self.url, data=self._upload_payload(name='Summer sale hero'))
+        self.client.post(self.url, data=self._upload_payload(name='Winter banner'))
+        response = self.client.get(self.url, {'search': 'summer'})
+        self.assertEqual(response.status_code, 200)
+        names = [item['name'] for item in response.json()]
+        self.assertEqual(names, ['Summer sale hero'])
+
+    def test_category_filter(self):
+        self.client.force_login(self.user)
+        self.client.post(self.url, data=self._upload_payload(name='A logo', category='logo'))
+        self.client.post(self.url, data=self._upload_payload(name='An image', category='image'))
+        response = self.client.get(self.url, {'category': 'logo'})
+        self.assertEqual(response.status_code, 200)
+        names = [item['name'] for item in response.json()]
+        self.assertEqual(names, ['A logo'])
+
+    def test_update_alt_text(self):
+        self.client.force_login(self.user)
+        create_response = self.client.post(self.url, data=self._upload_payload())
+        asset_id = create_response.json()['id']
+        response = self.client.patch(
+            f'{self.url}{asset_id}/', data=json.dumps({'alt_text': 'Summer sale hero image'}),
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['alt_text'], 'Summer sale hero image')
+
+    def test_replace_uploaded_file(self):
+        self.client.force_login(self.user)
+        create_response = self.client.post(self.url, data=self._upload_payload())
+        asset_id = create_response.json()['id']
+        original_width = create_response.json()['width']
+        new_file = SimpleUploadedFile(
+            'replacement.png', _asset_image_bytes('PNG', size=(50, 50)), content_type='image/png',
+        )
+        # Django's test Client.patch() only JSON-encodes `data` (unlike
+        # .post(), which auto-multipart-encodes a dict) — a file upload on
+        # PATCH has to be multipart-encoded by hand and sent as the raw body.
+        response = self.client.patch(
+            f'{self.url}{asset_id}/',
+            data=encode_multipart(BOUNDARY, {'file': new_file}),
+            content_type=MULTIPART_CONTENT,
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['width'], 50)
+        self.assertNotEqual(body['width'], original_width)
+        self.assertEqual(body['content_type'], 'image/png')
+
+    def test_delete_own_asset(self):
+        self.client.force_login(self.user)
+        create_response = self.client.post(self.url, data=self._upload_payload())
+        asset_id = create_response.json()['id']
+        response = self.client.delete(f'{self.url}{asset_id}/')
+        self.assertEqual(response.status_code, 204)
+        self.assertFalse(EmailAsset.objects.filter(pk=asset_id).exists())
+
+    def test_ownership_enforced_for_retrieve_and_delete(self):
+        self.client.force_login(self.user)
+        create_response = self.client.post(self.url, data=self._upload_payload())
+        asset_id = create_response.json()['id']
+        self.client.logout()
+        self.client.force_login(self.other_user)
+        get_response = self.client.get(f'{self.url}{asset_id}/')
+        self.assertEqual(get_response.status_code, 404)
+        delete_response = self.client.delete(f'{self.url}{asset_id}/')
+        self.assertEqual(delete_response.status_code, 404)
+        self.assertTrue(EmailAsset.objects.filter(pk=asset_id).exists())
+
+    def test_anonymous_delete_rejected(self):
+        self.client.force_login(self.user)
+        create_response = self.client.post(self.url, data=self._upload_payload())
+        asset_id = create_response.json()['id']
+        self.client.logout()
+        response = self.client.delete(f'{self.url}{asset_id}/')
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(EmailAsset.objects.filter(pk=asset_id).exists())

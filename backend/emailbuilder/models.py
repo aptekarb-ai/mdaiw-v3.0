@@ -1,3 +1,5 @@
+import uuid
+
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
@@ -73,6 +75,68 @@ class EmailDocument(models.Model):
     # the table-first HTML renderer (frontend/src/emailbuilder/htmlRenderer.ts)
     # is a pure function of this data, never stored itself.
     content = models.JSONField(default=default_content)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-updated_at']
+
+    def __str__(self):
+        return f'{self.name} (user={self.user_id})'
+
+
+def email_asset_upload_path(instance, filename):
+    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'jpg'
+    return f'email_assets/{uuid.uuid4().hex}.{extension}'
+
+
+class EmailAssetCategory(models.TextChoices):
+    IMAGE = 'image', 'Images'
+    LOGO = 'logo', 'Logos'
+    ICON = 'icon', 'Icons'
+    OTHER = 'other', 'Others'
+
+
+class EmailAssetSourceType(models.TextChoices):
+    UPLOAD = 'upload', 'Uploaded file'
+    EXTERNAL = 'external', 'External URL'
+
+
+class EmailAsset(models.Model):
+    """Feature 08 — a user's personal reusable image library for the email
+    builder (logos, hero images, icons referenced by URL). Same ownership
+    boundary as EmailDocument/SavedEmailModule: another user's asset id is
+    filtered out before lookup (404, not 403).
+
+    Exactly one of `file`/`external_url` is populated, matching
+    `source_type` — enforced by EmailAssetSerializer.validate(), not the
+    database (Django has no clean per-field-set-by-choice constraint short
+    of a CheckConstraint referencing two columns, which SQLite/Postgres
+    handle inconsistently enough it isn't worth it for a two-value choice).
+    `width`/`height`/`file_size`/`content_type` are populated for uploads
+    only (probed from the decoded image at upload time, see validators.py)
+    — left null for external assets, since reliably fetching a
+    cross-origin image's real dimensions would mean the backend fetching
+    arbitrary user-supplied URLs server-side, which this feature does not
+    do."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='email_assets',
+    )
+    name = models.CharField(max_length=200)
+    category = models.CharField(
+        max_length=20, choices=EmailAssetCategory.choices, default=EmailAssetCategory.IMAGE,
+    )
+    source_type = models.CharField(max_length=20, choices=EmailAssetSourceType.choices)
+    file = models.ImageField(upload_to=email_asset_upload_path, blank=True, null=True)
+    external_url = models.URLField(max_length=2000, blank=True)
+    alt_text = models.CharField(max_length=250, blank=True)
+    content_type = models.CharField(max_length=40, blank=True)
+    file_size = models.PositiveIntegerField(null=True, blank=True)
+    width = models.PositiveIntegerField(null=True, blank=True)
+    height = models.PositiveIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

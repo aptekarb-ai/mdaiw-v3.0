@@ -63,6 +63,54 @@ export interface CreateSavedModuleInput {
   columns?: EmailColumn[];
 }
 
+export type EmailAssetCategory = 'image' | 'logo' | 'icon' | 'other';
+export type EmailAssetSourceType = 'upload' | 'external';
+
+// Feature 08 — a user's personal reusable image library, as returned by
+// /api/v1/email-builder/assets/. `url` is always the one field callers
+// need to actually use the asset (absolute URL for uploads, the external
+// URL verbatim otherwise) — see backend EmailAssetSerializer.get_url.
+// `width`/`height`/`file_size`/`content_type` are populated for uploads
+// only; null for external assets (the backend never fetches a
+// cross-origin URL server-side to probe its real dimensions).
+export interface EmailAsset {
+  id: number;
+  name: string;
+  category: EmailAssetCategory;
+  source_type: EmailAssetSourceType;
+  url: string;
+  external_url: string;
+  alt_text: string;
+  content_type: string;
+  file_size: number | null;
+  width: number | null;
+  height: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateEmailAssetUploadInput {
+  name: string;
+  category: EmailAssetCategory;
+  alt_text?: string;
+  file: File;
+}
+
+export interface CreateEmailAssetExternalInput {
+  name: string;
+  category: EmailAssetCategory;
+  alt_text?: string;
+  external_url: string;
+}
+
+export interface UpdateEmailAssetInput {
+  name?: string;
+  category?: EmailAssetCategory;
+  alt_text?: string;
+  file?: File;
+  external_url?: string;
+}
+
 export interface QuickActionDefinition {
   key: 'create' | 'template' | 'import' | 'ai-generate';
   icon: string;

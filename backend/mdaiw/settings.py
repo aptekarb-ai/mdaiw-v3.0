@@ -236,6 +236,14 @@ os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
 PROFILE_PHOTO_MAX_BYTES = 5 * 1024 * 1024
 PROFILE_PHOTO_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 
+# Module-4 Feature 08 (Asset Manager). Kept at the same ceiling as
+# PROFILE_PHOTO_MAX_BYTES deliberately — DATA_UPLOAD_MAX_MEMORY_SIZE below
+# is sized for Module-1's face-frame uploads (~9MB), so any asset limit
+# must stay comfortably under that shared Django-wide ceiling rather than
+# raising it.
+EMAIL_ASSET_MAX_BYTES = 5 * 1024 * 1024
+EMAIL_ASSET_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+
 # Django upload-size ceiling — comfortably covers FACE_MAX_FRAMES frames at
 # FACE_FRAME_MAX_BYTES each, so an oversized multipart request is rejected by
 # Django itself before any per-file validation or model inference runs.

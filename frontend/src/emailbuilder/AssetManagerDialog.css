@@ -1,0 +1,403 @@
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.asset-manager-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(0, 45, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+}
+
+.asset-manager-dialog {
+  width: min(760px, 100%);
+  max-height: min(720px, 90vh);
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.asset-manager-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  flex-shrink: 0;
+}
+
+.asset-manager-dialog__header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--color-primary-dark);
+}
+
+.asset-manager-dialog__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--color-text-muted);
+}
+
+.asset-manager-dialog__close:hover {
+  background: var(--color-background-light);
+}
+
+.asset-manager-dialog__close .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+}
+
+.asset-manager-dialog__tabs {
+  display: flex;
+  gap: var(--space-5);
+  padding: 0 var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.asset-manager-dialog__tab {
+  border: none;
+  background: transparent;
+  padding: var(--space-2) 0 var(--space-3);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+
+.asset-manager-dialog__tab--active {
+  color: var(--color-primary-blue);
+  border-bottom-color: var(--color-primary-blue);
+}
+
+.asset-manager-dialog__tab:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.asset-manager-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* --- Browse tab ---------------------------------------------------- */
+
+.asset-manager-dialog__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5) 0;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.asset-manager-dialog__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.asset-manager-dialog__search .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-text-subtle);
+  flex-shrink: 0;
+}
+
+.asset-manager-dialog__search input {
+  border: none;
+  outline: none;
+  font-size: 13px;
+  width: 100%;
+  background: transparent;
+}
+
+.asset-manager-dialog__chips {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.asset-manager-dialog__chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-white);
+  border-radius: var(--radius-pill);
+  padding: 6px var(--space-3);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.asset-manager-dialog__chip--active {
+  background: var(--color-primary-dark);
+  border-color: var(--color-primary-dark);
+  color: var(--color-white);
+}
+
+.asset-manager-dialog__chip:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.asset-manager-dialog__grid-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4) var(--space-5);
+}
+
+.asset-manager-dialog__section-label {
+  margin: 0 0 var(--space-2);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-subtle);
+}
+
+.asset-manager-dialog__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+}
+
+.asset-manager-dialog__card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  background: var(--color-white);
+  cursor: pointer;
+  text-align: left;
+}
+
+.asset-manager-dialog__card:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.asset-manager-dialog__card--selected {
+  border-color: var(--color-primary-blue);
+  box-shadow: 0 0 0 1px var(--color-primary-blue);
+}
+
+.asset-manager-dialog__card:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.asset-manager-dialog__thumb {
+  width: 100%;
+  height: 80px;
+  border-radius: var(--radius-sm);
+  background: var(--color-background-light);
+  object-fit: cover;
+  display: block;
+}
+
+.asset-manager-dialog__card-name {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-manager-dialog__empty {
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+/* --- Selected asset detail panel ------------------------------------ */
+
+.asset-manager-dialog__detail {
+  flex-shrink: 0;
+  display: flex;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-background-light);
+}
+
+.asset-manager-dialog__detail-thumb {
+  width: 72px;
+  height: 72px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.asset-manager-dialog__detail-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.asset-manager-dialog__detail-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-manager-dialog__detail-meta {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.asset-manager-dialog__detail-alt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: 2px;
+}
+
+.asset-manager-dialog__detail-alt input {
+  flex: 1;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.asset-manager-dialog__detail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.asset-manager-dialog__detail-actions-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.asset-manager-dialog__icon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-size: 12px;
+  color: var(--color-text-dark);
+  cursor: pointer;
+}
+
+.asset-manager-dialog__icon-button:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.asset-manager-dialog__icon-button .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+}
+
+.asset-manager-dialog__icon-button--destructive {
+  color: var(--color-error);
+}
+
+.asset-manager-dialog__icon-button--destructive:hover {
+  border-color: var(--color-error);
+}
+
+/* --- Upload / External tabs ----------------------------------------- */
+
+.asset-manager-dialog__form {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  overflow-y: auto;
+}
+
+.asset-manager-dialog__dropzone {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-8) var(--space-4);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.asset-manager-dialog__dropzone input[type='file'] {
+  margin-top: var(--space-2);
+}
+
+.asset-manager-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--color-text-dark);
+}
+
+.asset-manager-dialog__field input,
+.asset-manager-dialog__field select {
+  height: 38px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+}
+
+.asset-manager-dialog__error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-error);
+}
+
+.asset-manager-dialog__form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
