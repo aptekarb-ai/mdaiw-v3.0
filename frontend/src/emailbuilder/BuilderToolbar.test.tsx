@@ -8,6 +8,7 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
   const onEditorModeChange = vi.fn();
   const onViewModeChange = vi.fn();
   const onOpenPlatformDialog = vi.fn();
+  const onOpenExportDialog = vi.fn();
   render(
     <MemoryRouter>
       <BuilderToolbar
@@ -26,11 +27,12 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
         onViewModeChange={onViewModeChange}
         onEditorModeChange={onEditorModeChange}
         onOpenPlatformDialog={onOpenPlatformDialog}
+        onOpenExportDialog={onOpenExportDialog}
         {...overrides}
       />
     </MemoryRouter>,
   );
-  return { onEditorModeChange, onViewModeChange, onOpenPlatformDialog };
+  return { onEditorModeChange, onViewModeChange, onOpenPlatformDialog, onOpenExportDialog };
 }
 
 describe('BuilderToolbar — Visual/Code toggle', () => {
@@ -124,5 +126,19 @@ describe('BuilderToolbar — Validation Center entry point (Feature 12)', () => 
   it('no disabled "Coming soon" Validate placeholder remains — the real toggle replaced it', () => {
     renderToolbar();
     expect(screen.queryByTitle('Coming soon')).not.toBeInTheDocument();
+  });
+});
+
+describe('BuilderToolbar — Export / Deploy entry point (Feature 13)', () => {
+  it('clicking Export calls onOpenExportDialog', async () => {
+    const user = userEvent.setup();
+    const { onOpenExportDialog } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    expect(onOpenExportDialog).toHaveBeenCalledTimes(1);
+  });
+
+  it('Export is available regardless of editor mode (not gated like Desktop/Mobile)', () => {
+    renderToolbar({ editorMode: 'validate' });
+    expect(screen.getByRole('button', { name: 'Export' })).not.toBeDisabled();
   });
 });

@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { duplicateEmailDocument } from './duplicateEmailDocument';
+import { duplicateEmailDocument, saveEmailAsTemplate } from './duplicateEmailDocument';
 import * as client from '../api/client';
 import type { EmailDocument } from './types';
 
 vi.mock('../api/client', () => ({
   createEmailDocument: vi.fn(),
   updateEmailDocument: vi.fn(),
+  deleteEmailDocument: vi.fn(),
 }));
 
 function source(): EmailDocument {
@@ -80,5 +81,65 @@ describe('duplicateEmailDocument', () => {
 
     expect(client.updateEmailDocument).toHaveBeenCalledWith(2, expect.anything());
     expect(original.content).toEqual(originalContentSnapshot);
+  });
+
+  it('rolls back (deletes) the created row when the content patch fails', async () => {
+    const created = { ...source(), id: 2, name: 'Copy of Source Email' };
+    vi.mocked(client.createEmailDocument).mockResolvedValue(created);
+    vi.mocked(client.updateEmailDocument).mockRejectedValue(new Error('patch failed'));
+    vi.mocked(client.deleteEmailDocument).mockResolvedValue(undefined);
+
+    await expect(duplicateEmailDocument(source())).rejects.toThrow('patch failed');
+
+    expect(client.deleteEmailDocument).toHaveBeenCalledWith(2);
+  });
+});
+
+describe('saveEmailAsTemplate', () => {
+  it('creates a new document with start_type "template" and the given name', async () => {
+    const created = { ...source(), id: 3, name: 'Summer Sale (Template)', start_type: 'template' as const };
+    vi.mocked(client.createEmailDocument).mockResolvedValue(created);
+    vi.mocked(client.updateEmailDocument).mockImplementation(async (_id, input) => ({ ...created, content: input.content! }));
+
+    await saveEmailAsTemplate(source(), 'Summer Sale (Template)');
+
+    expect(client.createEmailDocument).toHaveBeenCalledWith({
+      name: 'Summer Sale (Template)', platform: 'sfmc', width: 650, start_type: 'template',
+    });
+  });
+
+  it('regenerates every module id, same as duplicate', async () => {
+    const created = { ...source(), id: 3, name: 'Template', start_type: 'template' as const };
+    vi.mocked(client.createEmailDocument).mockResolvedValue(created);
+    vi.mocked(client.updateEmailDocument).mockImplementation(async (_id, input) => ({ ...created, content: input.content! }));
+
+    const result = await saveEmailAsTemplate(source(), 'Template');
+
+    expect(result.content.modules[0].id).not.toBe('m-1');
+    expect(result.content.modules[1].id).not.toBe('layout-1');
+  });
+
+  it('never mutates the original source document', async () => {
+    const original = source();
+    const originalContentSnapshot = JSON.parse(JSON.stringify(original.content));
+    const created = { ...original, id: 3, name: 'Template', start_type: 'template' as const };
+    vi.mocked(client.createEmailDocument).mockResolvedValue(created);
+    vi.mocked(client.updateEmailDocument).mockImplementation(async (_id, input) => ({ ...created, content: input.content! }));
+
+    await saveEmailAsTemplate(original, 'Template');
+
+    expect(original.content).toEqual(originalContentSnapshot);
+    expect(original.start_type).toBe('blank');
+  });
+
+  it('rolls back (deletes) the created row when the content patch fails', async () => {
+    const created = { ...source(), id: 3, name: 'Template', start_type: 'template' as const };
+    vi.mocked(client.createEmailDocument).mockResolvedValue(created);
+    vi.mocked(client.updateEmailDocument).mockRejectedValue(new Error('patch failed'));
+    vi.mocked(client.deleteEmailDocument).mockResolvedValue(undefined);
+
+    await expect(saveEmailAsTemplate(source(), 'Template')).rejects.toThrow('patch failed');
+
+    expect(client.deleteEmailDocument).toHaveBeenCalledWith(3);
   });
 });

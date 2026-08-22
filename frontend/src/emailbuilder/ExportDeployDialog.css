@@ -1,0 +1,274 @@
+.export-deploy-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 45, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: var(--space-4);
+}
+
+.export-deploy-dialog {
+  width: min(820px, 100%);
+  max-height: min(760px, 90vh);
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.export-deploy-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.export-deploy-dialog__header h2 {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 20px;
+}
+
+.export-deploy-dialog__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.export-deploy-dialog__close:hover {
+  background: var(--color-background-light);
+}
+
+.export-deploy-dialog__close .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-text-muted);
+}
+
+.export-deploy-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+.export-deploy-dialog__list {
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.export-deploy-dialog__list-label {
+  margin: 0 0 var(--space-1);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
+
+.export-deploy-dialog__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  text-align: left;
+  cursor: pointer;
+}
+
+.export-deploy-dialog__option:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.export-deploy-dialog__option:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.export-deploy-dialog__option--active {
+  border-color: var(--color-primary-blue);
+  background: var(--color-info-bg);
+}
+
+.export-deploy-dialog__option .mdaiw-icon {
+  width: 20px;
+  height: 20px;
+  background-color: var(--color-primary-blue);
+  flex-shrink: 0;
+}
+
+.export-deploy-dialog__option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.export-deploy-dialog__option-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.export-deploy-dialog__option-description {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.export-deploy-dialog__detail {
+  flex: 1;
+  min-width: 0;
+}
+
+.export-deploy-dialog__detail h3 {
+  margin: 0 0 var(--space-4);
+  color: var(--color-primary-dark);
+  font-size: 18px;
+}
+
+.export-deploy-dialog__summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+
+.export-deploy-dialog__summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-light);
+}
+
+.export-deploy-dialog__summary-row dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.export-deploy-dialog__summary-row dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.export-deploy-dialog__summary-row dd .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.export-deploy-dialog__pass {
+  color: var(--color-accent-green);
+}
+
+.export-deploy-dialog__pass .mdaiw-icon {
+  background-color: var(--color-accent-green);
+}
+
+.export-deploy-dialog__fail {
+  color: var(--color-error);
+}
+
+.export-deploy-dialog__fail .mdaiw-icon {
+  background-color: var(--color-error);
+}
+
+.export-deploy-dialog__gate {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  margin: 0 0 var(--space-4);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+  background: var(--color-error-bg);
+}
+
+.export-deploy-dialog__gate .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-error);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.export-deploy-dialog__gate-title {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-error);
+}
+
+.export-deploy-dialog__gate-checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-text-dark);
+  cursor: pointer;
+}
+
+.export-deploy-dialog__error {
+  margin: 0 0 var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-error);
+}
+
+.export-deploy-dialog__error .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-error);
+}
+
+.export-deploy-dialog__utility-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.export-deploy-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .export-deploy-dialog__body {
+    flex-direction: column;
+  }
+
+  .export-deploy-dialog__list {
+    flex: none;
+  }
+}
