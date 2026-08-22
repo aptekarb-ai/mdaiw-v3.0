@@ -1045,3 +1045,80 @@ describe('EmailBuilderWorkspacePage — Feature 09 Code Editor', () => {
     });
   });
 });
+
+describe('EmailBuilderWorkspacePage — Feature 10 Platform Environment', () => {
+  it('clicking the toolbar platform chip opens the Platform Environment dialog', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Generic/ }));
+    expect(await screen.findByRole('dialog', { name: 'Platform / Environment Mode' })).toBeInTheDocument();
+  });
+
+  it('applying a platform switch PATCHes only platform, updates the toolbar chip, and closes the dialog', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ platform: 'sfmc' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Generic/ }));
+    await screen.findByRole('dialog', { name: 'Platform / Environment Mode' });
+    await user.click(screen.getByRole('radio', { name: /Salesforce Marketing Cloud/ }));
+    await user.click(screen.getByRole('button', { name: 'Apply Platform' }));
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', { platform: 'sfmc' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Salesforce Marketing Cloud/ })).toBeInTheDocument();
+  });
+
+  it('a failed platform switch shows an inline error and keeps the dialog open (content is never touched)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.updateEmailDocument).mockRejectedValue({ message: 'Server error' });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Generic/ }));
+    await screen.findByRole('dialog', { name: 'Platform / Environment Mode' });
+    await user.click(screen.getByRole('radio', { name: /Marketo/ }));
+    await user.click(screen.getByRole('button', { name: 'Apply Platform' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('We could not switch the platform');
+    expect(screen.getByRole('dialog', { name: 'Platform / Environment Mode' })).toBeInTheDocument();
+  });
+
+  it('the Code Editor platform indicator reflects a platform switch made from the dialog', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ platform: 'hubspot' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Generic/ }));
+    await user.click(screen.getByRole('radio', { name: /HubSpot/ }));
+    await user.click(screen.getByRole('button', { name: 'Apply Platform' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Code' }));
+    const platformIndicator = (await screen.findByTitle('Platform scripting mode'));
+    expect(platformIndicator).toHaveTextContent('HubSpot');
+  });
+
+  it('Cancel closes the dialog without calling updateEmailDocument', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Generic/ }));
+    await screen.findByRole('dialog', { name: 'Platform / Environment Mode' });
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+  });
+});

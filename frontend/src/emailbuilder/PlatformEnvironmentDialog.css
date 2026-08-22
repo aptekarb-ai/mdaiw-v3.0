@@ -1,0 +1,316 @@
+.platform-env-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 45, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: var(--space-4);
+}
+
+.platform-env-dialog {
+  width: min(820px, 100%);
+  max-height: min(760px, 90vh);
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.platform-env-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.platform-env-dialog__header h2 {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 20px;
+}
+
+.platform-env-dialog__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.platform-env-dialog__close:hover {
+  background: var(--color-background-light);
+}
+
+.platform-env-dialog__close .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-text-muted);
+}
+
+.platform-env-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+.platform-env-dialog__list {
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.platform-env-dialog__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  text-align: left;
+  cursor: pointer;
+}
+
+.platform-env-dialog__option:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.platform-env-dialog__option:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.platform-env-dialog__option--active {
+  border-color: var(--color-primary-blue);
+  background: var(--color-info-bg);
+}
+
+.platform-env-dialog__option .mdaiw-icon {
+  width: 20px;
+  height: 20px;
+  background-color: var(--color-primary-blue);
+  flex-shrink: 0;
+}
+
+.platform-env-dialog__option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.platform-env-dialog__option-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.platform-env-dialog__option-description {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.platform-env-dialog__current-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-success-bg);
+  color: var(--color-primary-dark);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.platform-env-dialog__detail {
+  flex: 1;
+  min-width: 0;
+}
+
+.platform-env-dialog__detail h3 {
+  margin: 0 0 var(--space-4);
+  color: var(--color-primary-dark);
+  font-size: 18px;
+}
+
+.platform-env-dialog__matrix {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-4);
+}
+
+.platform-env-dialog__matrix-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background-light);
+}
+
+.platform-env-dialog__matrix-row dt {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.platform-env-dialog__matrix-row dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.platform-env-dialog__note {
+  margin: 0 0 var(--space-4);
+  font-size: 12px;
+  color: var(--color-text-subtle);
+}
+
+.platform-env-dialog__tokens {
+  margin: 0 0 var(--space-4);
+}
+
+.platform-env-dialog__tokens h4 {
+  margin: 0 0 var(--space-2);
+  font-size: 13px;
+  color: var(--color-text-dark);
+}
+
+.platform-env-dialog__tokens ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.platform-env-dialog__tokens li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.platform-env-dialog__token {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.platform-env-dialog__token:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.platform-env-dialog__token .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-primary-blue);
+}
+
+.platform-env-dialog__token code {
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  color: var(--color-text-dark);
+}
+
+.platform-env-dialog__token-status {
+  color: var(--color-text-subtle);
+}
+
+.platform-env-dialog__token-description {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.platform-env-dialog__impact {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+}
+
+.platform-env-dialog__impact .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-warning);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.platform-env-dialog__impact-title {
+  margin: 0 0 var(--space-1);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-warning);
+}
+
+.platform-env-dialog__impact ul {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: 12px;
+  color: var(--color-text-dark);
+}
+
+.platform-env-dialog__error {
+  margin: 0;
+  padding: var(--space-3) var(--space-5) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-error);
+  flex-shrink: 0;
+}
+
+.platform-env-dialog__error .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-error);
+}
+
+.platform-env-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+@media (max-width: 767px) {
+  .platform-env-dialog__body {
+    flex-direction: column;
+  }
+
+  .platform-env-dialog__list {
+    flex: none;
+  }
+}

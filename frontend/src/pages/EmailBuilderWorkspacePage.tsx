@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router';
 import { getEmailDocument, updateEmailDocument } from '../api/client';
 import type { EmailDocument as EmailDocumentRecord } from '../emailbuilder/types';
@@ -11,10 +11,12 @@ import { EmailCanvas, type BuilderViewMode } from '../emailbuilder/EmailCanvas';
 import { PropertiesPanel, type SelectedColumnContext } from '../emailbuilder/PropertiesPanel';
 import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
 import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
+import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
 import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
+import { renderEmailDocument } from '../emailbuilder/htmlRenderer';
 import type { EmailModuleType } from '../emailbuilder/edm';
-import type { SavedEmailModule } from '../emailbuilder/types';
+import type { EmailPlatform, SavedEmailModule } from '../emailbuilder/types';
 import type { ApiError } from '../types/auth';
 import './EmailBuilderWorkspacePage.css';
 
@@ -34,6 +36,7 @@ export function EmailBuilderWorkspacePage() {
   const [propertiesPanelCollapsed, setPropertiesPanelCollapsed] = useState(false);
   const [saveModuleTargetId, setSaveModuleTargetId] = useState<string | null>(null);
   const [savingModule, setSavingModule] = useState(false);
+  const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
 
   const builder = useEmailBuilderState();
   const savedModulesState = useSavedModules();
@@ -85,6 +88,17 @@ export function EmailBuilderWorkspacePage() {
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, builder.modules, builder.markSaved]);
+
+  // Feature 10 — applying a platform switch PATCHes only `platform` (the
+  // same endpoint/pattern as handleSave's `content`-only PATCH); it never
+  // touches `content`, so an unsaved Visual edit is untouched by a platform
+  // change. Throws on failure so PlatformEnvironmentDialog can show its own
+  // inline error and keep itself open for a retry.
+  const handleApplyPlatform = useCallback(async (platform: EmailPlatform) => {
+    if (!id) return;
+    const saved = await updateEmailDocument(id, { platform });
+    setDocument(saved);
+  }, [id]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -187,6 +201,17 @@ export function EmailBuilderWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeColumn]);
 
+  // Feature 10 — the compatibility-impact scan reads the same rendered
+  // string Feature 09's Code Editor shows; recomputed only when the
+  // dialog is actually open, same lazy-compute shape as CodeEditorPanel's
+  // own rawHtml memo.
+  const platformDialogHtml = useMemo(
+    () => (platformDialogOpen && document
+      ? renderEmailDocument({ width: document.width, content: { version: 1, modules: builder.modules } })
+      : ''),
+    [platformDialogOpen, document, builder.modules],
+  );
+
   const saveModuleTarget = saveModuleTargetId
     ? builder.modules.find((module) => module.id === saveModuleTargetId) ?? null
     : null;
@@ -247,6 +272,7 @@ export function EmailBuilderWorkspacePage() {
         onSave={handleSave}
         onViewModeChange={setViewMode}
         onEditorModeChange={setEditorMode}
+        onOpenPlatformDialog={() => setPlatformDialogOpen(true)}
       />
 
       {saveStatus === 'error' && (
@@ -323,6 +349,15 @@ export function EmailBuilderWorkspacePage() {
           saving={savingModule}
           onSave={handleConfirmSaveModule}
           onCancel={() => setSaveModuleTargetId(null)}
+        />
+      )}
+
+      {platformDialogOpen && (
+        <PlatformEnvironmentDialog
+          currentPlatform={document.platform}
+          documentHtml={platformDialogHtml}
+          onApply={handleApplyPlatform}
+          onClose={() => setPlatformDialogOpen(false)}
         />
       )}
     </div>

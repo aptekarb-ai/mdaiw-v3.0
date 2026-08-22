@@ -7,6 +7,7 @@ import { BuilderToolbar } from './BuilderToolbar';
 function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> = {}) {
   const onEditorModeChange = vi.fn();
   const onViewModeChange = vi.fn();
+  const onOpenPlatformDialog = vi.fn();
   render(
     <MemoryRouter>
       <BuilderToolbar
@@ -24,11 +25,12 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
         onSave={vi.fn()}
         onViewModeChange={onViewModeChange}
         onEditorModeChange={onEditorModeChange}
+        onOpenPlatformDialog={onOpenPlatformDialog}
         {...overrides}
       />
     </MemoryRouter>,
   );
-  return { onEditorModeChange, onViewModeChange };
+  return { onEditorModeChange, onViewModeChange, onOpenPlatformDialog };
 }
 
 describe('BuilderToolbar — Visual/Code toggle', () => {
@@ -61,5 +63,19 @@ describe('BuilderToolbar — Visual/Code toggle', () => {
     renderToolbar({ editorMode: 'visual' });
     expect(screen.getByRole('button', { name: 'Desktop' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Mobile' })).not.toBeDisabled();
+  });
+});
+
+describe('BuilderToolbar — Platform Environment entry point (Feature 10)', () => {
+  it('shows the current platform label as a clickable chip', () => {
+    renderToolbar({ platform: 'sfmc' });
+    expect(screen.getByRole('button', { name: /Salesforce Marketing Cloud/ })).toBeInTheDocument();
+  });
+
+  it('clicking the platform chip calls onOpenPlatformDialog', async () => {
+    const user = userEvent.setup();
+    const { onOpenPlatformDialog } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: /Generic/ }));
+    expect(onOpenPlatformDialog).toHaveBeenCalledTimes(1);
   });
 });

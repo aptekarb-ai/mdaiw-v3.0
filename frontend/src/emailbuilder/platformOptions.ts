@@ -1,10 +1,23 @@
 import type { EmailPlatform } from './types';
 
-// Capability flags a future platform-adapter layer will read (AMPScript
-// injection, Marketo personalization tokens, HubL, dynamic-content blocks,
-// per-platform HTML rules). None of that is implemented yet — Feature 02
-// only stores which platform was selected — but the shape exists now so
-// later features don't have to touch this list again, just read from it.
+// A platform-appropriate personalization/merge-tag token — reference only
+// (Feature 10). Never auto-inserted into module content; the Platform
+// Environment dialog surfaces these as copy-to-clipboard text so the user
+// can paste one into any text field manually. Because it's always plain
+// text handed to the user, not interpreted or injected as markup, this
+// carries no risk to the table-first/zero-script HTML contract.
+export interface MergeTagSample {
+  token: string;
+  description: string;
+}
+
+// Capability flags a platform-adapter layer reads (AMPScript injection,
+// Marketo personalization tokens, HubL, dynamic-content blocks, per-platform
+// HTML rules). Feature 02 only stores which platform was selected; Feature
+// 10 is the first feature to actually read compatibilityMode/htmlStructure/
+// css/scripting/mergeTags — the shape existed ahead of time so this feature
+// didn't have to touch the PLATFORM_OPTIONS list shape again, just add
+// fields to it.
 export interface PlatformOption {
   value: EmailPlatform;
   label: string;
@@ -18,6 +31,17 @@ export interface PlatformOption {
   supportsHubL: boolean;
   supportsDynamicContent: boolean;
   emailHtmlRules: string | null;
+  // Feature 10 — Platform Environment capability matrix (matches the
+  // reference PNG's "Compatibility Mode / HTML Structure / CSS /
+  // Scripting" rows). Display-only; every platform still renders through
+  // the same table-first htmlRenderer, so these describe the platform's
+  // safe-to-assume constraints rather than switch any actual rendering
+  // logic.
+  compatibilityMode: string;
+  htmlStructure: string;
+  css: string;
+  scripting: string;
+  mergeTags: MergeTagSample[];
 }
 
 export const PLATFORM_OPTIONS: PlatformOption[] = [
@@ -31,6 +55,11 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
     supportsHubL: false,
     supportsDynamicContent: false,
     emailHtmlRules: null,
+    compatibilityMode: 'Maximum',
+    htmlStructure: 'Table based (Email safe)',
+    css: 'Inline & Email safe',
+    scripting: 'Disabled',
+    mergeTags: [],
   },
   {
     value: 'sfmc',
@@ -42,6 +71,15 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
     supportsHubL: false,
     supportsDynamicContent: false,
     emailHtmlRules: null,
+    compatibilityMode: 'High',
+    htmlStructure: 'Table based (Email safe)',
+    css: 'Inline & Email safe',
+    scripting: 'AMPScript enabled',
+    mergeTags: [
+      { token: '%%FirstName%%', description: 'Subscriber first name' },
+      { token: '%%EmailAddress%%', description: 'Subscriber email address' },
+      { token: '%%=v(@discount)=%%', description: 'AMPScript variable output' },
+    ],
   },
   {
     value: 'marketo',
@@ -53,6 +91,15 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
     supportsHubL: false,
     supportsDynamicContent: false,
     emailHtmlRules: null,
+    compatibilityMode: 'High',
+    htmlStructure: 'Table based (Email safe)',
+    css: 'Inline & Email safe',
+    scripting: 'Marketo tokens enabled',
+    mergeTags: [
+      { token: '{{lead.First Name}}', description: 'Lead first name' },
+      { token: '{{lead.Email Address}}', description: 'Lead email address' },
+      { token: '{{my.tokenName}}', description: 'My Tokens value' },
+    ],
   },
   {
     value: 'hubspot',
@@ -64,6 +111,15 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
     supportsHubL: true,
     supportsDynamicContent: false,
     emailHtmlRules: null,
+    compatibilityMode: 'High',
+    htmlStructure: 'Table based (Email safe)',
+    css: 'Inline & Email safe',
+    scripting: 'HubL enabled',
+    mergeTags: [
+      { token: '{{ contact.firstname }}', description: 'Contact first name' },
+      { token: '{{ contact.email }}', description: 'Contact email address' },
+      { token: '{% if contact.lifecyclestage == "customer" %}', description: 'HubL personalization block' },
+    ],
   },
   {
     value: 'pardot',
@@ -75,6 +131,15 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
     supportsHubL: false,
     supportsDynamicContent: true,
     emailHtmlRules: null,
+    compatibilityMode: 'High',
+    htmlStructure: 'Table based (Email safe)',
+    css: 'Inline & Email safe',
+    scripting: 'Dynamic content enabled',
+    mergeTags: [
+      { token: '%%first_name%%', description: 'Prospect first name' },
+      { token: '%%email%%', description: 'Prospect email address' },
+      { token: '{{Recipient.FirstName}}', description: 'Dynamic content variable' },
+    ],
   },
   {
     value: 'other',
@@ -86,6 +151,11 @@ export const PLATFORM_OPTIONS: PlatformOption[] = [
     supportsHubL: false,
     supportsDynamicContent: false,
     emailHtmlRules: null,
+    compatibilityMode: 'Unknown',
+    htmlStructure: 'Table based (Email safe)',
+    css: 'Inline & Email safe',
+    scripting: 'Disabled',
+    mergeTags: [],
   },
 ];
 
