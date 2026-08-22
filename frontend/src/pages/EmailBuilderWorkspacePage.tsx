@@ -14,6 +14,8 @@ import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
 import { PreviewStudioPanel } from '../emailbuilder/PreviewStudioPanel';
 import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
+import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
+import { saveEmailAsTemplate } from '../emailbuilder/duplicateEmailDocument';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
 import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
 import { renderEmailDocument } from '../emailbuilder/htmlRenderer';
@@ -39,6 +41,7 @@ export function EmailBuilderWorkspacePage() {
   const [saveModuleTargetId, setSaveModuleTargetId] = useState<string | null>(null);
   const [savingModule, setSavingModule] = useState(false);
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   const builder = useEmailBuilderState();
   const savedModulesState = useSavedModules();
@@ -101,6 +104,20 @@ export function EmailBuilderWorkspacePage() {
     const saved = await updateEmailDocument(id, { platform });
     setDocument(saved);
   }, [id]);
+
+  // Feature 13 — "Save as template" exports the CURRENT in-editor module
+  // tree (builder.modules), not the last-saved `document.content` — so an
+  // unsaved Visual edit is included in the template exactly as shown on
+  // screen, same "what you see is what gets written" guarantee Save itself
+  // gives for the original document.
+  const handleSaveAsTemplate = useCallback(async (templateName: string) => {
+    if (!document) throw new Error('No document loaded');
+    return saveEmailAsTemplate(
+      { ...document, content: { version: 1, modules: builder.modules } },
+      templateName,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, [document, builder.modules]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -275,6 +292,7 @@ export function EmailBuilderWorkspacePage() {
         onViewModeChange={setViewMode}
         onEditorModeChange={setEditorMode}
         onOpenPlatformDialog={() => setPlatformDialogOpen(true)}
+        onOpenExportDialog={() => setExportDialogOpen(true)}
       />
 
       {saveStatus === 'error' && (
@@ -376,6 +394,15 @@ export function EmailBuilderWorkspacePage() {
           documentHtml={platformDialogHtml}
           onApply={handleApplyPlatform}
           onClose={() => setPlatformDialogOpen(false)}
+        />
+      )}
+
+      {exportDialogOpen && (
+        <ExportDeployDialog
+          document={document}
+          content={{ version: 1, modules: builder.modules }}
+          onSaveAsTemplate={handleSaveAsTemplate}
+          onClose={() => setExportDialogOpen(false)}
         />
       )}
     </div>

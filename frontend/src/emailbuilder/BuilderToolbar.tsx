@@ -32,6 +32,7 @@ interface BuilderToolbarProps {
   onViewModeChange: (mode: BuilderViewMode) => void;
   onEditorModeChange: (mode: EditorMode) => void;
   onOpenPlatformDialog: () => void;
+  onOpenExportDialog: () => void;
 }
 
 function statusLabel(saveStatus: SaveStatus, dirty: boolean): string {
@@ -47,7 +48,7 @@ function Separator() {
 
 export function BuilderToolbar({
   name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode, editorMode,
-  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onOpenPlatformDialog,
+  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onOpenPlatformDialog, onOpenExportDialog,
 }: BuilderToolbarProps) {
   const navigate = useNavigate();
 
@@ -164,6 +165,11 @@ export function BuilderToolbar({
           disabled={saveStatus === 'saving' || !dirty}
         >
           Save
+        </button>
+
+        <button type="button" className="button button--outline" onClick={onOpenExportDialog}>
+          <span className="mdaiw-icon mdaiw-icon--send" aria-hidden="true" />
+          Export
         </button>
       </div>
     </div>

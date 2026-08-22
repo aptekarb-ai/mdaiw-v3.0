@@ -13,6 +13,8 @@ vi.mock('../api/client', async () => {
     ...actual,
     getEmailDocument: vi.fn(),
     updateEmailDocument: vi.fn(),
+    createEmailDocument: vi.fn(),
+    deleteEmailDocument: vi.fn(),
     listSavedModules: vi.fn(),
     createSavedModule: vi.fn(),
     deleteSavedModule: vi.fn(),
@@ -1263,5 +1265,92 @@ describe('EmailBuilderWorkspacePage — Feature 12 Validation Center', () => {
 
     expect(screen.queryByText('Email Health Score')).not.toBeInTheDocument();
     expect(within(editorModeGroup).getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Feature 13 Export / Deploy', () => {
+  it('clicking Export opens the Export/Deploy dialog showing the email name and platform', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Export / Deploy' })).toBeInTheDocument();
+    expect(screen.getAllByText('August Newsletter').length).toBeGreaterThan(0);
+  });
+
+  it('a clean empty document shows a Passed export summary with no blocking gate', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [] } }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+
+    expect(screen.getAllByText(/Passed/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Export Email/ })).not.toBeDisabled();
+  });
+
+  it('Save as Template creates a new document via create+patch and shows success', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.createEmailDocument).mockResolvedValue(
+      baseDocument({ id: 2, name: 'August Newsletter (Template)', start_type: 'template' }),
+    );
+    vi.mocked(client.updateEmailDocument).mockImplementation(async (_id, input) => baseDocument({
+      id: 2, name: 'August Newsletter (Template)', start_type: 'template', content: input.content!,
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+    await user.click(screen.getByRole('button', { name: 'Save as Template' }));
+
+    await waitFor(() => expect(client.createEmailDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'August Newsletter (Template)', start_type: 'template' }),
+    ));
+    expect(await screen.findByText('Saved as Template')).toBeInTheDocument();
+  });
+
+  it('Cancel closes the dialog and returns to the Visual builder', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Export / Deploy' })).not.toBeInTheDocument();
+  });
+
+  it('Export uses the live in-editor module tree, not just the last-saved content, when saving as a template', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [] } }));
+    vi.mocked(client.createEmailDocument).mockResolvedValue(
+      baseDocument({ id: 2, name: 'August Newsletter (Template)', start_type: 'template' }),
+    );
+    let patchedModuleCount = -1;
+    vi.mocked(client.updateEmailDocument).mockImplementation(async (_id, input) => {
+      patchedModuleCount = input.content!.modules.length;
+      return baseDocument({ id: 2, start_type: 'template', content: input.content! });
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+    await user.click(screen.getByRole('button', { name: 'Save as Template' }));
+
+    await waitFor(() => expect(patchedModuleCount).toBe(1));
   });
 });
