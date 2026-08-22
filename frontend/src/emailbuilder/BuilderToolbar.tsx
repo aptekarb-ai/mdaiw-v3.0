@@ -14,7 +14,7 @@ const PLATFORM_LABELS: Record<EmailPlatform, string> = {
   other: 'Other',
 };
 
-export type EditorMode = 'visual' | 'code' | 'preview';
+export type EditorMode = 'visual' | 'code' | 'preview' | 'validate';
 
 interface BuilderToolbarProps {
   name: string;
@@ -117,6 +117,14 @@ export function BuilderToolbar({
           >
             Preview
           </button>
+          <button
+            type="button"
+            aria-pressed={editorMode === 'validate'}
+            className={editorMode === 'validate' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
+            onClick={() => onEditorModeChange('validate')}
+          >
+            Validate
+          </button>
         </div>
 
         <Separator />
@@ -139,15 +147,6 @@ export function BuilderToolbar({
             onClick={() => onViewModeChange('mobile')}
           >
             Mobile
-          </button>
-        </div>
-
-        <Separator />
-
-        <div className="builder-toolbar__future-actions">
-          <button type="button" className="button button--outline" disabled title="Coming soon">
-            <span className="mdaiw-icon mdaiw-icon--shield-check" aria-hidden="true" />
-            Validate
           </button>
         </div>
       </div>
