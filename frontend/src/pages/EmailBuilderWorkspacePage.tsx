@@ -12,6 +12,7 @@ import { PropertiesPanel, type SelectedColumnContext } from '../emailbuilder/Pro
 import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
 import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
 import { PreviewStudioPanel } from '../emailbuilder/PreviewStudioPanel';
+import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
 import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
@@ -295,6 +296,17 @@ export function EmailBuilderWorkspacePage() {
           <PreviewStudioPanel
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
+          />
+        ) : editorMode === 'validate' ? (
+          <ValidationCenterPanel
+            width={document.width}
+            content={{ version: 1, modules: builder.modules }}
+            platform={document.platform}
+            onNavigateToModule={(moduleId) => {
+              setEditorMode('visual');
+              builder.selectModule(moduleId);
+            }}
+            onApplySafeFix={handleUpdateProps}
           />
         ) : (
         <>

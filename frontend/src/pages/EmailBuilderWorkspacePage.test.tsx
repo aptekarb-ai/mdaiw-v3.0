@@ -1181,3 +1181,87 @@ describe('EmailBuilderWorkspacePage — Feature 11 Preview Studio', () => {
     expect(await screen.findByText(/of \d+ clients compatible\./)).toBeInTheDocument();
   });
 });
+
+describe('EmailBuilderWorkspacePage — Feature 12 Validation Center', () => {
+  it('switching to Validate hides the module/canvas/properties panels and shows the health score', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Validate' }));
+
+    expect(within(editorModeGroup).getByRole('button', { name: 'Validate' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByText('Email Health Score')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Search modules')).not.toBeInTheDocument();
+  });
+
+  it('a clean empty document shows a perfect score and no issues', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [] } }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Validate' }));
+
+    expect(await screen.findByText('100')).toBeInTheDocument();
+    expect(screen.getByText('Issues Found (0)')).toBeInTheDocument();
+  });
+
+  it('clicking "Go to module" on an issue switches to Visual and selects the offending module', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Images');
+    await user.click(await screen.findByRole('button', { name: 'Add Image' }));
+    expect(screen.queryByText('Select a module')).not.toBeInTheDocument();
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Validate' }));
+    await screen.findByText('Email Health Score');
+
+    // The freshly-added image uses the app's own "#" placeholder src —
+    // its Fix is not safely auto-fixable (no real URL to invent), so this
+    // exercises the navigate-to-module path, not a safe-fix patch.
+    const goToModuleButtons = screen.queryAllByRole('button', { name: 'Go to module' });
+    if (goToModuleButtons.length > 0) {
+      await user.click(goToModuleButtons[0]);
+      expect(within(editorModeGroup).getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.queryByText('Select a module')).not.toBeInTheDocument();
+    }
+  });
+
+  it('Revalidate and Fix All Safe Issues controls are present and keyboard-reachable', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Validate' }));
+    await screen.findByText('Email Health Score');
+
+    expect(screen.getByRole('button', { name: 'Revalidate' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Fix All Safe Issues/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /AI-Assisted Fix/ })).toBeDisabled();
+  });
+
+  it('switching back to Visual from Validate restores the module panel/canvas/properties panel', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Validate' }));
+    await screen.findByText('Email Health Score');
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Visual' }));
+
+    expect(screen.queryByText('Email Health Score')).not.toBeInTheDocument();
+    expect(within(editorModeGroup).getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});

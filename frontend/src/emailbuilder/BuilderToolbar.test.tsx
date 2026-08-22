@@ -100,3 +100,29 @@ describe('BuilderToolbar — Preview Studio entry point (Feature 11)', () => {
     expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
   });
 });
+
+describe('BuilderToolbar — Validation Center entry point (Feature 12)', () => {
+  it('clicking Validate calls onEditorModeChange("validate")', async () => {
+    const user = userEvent.setup();
+    const { onEditorModeChange } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: 'Validate' }));
+    expect(onEditorModeChange).toHaveBeenCalledWith('validate');
+  });
+
+  it('reflects editorMode="validate" as active', () => {
+    renderToolbar({ editorMode: 'validate' });
+    expect(screen.getByRole('button', { name: 'Validate' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('Desktop/Mobile device buttons are disabled in Validate mode', () => {
+    renderToolbar({ editorMode: 'validate' });
+    expect(screen.getByRole('button', { name: 'Desktop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
+  });
+
+  it('no disabled "Coming soon" Validate placeholder remains — the real toggle replaced it', () => {
+    renderToolbar();
+    expect(screen.queryByTitle('Coming soon')).not.toBeInTheDocument();
+  });
+});
