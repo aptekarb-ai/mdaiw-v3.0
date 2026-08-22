@@ -14,6 +14,8 @@ const PLATFORM_LABELS: Record<EmailPlatform, string> = {
   other: 'Other',
 };
 
+export type EditorMode = 'visual' | 'code';
+
 interface BuilderToolbarProps {
   name: string;
   platform: EmailPlatform;
@@ -23,10 +25,12 @@ interface BuilderToolbarProps {
   canUndo: boolean;
   canRedo: boolean;
   viewMode: BuilderViewMode;
+  editorMode: EditorMode;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
   onViewModeChange: (mode: BuilderViewMode) => void;
+  onEditorModeChange: (mode: EditorMode) => void;
 }
 
 function statusLabel(saveStatus: SaveStatus, dirty: boolean): string {
@@ -41,8 +45,8 @@ function Separator() {
 }
 
 export function BuilderToolbar({
-  name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode,
-  onUndo, onRedo, onSave, onViewModeChange,
+  name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode, editorMode,
+  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange,
 }: BuilderToolbarProps) {
   const navigate = useNavigate();
 
@@ -79,10 +83,32 @@ export function BuilderToolbar({
 
         <Separator />
 
+        <div className="builder-toolbar__view-switch" role="group" aria-label="Editor mode">
+          <button
+            type="button"
+            aria-pressed={editorMode === 'visual'}
+            className={editorMode === 'visual' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
+            onClick={() => onEditorModeChange('visual')}
+          >
+            Visual
+          </button>
+          <button
+            type="button"
+            aria-pressed={editorMode === 'code'}
+            className={editorMode === 'code' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
+            onClick={() => onEditorModeChange('code')}
+          >
+            Code
+          </button>
+        </div>
+
+        <Separator />
+
         <div className="builder-toolbar__view-switch" role="group" aria-label="Preview device">
           <button
             type="button"
             aria-pressed={viewMode === 'desktop'}
+            disabled={editorMode === 'code'}
             className={viewMode === 'desktop' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
             onClick={() => onViewModeChange('desktop')}
           >
@@ -91,6 +117,7 @@ export function BuilderToolbar({
           <button
             type="button"
             aria-pressed={viewMode === 'mobile'}
+            disabled={editorMode === 'code'}
             className={viewMode === 'mobile' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
             onClick={() => onViewModeChange('mobile')}
           >

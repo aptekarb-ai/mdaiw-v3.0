@@ -5,11 +5,12 @@ import type { EmailDocument as EmailDocumentRecord } from '../emailbuilder/types
 import { normalizeContent } from '../emailbuilder/edmMigration';
 import { useEmailBuilderState } from '../emailbuilder/useEmailBuilderState';
 import { useSavedModules } from '../emailbuilder/useSavedModules';
-import { BuilderToolbar, type SaveStatus } from '../emailbuilder/BuilderToolbar';
+import { BuilderToolbar, type EditorMode, type SaveStatus } from '../emailbuilder/BuilderToolbar';
 import { ModulePanel } from '../emailbuilder/ModulePanel';
 import { EmailCanvas, type BuilderViewMode } from '../emailbuilder/EmailCanvas';
 import { PropertiesPanel, type SelectedColumnContext } from '../emailbuilder/PropertiesPanel';
 import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
+import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
 import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
 import type { EmailModuleType } from '../emailbuilder/edm';
@@ -26,6 +27,7 @@ export function EmailBuilderWorkspacePage() {
   const [document, setDocument] = useState<EmailDocumentRecord | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [viewMode, setViewMode] = useState<BuilderViewMode>('desktop');
+  const [editorMode, setEditorMode] = useState<EditorMode>('visual');
   // Local/temporary — not persisted across sessions (deliberately not
   // over-engineered per the refinement brief), just extra canvas room.
   const [modulesPanelCollapsed, setModulesPanelCollapsed] = useState(false);
@@ -239,10 +241,12 @@ export function EmailBuilderWorkspacePage() {
         canUndo={builder.canUndo}
         canRedo={builder.canRedo}
         viewMode={viewMode}
+        editorMode={editorMode}
         onUndo={builder.undo}
         onRedo={builder.redo}
         onSave={handleSave}
         onViewModeChange={setViewMode}
+        onEditorModeChange={setEditorMode}
       />
 
       {saveStatus === 'error' && (
@@ -253,6 +257,15 @@ export function EmailBuilderWorkspacePage() {
       )}
 
       <div className="email-builder-workspace__body">
+        {editorMode === 'code' ? (
+          <CodeEditorPanel
+            documentName={document.name}
+            width={document.width}
+            content={{ version: 1, modules: builder.modules }}
+            platform={document.platform}
+          />
+        ) : (
+        <>
         <ModulePanel
           onAddModule={handleAddModule}
           savedModules={savedModulesState.savedModules}
@@ -300,6 +313,8 @@ export function EmailBuilderWorkspacePage() {
           collapsed={propertiesPanelCollapsed}
           onToggleCollapsed={() => setPropertiesPanelCollapsed((current) => !current)}
         />
+        </>
+        )}
       </div>
 
       {saveModuleTarget && (
