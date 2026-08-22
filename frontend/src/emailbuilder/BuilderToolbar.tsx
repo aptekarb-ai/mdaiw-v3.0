@@ -14,7 +14,7 @@ const PLATFORM_LABELS: Record<EmailPlatform, string> = {
   other: 'Other',
 };
 
-export type EditorMode = 'visual' | 'code';
+export type EditorMode = 'visual' | 'code' | 'preview';
 
 interface BuilderToolbarProps {
   name: string;
@@ -109,6 +109,14 @@ export function BuilderToolbar({
           >
             Code
           </button>
+          <button
+            type="button"
+            aria-pressed={editorMode === 'preview'}
+            className={editorMode === 'preview' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
+            onClick={() => onEditorModeChange('preview')}
+          >
+            Preview
+          </button>
         </div>
 
         <Separator />
@@ -117,7 +125,7 @@ export function BuilderToolbar({
           <button
             type="button"
             aria-pressed={viewMode === 'desktop'}
-            disabled={editorMode === 'code'}
+            disabled={editorMode !== 'visual'}
             className={viewMode === 'desktop' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
             onClick={() => onViewModeChange('desktop')}
           >
@@ -126,7 +134,7 @@ export function BuilderToolbar({
           <button
             type="button"
             aria-pressed={viewMode === 'mobile'}
-            disabled={editorMode === 'code'}
+            disabled={editorMode !== 'visual'}
             className={viewMode === 'mobile' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
             onClick={() => onViewModeChange('mobile')}
           >
@@ -137,10 +145,6 @@ export function BuilderToolbar({
         <Separator />
 
         <div className="builder-toolbar__future-actions">
-          <button type="button" className="button button--outline" disabled title="Coming soon">
-            <span className="mdaiw-icon mdaiw-icon--eye" aria-hidden="true" />
-            Preview
-          </button>
           <button type="button" className="button button--outline" disabled title="Coming soon">
             <span className="mdaiw-icon mdaiw-icon--shield-check" aria-hidden="true" />
             Validate

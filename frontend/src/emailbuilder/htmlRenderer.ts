@@ -26,13 +26,27 @@ export function renderEmailBody(document: RenderableEmail): string {
     .map((module) => `<tr><td>${renderModuleWithOuterStructure(module)}</td></tr>`)
     .join('');
 
+  // Hybrid/fluid width strategy (04_Email_HTML_Rules.md: "explicit widths,
+  // max-width strategy, and safe fallbacks"). Outlook's Word rendering
+  // engine ignores CSS max-width entirely and only respects the HTML width
+  // attribute, so it gets its own fixed-${document.width}px table via an
+  // MSO conditional comment — a plain, inert HTML comment to every other
+  // client (never executed, never a <script>, never parsed as markup by
+  // them), so genuinely invisible outside Outlook. Everyone else renders
+  // the one real table beneath it: width="100%" with max-width in CSS, so
+  // the email actually shrinks to fit a narrow viewport instead of forcing
+  // horizontal scroll — the fixed HTML width="${document.width}" this
+  // table carried previously made "max-width" a no-op (width == max-width
+  // always resolved to the fixed value, never fluid).
   return (
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F4F6F8;">'
     + '<tr><td align="center">'
-    + `<table role="presentation" width="${document.width}" cellpadding="0" cellspacing="0" border="0" `
-    + `style="width:${document.width}px; max-width:${document.width}px; background-color:#FFFFFF;">`
+    + `<!--[if mso]><table role="presentation" width="${document.width}" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td><![endif]-->`
+    + '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+    + `style="width:100%; max-width:${document.width}px; background-color:#FFFFFF;">`
     + rows
     + '</table>'
+    + '<!--[if mso]></td></tr></table><![endif]-->'
     + '</td></tr>'
     + '</table>'
   );
