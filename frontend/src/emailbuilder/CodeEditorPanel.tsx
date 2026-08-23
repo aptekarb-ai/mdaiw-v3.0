@@ -15,6 +15,9 @@ interface CodeEditorPanelProps {
   platform: EmailPlatform;
   emailTitle?: string;
   faviconUrl?: string;
+  resetCssEnabled?: boolean;
+  customCssEnabled?: boolean;
+  customCss?: string;
 }
 
 type CodeSubView = 'code' | 'rendered';
@@ -34,15 +37,17 @@ function sanitizeFileName(name: string): string {
 // automatically on every module/undo/redo change since it's a pure
 // function of `content`, which satisfies "live preview" (operation 6)
 // and "undo/redo" (operation 5) without any code-editor-specific history.
-export function CodeEditorPanel({ documentName, width, content, platform, emailTitle, faviconUrl }: CodeEditorPanelProps) {
+export function CodeEditorPanel({
+  documentName, width, content, platform, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+}: CodeEditorPanelProps) {
   const [subView, setSubView] = useState<CodeSubView>('code');
   const [formatted, setFormatted] = useState(true);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const editorRef = useRef<CodeEditorHandle>(null);
 
   const rawHtml = useMemo(
-    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl }),
-    [width, content, emailTitle, faviconUrl],
+    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss }),
+    [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss],
   );
   const displayedHtml = useMemo(
     () => (formatted ? formatEmailHtml(rawHtml) : rawHtml),

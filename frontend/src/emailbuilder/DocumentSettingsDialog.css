@@ -10,8 +10,8 @@
 }
 
 .document-settings-dialog {
-  width: min(560px, 100%);
-  max-height: min(700px, 90vh);
+  width: min(640px, 100%);
+  max-height: min(820px, 90vh);
   background: var(--color-white);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-modal);
@@ -136,6 +136,68 @@
 
 .document-settings-dialog__browse-button:hover {
   border-color: var(--color-primary-blue);
+}
+
+.document-settings-dialog__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  cursor: pointer;
+}
+
+.document-settings-dialog__checkbox-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary-blue);
+}
+
+.document-settings-dialog__css-editor {
+  height: 240px;
+  margin-top: var(--space-2);
+}
+
+.document-settings-dialog__css-errors,
+.document-settings-dialog__css-warnings {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.document-settings-dialog__css-errors p,
+.document-settings-dialog__css-warnings p {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.document-settings-dialog__css-errors p {
+  color: var(--color-error);
+}
+
+.document-settings-dialog__css-warnings p {
+  color: var(--color-warning);
+}
+
+.document-settings-dialog__css-errors .mdaiw-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--color-error);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.document-settings-dialog__css-warnings .mdaiw-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--color-warning);
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 
 .document-settings-dialog__error {

@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 
 from . import module_capabilities
+from .custom_css_security import MAX_CUSTOM_CSS_LENGTH, validate_custom_css_security
 
 MAX_MESSAGE_LENGTH = 500
 MAX_GENERATED_MODULES = 5
@@ -83,6 +84,15 @@ class ActionType:
     APPLY_GLOBAL_STYLE = 'APPLY_GLOBAL_STYLE'
     NONE = 'NONE'
 
+    # Email Document Standards Sub-phase 2 — document-level (not EDM/
+    # module-level) actions. Pulled forward per approved decision: the AI
+    # Engineer may PROPOSE these, never apply them silently — same
+    # proposal-before-apply contract as every other action type here.
+    SET_RESET_CSS_ENABLED = 'SET_RESET_CSS_ENABLED'
+    SET_CUSTOM_CSS_ENABLED = 'SET_CUSTOM_CSS_ENABLED'
+    SET_CUSTOM_CSS = 'SET_CUSTOM_CSS'
+    CLEAR_CUSTOM_CSS = 'CLEAR_CUSTOM_CSS'
+
     # Reserved for later Feature 14 V2 phases (Phase C's Repair Engine /
     # Phase D's composition work) — named NOW so the wire contract never
     # needs a breaking rename later, but NOT implemented in Phase A.
@@ -100,9 +110,18 @@ class ActionType:
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE, NONE,
         INSERT_NESTED_MODULE, UPDATE_MODULE_SETTINGS, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY,
+        SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
     })
 
-    IMPLEMENTED = frozenset({INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE})
+    IMPLEMENTED = frozenset({
+        INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE,
+        SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
+    })
+
+    # Document-level actions never carry a `moduleId`/`module_type` —
+    # views.py's resolve_asset_references and the frontend's EDM-mutation
+    # dispatch both need to tell these apart from module-scope actions.
+    DOCUMENT_SCOPE = frozenset({SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS})
 
 
 class EmailCommandProviderUnavailable(Exception):
@@ -283,6 +302,26 @@ def validate_action(action):
             return None
         return {'type': action_type, 'target': 'selected', 'module_type': module_type, 'patch': patch}
 
+    if action_type in (ActionType.SET_RESET_CSS_ENABLED, ActionType.SET_CUSTOM_CSS_ENABLED):
+        enabled = action.get('enabled')
+        if not isinstance(enabled, bool):
+            return None
+        return {'type': action_type, 'enabled': enabled}
+
+    if action_type == ActionType.SET_CUSTOM_CSS:
+        css = action.get('css')
+        if not isinstance(css, str):
+            return None
+        css = css.strip()
+        if not css or len(css) > MAX_CUSTOM_CSS_LENGTH:
+            return None
+        if validate_custom_css_security(css):
+            return None
+        return {'type': action_type, 'css': css}
+
+    if action_type == ActionType.CLEAR_CUSTOM_CSS:
+        return {'type': action_type}
+
     return None
 
 
@@ -381,6 +420,23 @@ def requires_confirmation(action):
         return True
     if action_type == ActionType.INSERT_MODULE:
         return len(action.get('modules') or []) > 1
+    if action_type in ActionType.DOCUMENT_SCOPE:
+        return True
+    return False
+
+
+# Item F — "For substantial Custom CSS replacement, require stronger
+# confirmation than a trivial property change." Length is a simple,
+# deterministic, zero-token proxy for "substantial": a short one-property
+# tweak vs. a large block replacing most/all of the document's styling.
+STRONG_CUSTOM_CSS_LENGTH_THRESHOLD = 200
+
+
+def requires_strong_confirmation(action):
+    if action is None:
+        return False
+    if action.get('type') == ActionType.SET_CUSTOM_CSS:
+        return len(action.get('css', '')) > STRONG_CUSTOM_CSS_LENGTH_THRESHOLD
     return False
 
 
@@ -416,6 +472,26 @@ _FONT_SIZE_PATTERN = re.compile(r'\bfont\s*size\s*(?:to|=|:)?\s*(\d+)\b', re.IGN
 _BIGGER_PATTERN = re.compile(r'\b(bigger|larger|increase)\b', re.IGNORECASE)
 _SMALLER_PATTERN = re.compile(r'\b(smaller|decrease)\b', re.IGNORECASE)
 _SET_TEXT_PATTERN = re.compile(r'\b(?:set|change)\s+the\s+text\s+to\s+["\']?(.+?)["\']?$', re.IGNORECASE)
+
+# Item F — deterministic (zero-token) recognition for the bounded set of
+# document-level CSS commands. "Custom CSS" is checked as its own phrase
+# so "add custom css: ..." isn't caught by the generic _INSERT_PATTERN
+# (which only knows about MODULE_TYPE_ALIASES) or misread as "add a
+# module" — these checks run BEFORE that generic insert check.
+_RESET_CSS_PATTERN = re.compile(r'\breset\s*css\b', re.IGNORECASE)
+_CUSTOM_CSS_PATTERN = re.compile(r'\bcustom\s*css\b', re.IGNORECASE)
+_ENABLE_WORD_PATTERN = re.compile(r'\b(enable|turn\s*on|switch\s*on)\b', re.IGNORECASE)
+_DISABLE_WORD_PATTERN = re.compile(r'\b(disable|turn\s*off|switch\s*off)\b', re.IGNORECASE)
+_CLEAR_CUSTOM_CSS_PATTERN = re.compile(r'\b(clear|remove|delete)\b.*\bcustom\s*css\b', re.IGNORECASE)
+# Captures everything after "to"/"with"/":" as the literal proposed CSS —
+# matched against the ORIGINAL (not lowercased) message so CSS casing
+# (hex colors, camelCase custom properties) survives. The optional
+# "to"/"with" word and optional ":" are each consumed separately (not as
+# alternatives sharing one boundary) so "to: " and ": " and " to " all
+# leave a cleanly-trimmed capture with no leftover separator characters.
+_SET_CUSTOM_CSS_PATTERN = re.compile(
+    r'\b(?:set|add|replace|update)\b[^:]*\bcustom\s*css\b\s*(?:to|with)?\s*:?\s*(.+)$', re.IGNORECASE | re.DOTALL,
+)
 
 
 def _find_module_type(lowered):
@@ -467,6 +543,74 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
         lowered = text.lower()
         selected = (context or {}).get('selected_module')
         selected_type = selected.get('type') if isinstance(selected, dict) else None
+
+        # Document-level CSS commands — checked BEFORE the generic
+        # insert/delete/global-style patterns below, since phrases like
+        # "add custom css: ..." or "remove custom css" would otherwise be
+        # misread by the module-oriented patterns (_INSERT_PATTERN,
+        # _DELETE_PATTERN) that follow.
+        if _RESET_CSS_PATTERN.search(lowered) and not _CUSTOM_CSS_PATTERN.search(lowered):
+            if _ENABLE_WORD_PATTERN.search(lowered):
+                return CommandResult(
+                    reply='I will enable Email Reset CSS — the compatibility baseline for this email.',
+                    action={'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': True}, confidence=0.9,
+                )
+            if _DISABLE_WORD_PATTERN.search(lowered):
+                return CommandResult(
+                    reply=(
+                        'This will disable Email Reset CSS, which may reduce consistency across email '
+                        'clients. Please confirm.'
+                    ),
+                    action={'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': False}, confidence=0.9,
+                )
+            return CommandResult(
+                reply='Would you like me to enable or disable Email Reset CSS?',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+
+        if _CUSTOM_CSS_PATTERN.search(lowered):
+            if _CLEAR_CUSTOM_CSS_PATTERN.search(lowered):
+                return CommandResult(
+                    reply='This will remove your Custom CSS. Please confirm.',
+                    action={'type': ActionType.CLEAR_CUSTOM_CSS}, confidence=0.9,
+                )
+            set_match = _SET_CUSTOM_CSS_PATTERN.search(text)
+            if set_match:
+                css = set_match.group(1).strip()
+                if not css:
+                    return CommandResult(
+                        reply='Tell me the CSS to use, e.g. "set custom css to: .my-class { color: red; }".',
+                        action={'type': ActionType.NONE}, confidence=0.3,
+                    )
+                if len(css) > MAX_CUSTOM_CSS_LENGTH:
+                    return CommandResult(
+                        reply=f'That is too long (maximum {MAX_CUSTOM_CSS_LENGTH} characters). Please shorten it.',
+                        action={'type': ActionType.NONE}, confidence=0.3,
+                    )
+                security_violations = validate_custom_css_security(css)
+                if security_violations:
+                    return CommandResult(
+                        reply=f'I cannot apply that CSS: {security_violations[0]}',
+                        action={'type': ActionType.NONE}, confidence=0.3,
+                    )
+                return CommandResult(
+                    reply='I will update your Custom CSS. Please review the proposed change.',
+                    action={'type': ActionType.SET_CUSTOM_CSS, 'css': css}, confidence=0.85,
+                )
+            if _ENABLE_WORD_PATTERN.search(lowered):
+                return CommandResult(
+                    reply='I will enable Custom CSS.',
+                    action={'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': True}, confidence=0.9,
+                )
+            if _DISABLE_WORD_PATTERN.search(lowered):
+                return CommandResult(
+                    reply='This will disable Custom CSS (your saved CSS is kept, just not applied). Please confirm.',
+                    action={'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': False}, confidence=0.9,
+                )
+            return CommandResult(
+                reply='Tell me what to set your Custom CSS to, e.g. "set custom css to: .my-class { color: red; }".',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
 
         # Insert — checked before delete/duplicate so "add a button" never
         # collides with "remove"/"duplicate" phrasing.

@@ -2,9 +2,10 @@ import { useRef, useState } from 'react';
 import { requestAICommand } from '../api/client';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import {
-  describeAction,
+  describeAction, DOCUMENT_SCOPE_ACTION_TYPES,
   type AIActionHistoryEntry, type AICommandAction, type AICommandProviderId, type AICommandSelectedModuleContext,
 } from './aiCommand';
+import { detectCustomCssWarnings } from './emailCss';
 import type { EmailModule } from './edm';
 import type { EmailPlatform } from './types';
 import './AIEngineerPanel.css';
@@ -21,6 +22,7 @@ interface PendingProposal {
   interpretation: string;
   action: AICommandAction;
   requiresConfirmation: boolean;
+  requiresStrongConfirmation: boolean;
   provider: AICommandProviderId;
   capturedSelectedModuleId: string | null;
 }
@@ -29,18 +31,76 @@ interface AIEngineerPanelProps {
   platform: EmailPlatform;
   width: number;
   selectedModule: EmailModule | null;
+  // Sub-phase 2, item F — current document CSS state, read-only here,
+  // used only to render the proposal's "current" side of the diff view.
+  resetCssEnabled: boolean;
+  customCssEnabled: boolean;
+  customCss: string;
   // Applies the action through the existing builder mutation functions
   // (see EmailBuilderWorkspacePage.handleApplyAiAction). Returns false
   // when the action could not be safely applied — e.g. the canvas
   // selection changed after the proposal was made — so the panel can
   // report an honest outcome instead of claiming success.
   onApplyAction: (action: AICommandAction, capturedSelectedModuleId: string | null) => boolean;
+  // Document-level (Reset/Custom CSS) actions PATCH the EmailDocument
+  // through the API — genuinely async, unlike onApplyAction above, which
+  // only ever mutates local, already-loaded EDM state synchronously.
+  // Rejects on a failed PATCH so the panel can report a real failure.
+  onApplyDocumentSettingAction: (action: AICommandAction) => Promise<boolean>;
 }
 
 let nextId = 0;
 function newId(prefix: string): string {
   nextId += 1;
   return `${prefix}-${nextId}`;
+}
+
+interface CssProposalDetails {
+  current: string;
+  proposed: string;
+  affectedClients: string;
+  warnings: ReturnType<typeof detectCustomCssWarnings>;
+}
+
+// Item F's proposal card fields (current/proposed/affected clients/
+// warnings) for the 4 document-level CSS action types — built entirely
+// from data already in this component (current document state via
+// props, the proposed value from the action itself), no extra request.
+function cssProposalDetails(
+  action: AICommandAction, resetCssEnabled: boolean, customCssEnabled: boolean, customCss: string,
+): CssProposalDetails | null {
+  switch (action.type) {
+    case 'SET_RESET_CSS_ENABLED':
+      return {
+        current: resetCssEnabled ? 'Enabled' : 'Disabled',
+        proposed: action.enabled ? 'Enabled' : 'Disabled',
+        affectedClients: 'All email clients (this is the compatibility baseline).',
+        warnings: [],
+      };
+    case 'SET_CUSTOM_CSS_ENABLED':
+      return {
+        current: customCssEnabled ? 'Enabled' : 'Disabled',
+        proposed: action.enabled ? 'Enabled' : 'Disabled',
+        affectedClients: 'Any client rendering this document\'s Custom CSS.',
+        warnings: [],
+      };
+    case 'SET_CUSTOM_CSS':
+      return {
+        current: customCss.trim() || '(empty)',
+        proposed: action.css,
+        affectedClients: 'Depends on the selectors used — see warnings below, if any.',
+        warnings: detectCustomCssWarnings(action.css),
+      };
+    case 'CLEAR_CUSTOM_CSS':
+      return {
+        current: customCss.trim() || '(empty)',
+        proposed: '(empty)',
+        affectedClients: 'N/A — removes Custom CSS entirely.',
+        warnings: [],
+      };
+    default:
+      return null;
+  }
 }
 
 const HISTORY_STATUS_LABEL: Record<AIActionHistoryEntry['status'], string> = {
@@ -50,7 +110,10 @@ const HISTORY_STATUS_LABEL: Record<AIActionHistoryEntry['status'], string> = {
   failed: 'Failed',
 };
 
-export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction }: AIEngineerPanelProps) {
+export function AIEngineerPanel({
+  platform, width, selectedModule, resetCssEnabled, customCssEnabled, customCss,
+  onApplyAction, onApplyDocumentSettingAction,
+}: AIEngineerPanelProps) {
   const [subView, setSubView] = useState<'chat' | 'history'>('chat');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [history, setHistory] = useState<AIActionHistoryEntry[]>([]);
@@ -58,6 +121,11 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<PendingProposal | null>(null);
   const [resolving, setResolving] = useState(false);
+  // Item F — "require stronger confirmation than a trivial property
+  // change" for a substantial Custom CSS replacement: Apply stays
+  // disabled until this explicit checkbox is checked, on top of the
+  // ordinary Apply click every proposal already requires.
+  const [strongConfirmChecked, setStrongConfirmChecked] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const speech = useSpeechRecognition();
@@ -104,12 +172,14 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
           requiresConfirmation: false,
         }]);
       } else {
+        setStrongConfirmChecked(false);
         setPending({
           messageId: newId('proposal'),
           command: message,
           interpretation: response.reply,
           action: response.action,
           requiresConfirmation: response.requires_confirmation,
+          requiresStrongConfirmation: response.requires_strong_confirmation,
           provider: response.provider,
           capturedSelectedModuleId: selectedModule?.id ?? null,
         });
@@ -131,13 +201,26 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
     }
   }
 
-  function handleApply() {
+  async function handleApply() {
     if (!pending || resolving) return;
+    if (pending.requiresStrongConfirmation && !strongConfirmChecked) return;
     setResolving(true);
-    const applied = onApplyAction(pending.action, pending.capturedSelectedModuleId);
-    const summary = applied
-      ? describeAction(pending.action)
-      : 'Could not apply — the canvas selection changed. Please select the module again and retry.';
+
+    const isDocumentAction = DOCUMENT_SCOPE_ACTION_TYPES.has(pending.action.type);
+    let applied: boolean;
+    let summary: string;
+    if (isDocumentAction) {
+      applied = await onApplyDocumentSettingAction(pending.action);
+      summary = applied
+        ? describeAction(pending.action)
+        : 'Could not apply — saving to the server failed. Please try again.';
+    } else {
+      applied = onApplyAction(pending.action, pending.capturedSelectedModuleId);
+      summary = applied
+        ? describeAction(pending.action)
+        : 'Could not apply — the canvas selection changed. Please select the module again and retry.';
+    }
+
     appendMessage('assistant', applied ? `Applied: ${summary}` : summary);
     setHistory((current) => [...current, {
       id: newId('hist'),
@@ -150,6 +233,7 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
       requiresConfirmation: pending.requiresConfirmation,
     }]);
     setPending(null);
+    setStrongConfirmChecked(false);
     setResolving(false);
   }
 
@@ -168,6 +252,7 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
       requiresConfirmation: pending.requiresConfirmation,
     }]);
     setPending(null);
+    setStrongConfirmChecked(false);
   }
 
   function handleMicClick() {
@@ -216,8 +301,8 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
                 <span className="mdaiw-icon mdaiw-icon--ai-assistants" aria-hidden="true" />
                 <p>
                   Ask the AI Engineer to add a module, change the selected module&apos;s color/text/size/
-                  alignment, delete or duplicate it, or restyle every module of one type. Type a command or
-                  press the microphone.
+                  alignment, delete or duplicate it, restyle every module of one type, or enable/disable Email
+                  Reset CSS and set/remove Custom CSS. Type a command or press the microphone.
                 </p>
               </div>
             )}
@@ -230,32 +315,76 @@ export function AIEngineerPanel({ platform, width, selectedModule, onApplyAction
               </div>
             ))}
 
-            {pending && (
-              <div
-                className={
-                  pending.requiresConfirmation
-                    ? 'ai-engineer-panel__proposal ai-engineer-panel__proposal--confirm'
-                    : 'ai-engineer-panel__proposal'
-                }
-                role="alert"
-              >
-                <p className="ai-engineer-panel__proposal-title">
-                  {pending.requiresConfirmation && (
-                    <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
+            {pending && (() => {
+              const cssDetails = cssProposalDetails(pending.action, resetCssEnabled, customCssEnabled, customCss);
+              const applyBlocked = resolving || (pending.requiresStrongConfirmation && !strongConfirmChecked);
+              return (
+                <div
+                  className={
+                    pending.requiresConfirmation
+                      ? 'ai-engineer-panel__proposal ai-engineer-panel__proposal--confirm'
+                      : 'ai-engineer-panel__proposal'
+                  }
+                  role="alert"
+                >
+                  <p className="ai-engineer-panel__proposal-title">
+                    {pending.requiresConfirmation && (
+                      <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
+                    )}
+                    {describeAction(pending.action)}
+                  </p>
+                  <p className="ai-engineer-panel__proposal-detail">{pending.interpretation}</p>
+
+                  {cssDetails && (
+                    <div className="ai-engineer-panel__proposal-css">
+                      <div className="ai-engineer-panel__proposal-css-column">
+                        <span className="ai-engineer-panel__proposal-css-label">Current</span>
+                        <pre>{cssDetails.current}</pre>
+                      </div>
+                      <div className="ai-engineer-panel__proposal-css-column">
+                        <span className="ai-engineer-panel__proposal-css-label">Proposed</span>
+                        <pre>{cssDetails.proposed}</pre>
+                      </div>
+                      <p className="ai-engineer-panel__proposal-affected">
+                        <strong>Affected clients:</strong> {cssDetails.affectedClients}
+                      </p>
+                      {cssDetails.warnings.length > 0 && (
+                        <ul className="ai-engineer-panel__proposal-warnings">
+                          {cssDetails.warnings.map((warning) => (
+                            <li key={`${warning.selector}-${warning.property}`}>{warning.message}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   )}
-                  {describeAction(pending.action)}
-                </p>
-                <p className="ai-engineer-panel__proposal-detail">{pending.interpretation}</p>
-                <div className="ai-engineer-panel__proposal-actions">
-                  <button type="button" className="button button--outline" onClick={handleCancel} disabled={resolving}>
-                    Cancel
-                  </button>
-                  <button type="button" className="button button--primary" onClick={handleApply} disabled={resolving}>
-                    Apply
-                  </button>
+
+                  {pending.requiresStrongConfirmation && (
+                    <label className="ai-engineer-panel__strong-confirm">
+                      <input
+                        type="checkbox"
+                        checked={strongConfirmChecked}
+                        onChange={(event) => setStrongConfirmChecked(event.target.checked)}
+                      />
+                      I understand this replaces a substantial amount of Custom CSS.
+                    </label>
+                  )}
+
+                  <div className="ai-engineer-panel__proposal-actions">
+                    <button type="button" className="button button--outline" onClick={handleCancel} disabled={resolving}>
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="button button--primary"
+                      onClick={() => void handleApply()}
+                      disabled={applyBlocked}
+                    >
+                      Apply
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           <div className="ai-engineer-panel__composer">

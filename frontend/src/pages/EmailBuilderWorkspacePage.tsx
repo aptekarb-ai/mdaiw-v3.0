@@ -60,7 +60,14 @@ export function EmailBuilderWorkspacePage() {
         if (cancelled) return;
         const normalizedContent = normalizeContent(loaded.content);
         setDocument({ ...loaded, content: normalizedContent });
-        builder.loadModules(normalizedContent.modules);
+        builder.loadModules(normalizedContent.modules, {
+          email_title: loaded.email_title,
+          email_subject: loaded.email_subject,
+          favicon_url: loaded.favicon_url,
+          reset_css_enabled: loaded.reset_css_enabled,
+          custom_css_enabled: loaded.custom_css_enabled,
+          custom_css: loaded.custom_css,
+        });
         setLoadStatus('ready');
       })
       .catch((caught) => {
@@ -83,10 +90,16 @@ export function EmailBuilderWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per id; builder is a stable-callback hook instance
   }, [id]);
 
+  // Sub-phase 2 closure, item 1 — content AND document-level settings
+  // (title/subject/favicon/Reset CSS/Custom CSS) are now ONE local,
+  // undo/redo-able builder state (see useEmailBuilderState.ts's
+  // HistoryEntry), so they persist together in this ONE PATCH — exactly
+  // the same "local edit now, network Save later" contract every module
+  // edit already had, extended to cover document settings too.
   const handleSave = useCallback(() => {
     if (!id) return;
     setSaveStatus('saving');
-    updateEmailDocument(id, { content: { version: 1, modules: builder.modules } })
+    updateEmailDocument(id, { content: { version: 1, modules: builder.modules }, ...builder.documentSettings })
       .then((saved) => {
         setDocument(saved);
         builder.markSaved();
@@ -96,7 +109,7 @@ export function EmailBuilderWorkspacePage() {
         setSaveStatus('error');
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, builder.modules, builder.markSaved]);
+  }, [id, builder.modules, builder.documentSettings, builder.markSaved]);
 
   // Feature 10 — applying a platform switch PATCHes only `platform` (the
   // same endpoint/pattern as handleSave's `content`-only PATCH); it never
@@ -109,14 +122,50 @@ export function EmailBuilderWorkspacePage() {
     setDocument(saved);
   }, [id]);
 
-  // Email Document Standards Sub-phase 1 — same content-untouched PATCH
-  // pattern as handleApplyPlatform; throws on failure so
-  // DocumentSettingsDialog can show its own inline error and stay open.
-  const handleApplyDocumentSettings = useCallback(async (input: DocumentSettingsInput) => {
-    if (!id) return;
-    const saved = await updateEmailDocument(id, input);
-    setDocument(saved);
-  }, [id]);
+  // Sub-phase 2 closure, item 1 — Apply is a purely LOCAL commit into the
+  // unified undo/redo history (builder.updateDocumentSettings), exactly
+  // like every module mutator. No network call here at all; persistence
+  // happens later via handleSave, together with module content. This
+  // replaces the earlier per-field-PATCH design.
+  const handleApplyDocumentSettings = useCallback((input: DocumentSettingsInput) => {
+    builder.updateDocumentSettings(input);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, []);
+
+  // Sub-phase 2, item F — the AI Engineer's document-level (Reset/Custom
+  // CSS) proposals commit through the EXACT SAME local function as
+  // DocumentSettingsDialog's Apply — builder.updateDocumentSettings —
+  // never a parallel mutation path, and they participate in the same
+  // undo/redo history. Stays async (Promise<boolean>) only to match
+  // AIEngineerPanel's existing Apply-button plumbing; a local commit
+  // cannot fail, so this always resolves true.
+  const handleApplyDocumentSettingAiAction = useCallback(async (action: AICommandAction): Promise<boolean> => {
+    let input: Partial<DocumentSettingsInput> | null = null;
+    switch (action.type) {
+      case 'SET_RESET_CSS_ENABLED':
+        input = { reset_css_enabled: action.enabled };
+        break;
+      case 'SET_CUSTOM_CSS_ENABLED':
+        input = { custom_css_enabled: action.enabled };
+        break;
+      case 'SET_CUSTOM_CSS':
+        // Only the CSS text — never silently also flips custom_css_enabled;
+        // the proposal card only shows the CSS text diff, so applying it
+        // must only do exactly that. If Custom CSS is currently disabled,
+        // the reply/history already says "review the proposed change" —
+        // enabling it is a separate, explicit action the user can ask for.
+        input = { custom_css: action.css };
+        break;
+      case 'CLEAR_CUSTOM_CSS':
+        input = { custom_css: '' };
+        break;
+      default:
+        return false;
+    }
+    builder.updateDocumentSettings(input);
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, []);
 
   // Feature 13 — "Save as template" exports the CURRENT in-editor module
   // tree (builder.modules), not the last-saved `document.content` — so an
@@ -126,11 +175,11 @@ export function EmailBuilderWorkspacePage() {
   const handleSaveAsTemplate = useCallback(async (templateName: string) => {
     if (!document) throw new Error('No document loaded');
     return saveEmailAsTemplate(
-      { ...document, content: { version: 1, modules: builder.modules } },
+      { ...document, content: { version: 1, modules: builder.modules }, ...builder.documentSettings },
       templateName,
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
-  }, [document, builder.modules]);
+  }, [document, builder.modules, builder.documentSettings]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -381,23 +430,32 @@ export function EmailBuilderWorkspacePage() {
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
             platform={document.platform}
-            emailTitle={document.email_title}
-            faviconUrl={document.favicon_url}
+            emailTitle={builder.documentSettings.email_title}
+            faviconUrl={builder.documentSettings.favicon_url}
+            resetCssEnabled={builder.documentSettings.reset_css_enabled}
+            customCssEnabled={builder.documentSettings.custom_css_enabled}
+            customCss={builder.documentSettings.custom_css}
           />
         ) : editorMode === 'preview' ? (
           <PreviewStudioPanel
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
-            emailTitle={document.email_title}
-            faviconUrl={document.favicon_url}
+            emailTitle={builder.documentSettings.email_title}
+            faviconUrl={builder.documentSettings.favicon_url}
+            resetCssEnabled={builder.documentSettings.reset_css_enabled}
+            customCssEnabled={builder.documentSettings.custom_css_enabled}
+            customCss={builder.documentSettings.custom_css}
           />
         ) : editorMode === 'validate' ? (
           <ValidationCenterPanel
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
             platform={document.platform}
-            emailTitle={document.email_title}
-            faviconUrl={document.favicon_url}
+            emailTitle={builder.documentSettings.email_title}
+            faviconUrl={builder.documentSettings.favicon_url}
+            resetCssEnabled={builder.documentSettings.reset_css_enabled}
+            customCssEnabled={builder.documentSettings.custom_css_enabled}
+            customCss={builder.documentSettings.custom_css}
             onNavigateToModule={(moduleId) => {
               setEditorMode('visual');
               builder.selectModule(moduleId);
@@ -409,7 +467,11 @@ export function EmailBuilderWorkspacePage() {
             platform={document.platform}
             width={document.width}
             selectedModule={builder.selectedModule}
+            resetCssEnabled={builder.documentSettings.reset_css_enabled}
+            customCssEnabled={builder.documentSettings.custom_css_enabled}
+            customCss={builder.documentSettings.custom_css}
             onApplyAction={handleApplyAiAction}
+            onApplyDocumentSettingAction={handleApplyDocumentSettingAiAction}
           />
         ) : (
         <>
@@ -485,6 +547,7 @@ export function EmailBuilderWorkspacePage() {
       {exportDialogOpen && (
         <ExportDeployDialog
           document={document}
+          documentSettings={builder.documentSettings}
           content={{ version: 1, modules: builder.modules }}
           onSaveAsTemplate={handleSaveAsTemplate}
           onClose={() => setExportDialogOpen(false)}
@@ -493,7 +556,8 @@ export function EmailBuilderWorkspacePage() {
 
       {documentSettingsDialogOpen && (
         <DocumentSettingsDialog
-          document={document}
+          documentSettings={builder.documentSettings}
+          documentName={document.name}
           onApply={handleApplyDocumentSettings}
           onClose={() => setDocumentSettingsDialogOpen(false)}
         />

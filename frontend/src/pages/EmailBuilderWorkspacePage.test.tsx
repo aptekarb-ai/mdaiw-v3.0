@@ -70,6 +70,9 @@ function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
     email_title: '',
     email_subject: '',
     favicon_url: '',
+    reset_css_enabled: true,
+    custom_css_enabled: false,
+    custom_css: '',
     created_at: '2026-08-20T10:00:00Z',
     updated_at: '2026-08-20T10:00:00Z',
     ...overrides,
@@ -482,6 +485,8 @@ describe('EmailBuilderWorkspacePage', () => {
 
     await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', {
       content: expect.objectContaining({ version: 1 }),
+      email_title: '', email_subject: '', favicon_url: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
     }));
     expect(await screen.findByText('Saved')).toBeInTheDocument();
   });
@@ -630,13 +635,13 @@ describe('EmailBuilderWorkspacePage — Feature 05 Layout Builder', () => {
     await user.type(firstWidth, '35');
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', {
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
       content: expect.objectContaining({
         modules: expect.arrayContaining([
           expect.objectContaining({ props: expect.objectContaining({ columnWidths: [35, 50] }) }),
         ]),
       }),
-    }));
+    })));
   });
 
   it('reloads a document whose layout modules already have nested content', async () => {
@@ -1050,6 +1055,337 @@ describe('EmailBuilderWorkspacePage — Feature 09 Code Editor', () => {
         .not.toBe(withModule);
     });
   });
+
+  it('Email Document Standards Sub-phase 2 — Code view shows Reset CSS when enabled', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ reset_css_enabled: true }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('EMAIL RESET CSS - START');
+  });
+
+  it('Code view omits Reset CSS when disabled', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ reset_css_enabled: false }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('EMAIL RESET CSS');
+  });
+
+  it('Code view shows Custom CSS when enabled with content, omits it when disabled', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      baseDocument({ custom_css_enabled: true, custom_css: '.brand{color:#002D38}' }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('CUSTOM CSS - START');
+    expect(textarea.value).toContain('.brand{color:#002D38}');
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 — Code/Preview/Export consistency', () => {
+  it('Code and Preview Studio render byte-identical HTML for the same document (Reset + Custom CSS enabled)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      baseDocument({ reset_css_enabled: true, custom_css_enabled: true, custom_css: '.brand{color:#002D38}' }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    await screen.findByLabelText('Generated email HTML (read-only)');
+    // Code defaults to "Formatted" (indented) — switch to "Raw" so this
+    // is a genuine byte-for-byte comparison against Preview's srcDoc,
+    // not an indentation-vs-no-indentation mismatch.
+    await user.click(screen.getByRole('button', { name: 'Formatted' }));
+    const codeHtml = (screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    const previewFrame = await screen.findByTitle('Desktop preview') as HTMLIFrameElement;
+    const previewHtml = previewFrame.getAttribute('srcdoc') ?? '';
+
+    expect(previewHtml).toBe(codeHtml);
+  });
+});
+
+// Sub-phase 2 CLOSURE, item 1 — supersedes the earlier "independence"
+// design: Document Settings changes now join the SAME unified undo/redo
+// history as module edits (see useEmailBuilderState.ts's HistoryEntry).
+// Apply is a local commit (no network); the toolbar Save button PATCHes
+// content + document settings together.
+describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 closure — unified undo/redo (item 1)', () => {
+  it('applying a Document Settings change enables the builder Undo button (participates in the same history)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Email Reset CSS' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: 'Undo' })).not.toBeDisabled();
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+  });
+
+  it('CSS A -> Apply CSS B -> Undo restores A -> Redo restores B, reflected live in Code view', async () => {
+    const cssA = '.version-a{color:red}';
+    const cssB = '.version-b{color:blue}';
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: true, custom_css: cssA }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    let dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    const cssEditor = within(dialog).getByLabelText('Custom CSS');
+    await user.clear(cssEditor);
+    await user.type(cssEditor, cssB.replace(/[{}]/g, (brace) => (brace === '{' ? '{{' : brace)));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    let textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain(cssB);
+    expect(textarea.value).not.toContain(cssA);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain(cssA);
+    expect(textarea.value).not.toContain(cssB);
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain(cssB);
+
+    // The dialog itself also reflects the live (post-redo) value if reopened.
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    expect(within(dialog).getByLabelText('Custom CSS')).toHaveValue(cssB);
+  });
+
+  it('Reset CSS enabled -> disable+Apply -> Undo restores enabled -> Redo restores disabled', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ reset_css_enabled: true }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Email Reset CSS' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    let textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('EMAIL RESET CSS');
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('EMAIL RESET CSS');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('EMAIL RESET CSS');
+  });
+
+  it('Custom CSS enabled/disabled toggling participates in Undo/Redo', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: false, custom_css: '.x{color:red}' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    let textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('CUSTOM CSS - START');
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('CUSTOM CSS');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('CUSTOM CSS - START');
+  });
+
+  it('module edit -> CSS edit -> module edit: sequential Undo/Redo restores each step correctly, in order', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
+    await user.type(within(dialog).getByLabelText('Custom CSS'), '.a{{color:red}');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    let textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('Shop Now');
+    expect(textarea.value).toContain('CUSTOM CSS - START');
+
+    // Undo #1 -> removes the button; CSS + first text module remain.
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('Shop Now');
+    expect(textarea.value).toContain('CUSTOM CSS - START');
+    expect(textarea.value).toContain('Add your heading or paragraph text here.');
+
+    // Undo #2 -> reverts the CSS edit; first text module remains.
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('CUSTOM CSS');
+    expect(textarea.value).toContain('Add your heading or paragraph text here.');
+
+    // Undo #3 -> removes the first text module too.
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('Add your heading or paragraph text here.');
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+
+    // Redo all three, in order.
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('Add your heading or paragraph text here.');
+    expect(textarea.value).not.toContain('CUSTOM CSS');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('CUSTOM CSS - START');
+    expect(textarea.value).not.toContain('Shop Now');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('Shop Now');
+    expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
+  });
+
+  it('AI Engineer Apply CSS -> Undo restores the exact previous value -> Redo restores the AI value', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: true, custom_css: 'user-typed' }));
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will update your Custom CSS. Please review the proposed change.',
+      action: { type: 'SET_CUSTOM_CSS', css: 'ai-proposed' },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    const input = await screen.findByPlaceholderText(/Type your command/);
+    await user.type(input, 'set custom css to: ai-proposed');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Update Custom CSS');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    let textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('ai-proposed');
+    expect(textarea.value).not.toContain('user-typed');
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('user-typed');
+    expect(textarea.value).not.toContain('ai-proposed');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    textarea = screen.getByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('ai-proposed');
+  });
+
+  it('Cancel on the Document Settings dialog creates no history entry', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Email Reset CSS' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+    expect(screen.getByText('Saved')).toBeInTheDocument();
+  });
+
+  it('failed Custom CSS validation creates no history entry (Apply stays disabled, Undo stays disabled)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
+    await user.type(within(dialog).getByLabelText('Custom CSS'), '<script>alert(1)</script>');
+
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+
+    expect(screen.getByRole('dialog', { name: 'Document Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+  });
+
+  it('the toolbar Save PATCHes content and document settings TOGETHER in one call, after several undoable local edits', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: true, custom_css: '.a{color:red}' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
+    await user.type(within(dialog).getByLabelText('Custom CSS'), '.a{{color:red}');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([expect.objectContaining({ type: 'text' })]),
+      }),
+      custom_css_enabled: true,
+      custom_css: '.a{color:red}',
+    })));
+  });
 });
 
 describe('EmailBuilderWorkspacePage — Feature 10 Platform Environment', () => {
@@ -1129,7 +1465,7 @@ describe('EmailBuilderWorkspacePage — Feature 10 Platform Environment', () => 
   });
 });
 
-describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 1 (Document Settings)', () => {
+describe('EmailBuilderWorkspacePage — Email Document Standards (Document Settings)', () => {
   it('clicking the toolbar Document Settings chip opens the dialog pre-filled from the loaded document', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({
       email_title: 'Existing Title', email_subject: 'Existing Subject', favicon_url: 'https://cdn.example.com/fav.png',
@@ -1145,7 +1481,11 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 1 (Do
     expect(screen.getByDisplayValue('https://cdn.example.com/fav.png')).toBeInTheDocument();
   });
 
-  it('saving Document Settings PATCHes only title/subject/favicon (content untouched) and closes the dialog', async () => {
+  // Sub-phase 2 closure, item 1 — Apply is now a local, undo/redo-able
+  // commit (no network call). Persistence happens at the toolbar Save,
+  // together with module content, in ONE PATCH — see the "unified
+  // undo/redo" describe block above for the Apply-then-Save round trip.
+  it('Apply commits locally (no network call) and closes the dialog; the toolbar Save then PATCHes it together with content', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ email_title: 'August Sale' }));
     const user = userEvent.setup();
@@ -1155,15 +1495,21 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 1 (Do
     await user.click(screen.getByRole('button', { name: /Document Settings/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
     await user.type(screen.getByLabelText('Email Title'), 'August Sale');
-    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
 
-    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', {
-      email_title: 'August Sale', email_subject: '', favicon_url: '',
-    }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', {
+      content: expect.objectContaining({ version: 1 }),
+      email_title: 'August Sale', email_subject: '', favicon_url: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+    }));
   });
 
-  it('a failed save shows an inline error and keeps the dialog open', async () => {
+  it('a failed toolbar Save (after applying Document Settings) shows the standard save-error banner and keeps the edit local/undoable', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     vi.mocked(client.updateEmailDocument).mockRejectedValue({ message: 'Server error' });
     const user = userEvent.setup();
@@ -1173,13 +1519,17 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 1 (Do
     await user.click(screen.getByRole('button', { name: /Document Settings/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
     await user.type(screen.getByLabelText('Email Title'), 'August Sale');
-    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Server error');
-    expect(screen.getByRole('dialog', { name: 'Document Settings' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('We could not save your changes. Please try again.')).toBeInTheDocument();
+    // The applied change is not lost — still there, still undoable.
+    expect(screen.getByRole('button', { name: 'Undo' })).not.toBeDisabled();
   });
 
-  it('Cancel closes the dialog without calling updateEmailDocument', async () => {
+  it('Cancel closes the dialog without calling updateEmailDocument or committing anything', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
     renderPage();
@@ -1191,6 +1541,72 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 1 (Do
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(client.updateEmailDocument).not.toHaveBeenCalled();
+  });
+});
+
+// Closure item 7 — a genuinely large (~8KB), realistic Custom CSS
+// stylesheet (many distinct rules, not one repeated string) must work
+// end to end: Monaco editing, Apply, Save, Code view, Preview, Export.
+function largeRealisticCss(ruleCount = 140): string {
+  return Array.from(
+    { length: ruleCount },
+    (_, i) => `.email-brand-${i} { color: #002D38; font-weight: 600; padding: ${i % 20}px; border-radius: 4px; }`,
+  ).join('\n');
+}
+
+describe('EmailBuilderWorkspacePage — Email Document Standards closure item 7 (large Custom CSS)', () => {
+  it('a ~8KB Custom CSS loads, displays fully in Monaco (not truncated), and round-trips through Code/Preview/Export', async () => {
+    const largeCss = largeRealisticCss();
+    expect(largeCss.length).toBeGreaterThan(5000);
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: true, custom_css: largeCss }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    // Document Settings — Custom CSS is already enabled (per the loaded
+    // document); Monaco shows the full, untruncated value.
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    let dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    expect(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' })).toBeChecked();
+    expect(within(dialog).getByLabelText('Custom CSS')).toHaveValue(largeCss);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+
+    // Code view — full value present, not truncated.
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain(largeCss);
+
+    // Preview — same full value in the iframe srcDoc.
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    const iframe = await screen.findByTitle('Desktop preview') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain(largeCss);
+
+    // Export — Copy HTML carries the full value too.
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+    await user.click(screen.getByRole('button', { name: /Copy HTML/ }));
+    await screen.findByText('Copied');
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(largeCss));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Editing a small part and Apply -> Save persists the full updated value.
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: true, custom_css: largeCss }));
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    const editor = within(dialog).getByLabelText('Custom CSS');
+    await user.click(editor);
+    await user.type(editor, '.extra {{ color: red; }\n');
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      custom_css: expect.stringContaining('.extra'),
+    })));
+    const [, savedInput] = vi.mocked(client.updateEmailDocument).mock.calls[0];
+    expect((savedInput.custom_css ?? '').length).toBeGreaterThan(5000);
   });
 });
 
@@ -1207,6 +1623,25 @@ describe('EmailBuilderWorkspacePage — Feature 11 Preview Studio', () => {
     expect(within(editorModeGroup).getByRole('button', { name: 'Preview' })).toHaveAttribute('aria-pressed', 'true');
     expect(await screen.findByTitle('Desktop preview')).toBeInTheDocument();
     expect(screen.queryByLabelText('Search modules')).not.toBeInTheDocument();
+  });
+
+  it('Email Document Standards Sub-phase 2 — Reset/Custom CSS appear identically in both Desktop and Mobile preview (CSS is not device-width-dependent)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      baseDocument({ reset_css_enabled: true, custom_css_enabled: true, custom_css: '.brand{color:#002D38}' }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    await user.click(within(editorModeGroup).getByRole('button', { name: 'Preview' }));
+    const desktopFrame = await screen.findByTitle('Desktop preview') as HTMLIFrameElement;
+    expect(desktopFrame.srcdoc).toContain('EMAIL RESET CSS - START');
+    expect(desktopFrame.srcdoc).toContain('.brand{color:#002D38}');
+
+    await user.click(screen.getByRole('tab', { name: 'Mobile' }));
+    const mobileFrame = await screen.findByTitle('Mobile preview') as HTMLIFrameElement;
+    expect(mobileFrame.srcdoc).toBe(desktopFrame.srcdoc);
   });
 
   it('the Preview reflects a module added in Visual mode after switching back and forth', async () => {
@@ -1438,6 +1873,7 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
       reply: 'I will add a button module.',
       action: { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
       requires_confirmation: false,
+      requires_strong_confirmation: false,
       confidence: 0.9,
       provider: 'deterministic',
     });
@@ -1468,6 +1904,7 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
       reply: 'This will delete the selected module. Please confirm.',
       action: { type: 'DELETE_MODULE', target: 'selected' },
       requires_confirmation: true,
+      requires_strong_confirmation: false,
       confidence: 0.9,
       provider: 'deterministic',
     });
@@ -1495,6 +1932,7 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
       reply: 'This will delete the selected module. Please confirm.',
       action: { type: 'DELETE_MODULE', target: 'selected' },
       requires_confirmation: true,
+      requires_strong_confirmation: false,
       confidence: 0.9,
       provider: 'deterministic',
     });
@@ -1521,6 +1959,7 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
         + 'selected module, or apply a style change to every module of one type.',
       action: { type: 'NONE' },
       requires_confirmation: false,
+      requires_strong_confirmation: false,
       confidence: 0.2,
       provider: 'deterministic',
     });
@@ -1559,6 +1998,7 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
       reply: 'I will update the selected text module.',
       action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'text', patch: { color: '#76C043' } },
       requires_confirmation: false,
+      requires_strong_confirmation: false,
       confidence: 0.85,
       provider: 'deterministic',
     });

@@ -1,42 +1,78 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssetManagerDialog, type AssetSelection } from './AssetManagerDialog';
-import type { ApiError } from '../types/auth';
-import type { EmailDocument } from './types';
+import { CodeEditor, type CodeEditorMarker } from '../landingpages/CodeEditor';
+import { detectCustomCssWarnings, validateCustomCss } from './emailCss';
+import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
 import './DocumentSettingsDialog.css';
 
-export interface DocumentSettingsInput {
-  email_title: string;
-  email_subject: string;
-  favicon_url: string;
-}
+// The one shape shared by builder.documentSettings, the Apply payload,
+// and the AI Engineer's document-level proposals — no second type.
+export type DocumentSettingsInput = EmailDocumentSettingsSnapshot;
 
 interface DocumentSettingsDialogProps {
-  document: EmailDocument;
-  onApply: (input: DocumentSettingsInput) => Promise<void>;
+  documentSettings: EmailDocumentSettingsSnapshot;
+  // The builder/dashboard draft name — shown only in the Email Title
+  // field's hint text to make the name/title/subject distinction
+  // concrete, never editable here (rename lives on the dashboard).
+  documentName: string;
+  onApply: (input: DocumentSettingsInput) => void;
   onClose: () => void;
 }
 
-function apiErrorMessage(error: unknown, fallback: string): string {
-  const apiError = error as ApiError;
-  const fieldErrors = apiError?.errors ? Object.values(apiError.errors).flat() : [];
-  return fieldErrors[0] ?? apiError?.message ?? fallback;
+// Mirrors backend/emailbuilder/serializers.py's validate_favicon_url
+// exactly (same schemes, same messages). Client-side only, for immediate
+// feedback — the backend re-validates and remains authoritative at the
+// final persistence boundary (the toolbar Save PATCH), same posture as
+// Custom CSS's security validator.
+const UNSAFE_FAVICON_URL_PREFIXES = ['javascript:', 'data:', 'vbscript:'];
+
+function validateFaviconUrl(value: string): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const lowered = trimmed.toLowerCase();
+  for (const scheme of UNSAFE_FAVICON_URL_PREFIXES) {
+    if (lowered.startsWith(scheme)) return `Favicon URL must not use an unsafe scheme ("${scheme}").`;
+  }
+  if (!(lowered.startsWith('http://') || lowered.startsWith('https://'))) {
+    return 'Favicon URL must start with http:// or https://.';
+  }
+  return null;
 }
 
-// Email Document Standards Sub-phase 1 — Title/Subject/Favicon only (Reset
-// CSS and Custom CSS toggles are Sub-phase 2 scope, per the approved
-// phasing; this dialog will grow those sections then, not be replaced).
-// Same accessible-modal shape (focus trap, Escape, backdrop click) as
-// PlatformEnvironmentDialog/ExportDeployDialog; same async-onApply +
-// inline-error convention as PlatformEnvironmentDialog's onApply so a
-// failed PATCH keeps the dialog open for a retry instead of silently
-// closing on an unsaved change.
-export function DocumentSettingsDialog({ document: emailDocument, onApply, onClose }: DocumentSettingsDialogProps) {
-  const [emailTitle, setEmailTitle] = useState(emailDocument.email_title);
-  const [emailSubject, setEmailSubject] = useState(emailDocument.email_subject);
-  const [faviconUrl, setFaviconUrl] = useState(emailDocument.favicon_url);
+// Email Document Standards Sub-phase 1+2 — Title/Subject/Favicon plus
+// Reset CSS/Custom CSS. Same accessible-modal shape (focus trap, Escape,
+// backdrop click) as PlatformEnvironmentDialog/ExportDeployDialog.
+//
+// Unified undo/redo (Sub-phase 2 closure, item 1): Apply is a SYNCHRONOUS
+// LOCAL commit — builder.updateDocumentSettings() — into the exact same
+// undo/redo history the module tree already uses (see
+// useEmailBuilderState.ts's HistoryEntry). It never talks to the network
+// directly; persistence happens later, together with module content, when
+// the user clicks the toolbar's Save button (same "local edit now, PATCH
+// on Save" contract every module edit already has). This is why there is
+// no saving/error state here anymore, and why the primary action is
+// labeled "Apply" (a local, undoable commit) rather than "Save" (which
+// now specifically means "persist to the server," owned by the toolbar).
+export function DocumentSettingsDialog({ documentSettings, documentName, onApply, onClose }: DocumentSettingsDialogProps) {
+  const [emailTitle, setEmailTitle] = useState(documentSettings.email_title);
+  const [emailSubject, setEmailSubject] = useState(documentSettings.email_subject);
+  const [faviconUrl, setFaviconUrl] = useState(documentSettings.favicon_url);
+  const [resetCssEnabled, setResetCssEnabled] = useState(documentSettings.reset_css_enabled);
+  const [customCssEnabled, setCustomCssEnabled] = useState(documentSettings.custom_css_enabled);
+  const [customCss, setCustomCss] = useState(documentSettings.custom_css);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const faviconError = useMemo(() => validateFaviconUrl(faviconUrl), [faviconUrl]);
+  const cssValidation = useMemo(() => validateCustomCss(customCss), [customCss]);
+  const cssWarnings = useMemo(() => detectCustomCssWarnings(customCss), [customCss]);
+  const cssMarkers = useMemo<CodeEditorMarker[]>(() => [
+    ...cssValidation.errors.map((message): CodeEditorMarker => ({
+      severity: 'error', message, startLine: 1, startColumn: 1, languageLabel: 'Custom CSS',
+    })),
+    ...cssWarnings.map((warning): CodeEditorMarker => ({
+      severity: 'warning', message: warning.message, startLine: 1, startColumn: 1, languageLabel: 'Custom CSS',
+    })),
+  ], [cssValidation, cssWarnings]);
 
   const dialogRef = useRef<HTMLDivElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
@@ -78,29 +114,43 @@ export function DocumentSettingsDialog({ document: emailDocument, onApply, onClo
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
 
-  const dirty = emailTitle !== emailDocument.email_title
-    || emailSubject !== emailDocument.email_subject
-    || faviconUrl !== emailDocument.favicon_url;
+  const dirty = emailTitle !== documentSettings.email_title
+    || emailSubject !== documentSettings.email_subject
+    || faviconUrl !== documentSettings.favicon_url
+    || resetCssEnabled !== documentSettings.reset_css_enabled
+    || customCssEnabled !== documentSettings.custom_css_enabled
+    || customCss !== documentSettings.custom_css;
+
+  // Apply is blocked while enabled Custom CSS fails the security
+  // validator, or the favicon URL is invalid — item 1's "failed
+  // validation must create no history entry": neither ever reaches
+  // updateDocumentSettings, so no undo step is ever created for them.
+  const blocksApply = (customCssEnabled && !cssValidation.valid) || Boolean(faviconError);
 
   function handleAssetSelected(selection: AssetSelection) {
     setFaviconUrl(selection.url);
     setAssetPickerOpen(false);
   }
 
-  async function handleSave() {
+  // Item 1 — "Cancel must create no history entry": Cancel/backdrop/
+  // Escape all route to onClose directly, never calling onApply, so
+  // builder.updateDocumentSettings (the only function that ever commits
+  // to history) is never invoked for a cancelled edit.
+  function handleApply() {
     if (!dirty) {
       onClose();
       return;
     }
-    setSaving(true);
-    setError(null);
-    try {
-      await onApply({ email_title: emailTitle.trim(), email_subject: emailSubject.trim(), favicon_url: faviconUrl.trim() });
-      onClose();
-    } catch (caught) {
-      setError(apiErrorMessage(caught, 'We could not save document settings. Please try again.'));
-      setSaving(false);
-    }
+    if (blocksApply) return;
+    onApply({
+      email_title: emailTitle.trim(),
+      email_subject: emailSubject.trim(),
+      favicon_url: faviconUrl.trim(),
+      reset_css_enabled: resetCssEnabled,
+      custom_css_enabled: customCssEnabled,
+      custom_css: customCss,
+    });
+    onClose();
   }
 
   return (
@@ -133,7 +183,7 @@ export function DocumentSettingsDialog({ document: emailDocument, onApply, onClo
             />
             <p className="document-settings-dialog__hint">
               Renders into the email&apos;s <code>&lt;title&gt;</code> element. Not the draft name (
-              {emailDocument.name}) and not the subject line.
+              {documentName}) and not the subject line.
             </p>
           </div>
 
@@ -189,25 +239,101 @@ export function DocumentSettingsDialog({ document: emailDocument, onApply, onClo
                 </button>
               )}
             </div>
+            {faviconError && (
+              <div className="document-settings-dialog__css-errors" role="alert">
+                <p>
+                  <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
+                  {faviconError}
+                </p>
+              </div>
+            )}
             <p className="document-settings-dialog__hint">
               Optional. Must be a public https:// (or http://) URL — pick from your Asset Manager or paste a link.
             </p>
           </div>
+
+          <div className="document-settings-dialog__field">
+            <label className="document-settings-dialog__checkbox-row">
+              <input
+                type="checkbox"
+                checked={resetCssEnabled}
+                onChange={(event) => setResetCssEnabled(event.target.checked)}
+              />
+              Enable Email Reset CSS
+            </label>
+            <p className="document-settings-dialog__hint">
+              The compatibility baseline applied across email clients (margin/spacing/table normalization).
+              Disabling it may reduce visual consistency across email clients — recommended to leave enabled.
+            </p>
+          </div>
+
+          <div className="document-settings-dialog__field">
+            <label className="document-settings-dialog__checkbox-row">
+              <input
+                type="checkbox"
+                checked={customCssEnabled}
+                onChange={(event) => setCustomCssEnabled(event.target.checked)}
+              />
+              Enable Custom CSS
+            </label>
+            {customCssEnabled && (
+              <>
+                <div className="document-settings-dialog__css-editor">
+                  <CodeEditor
+                    language="css"
+                    value={customCss}
+                    onChange={setCustomCss}
+                    ariaLabel="Custom CSS"
+                    markers={cssMarkers}
+                  />
+                </div>
+                {customCss.trim() === '' && (
+                  <p className="document-settings-dialog__hint">
+                    No Custom CSS yet — anything you add here is applied after Reset CSS and responsive CSS, so it
+                    can safely override them when needed.
+                  </p>
+                )}
+                {cssValidation.errors.length > 0 && (
+                  <div className="document-settings-dialog__css-errors" role="alert">
+                    {cssValidation.errors.map((message) => (
+                      <p key={message}>
+                        <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
+                        {message}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {cssValidation.valid && cssWarnings.length > 0 && (
+                  <div className="document-settings-dialog__css-warnings" role="status">
+                    {cssWarnings.map((warning) => (
+                      <p key={`${warning.selector}-${warning.property}`}>
+                        <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
+                        {warning.message}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+            <p className="document-settings-dialog__hint">
+              Separate from Email Reset CSS. Applied last in the cascade (Reset CSS, then responsive CSS, then
+              Custom CSS), so it intentionally wins where specificity is equal.
+            </p>
+          </div>
         </div>
 
-        {error && (
-          <p className="document-settings-dialog__error" role="alert">
-            <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
-            {error}
-          </p>
-        )}
-
         <div className="document-settings-dialog__actions">
-          <button type="button" className="button button--outline" onClick={onClose} disabled={saving}>
+          <button type="button" className="button button--outline" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="button button--primary" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
+          <button
+            type="button"
+            className="button button--primary"
+            onClick={handleApply}
+            disabled={blocksApply}
+            title={blocksApply ? 'Fix the highlighted errors above before applying.' : undefined}
+          >
+            Apply
           </button>
         </div>
       </div>

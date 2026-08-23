@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { formatEmailHtml } from './htmlFormatter';
+import { renderEmailDocument } from './htmlRenderer';
+import { renderResetCssBlock, renderCustomCssBlock } from './emailCss';
 
 describe('formatEmailHtml', () => {
   it('indents nested elements one level per depth', () => {
@@ -105,5 +107,60 @@ describe('formatEmailHtml', () => {
     const lines = output.split('\n').map((line) => line.trim());
     expect(lines).toContain('<!--[if !mso]><!-->');
     expect(lines).toContain('<!--<![endif]-->');
+  });
+
+  // Email Document Standards Sub-phase 2 — Reset/Custom CSS <style>
+  // blocks must survive formatting unchanged: not duplicated, not moved
+  // outside <head>, not reinterpreted as HTML (a CSS attribute selector
+  // like `a[href^="mailto:"]` looks tag-like but must never be tag-split).
+  it('does not duplicate the Reset CSS <style> block', () => {
+    const html = renderEmailDocument({
+      width: 700, content: { version: 1, modules: [] }, resetCssEnabled: true,
+    });
+    const output = formatEmailHtml(html);
+    expect((output.match(/EMAIL RESET CSS - START/g) ?? []).length).toBe(1);
+    expect((output.match(/<style/g) ?? []).length).toBe(1);
+  });
+
+  it('keeps both the Reset CSS and Custom CSS <style> blocks inside <head>, not moved elsewhere', () => {
+    const html = renderEmailDocument({
+      width: 700, content: { version: 1, modules: [] },
+      resetCssEnabled: true, customCssEnabled: true, customCss: '.brand{color:#002D38}',
+    });
+    const output = formatEmailHtml(html);
+    const headStart = output.indexOf('<head>');
+    const headEnd = output.indexOf('</head>');
+    const resetIndex = output.indexOf('EMAIL RESET CSS - START');
+    const customIndex = output.indexOf('CUSTOM CSS - START');
+    expect(resetIndex).toBeGreaterThan(headStart);
+    expect(resetIndex).toBeLessThan(headEnd);
+    expect(customIndex).toBeGreaterThan(headStart);
+    expect(customIndex).toBeLessThan(headEnd);
+    expect((output.match(/<\/head>/g) ?? []).length).toBe(1);
+  });
+
+  it('does not reinterpret a CSS attribute selector inside Custom CSS as an HTML tag', () => {
+    const html = renderEmailDocument({
+      width: 700, content: { version: 1, modules: [] },
+      customCssEnabled: true, customCss: 'a[href^="mailto:"] { color: #0082AD; }',
+    });
+    const output = formatEmailHtml(html);
+    expect(output).toContain('a[href^="mailto:"] { color: #0082AD; }');
+  });
+
+  it('Raw -> Formatted -> Raw is lossless for a document with both CSS blocks (Code Editor contract)', () => {
+    const rawHtml = renderEmailDocument({
+      width: 700, content: { version: 1, modules: [] },
+      resetCssEnabled: true, customCssEnabled: true, customCss: '.brand{color:#002D38}',
+    });
+    const formatted = formatEmailHtml(rawHtml);
+    // Re-running the SAME pure function against the SAME rawHtml (exactly
+    // what toggling Formatted -> Raw -> Formatted does in CodeEditorPanel,
+    // which always recomputes from the untouched rawHtml, never from the
+    // previously-formatted text) reproduces byte-identical output.
+    expect(formatEmailHtml(rawHtml)).toBe(formatted);
+    // And the underlying raw string itself is never mutated by formatting.
+    expect(rawHtml).toContain(renderResetCssBlock().trim());
+    expect(rawHtml).toContain(renderCustomCssBlock('.brand{color:#002D38}').trim());
   });
 });

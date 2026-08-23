@@ -1500,6 +1500,7 @@ from .ai_command import (  # noqa: E402
     _resolve_color,
     get_default_email_command_provider,
     requires_confirmation,
+    requires_strong_confirmation,
     resolve_asset_references,
     validate_action,
 )
@@ -1646,6 +1647,107 @@ class ResolveColorTests(TestCase):
 
     def test_non_string_returns_none(self):
         self.assertIsNone(_resolve_color(123))
+
+
+class EmailAiEngineerCssCommandTests(TestCase):
+    """Item F -- deterministic (zero-token) CSS commands: reset CSS
+    enable/disable, custom CSS enable/disable/set/clear. Proposal-only:
+    these tests exercise CommandResult/validate_action, never mutate a
+    document -- applying a proposal is the frontend's job (Apply button),
+    same contract as every other action type."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_enable_reset_css(self):
+        result = self.provider.resolve('enable reset css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': True})
+
+    def test_disable_reset_css(self):
+        result = self.provider.resolve('please disable reset css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': False})
+
+    def test_enable_custom_css(self):
+        result = self.provider.resolve('turn on custom css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': True})
+
+    def test_disable_custom_css(self):
+        result = self.provider.resolve('turn off custom css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': False})
+
+    def test_clear_custom_css(self):
+        result = self.provider.resolve('remove custom css', {})
+        self.assertEqual(result.action, {'type': ActionType.CLEAR_CUSTOM_CSS})
+
+    def test_set_custom_css(self):
+        result = self.provider.resolve('set custom css to: .brand { color: #002D38; }', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_CUSTOM_CSS, 'css': '.brand { color: #002D38; }'})
+
+    def test_set_custom_css_with_add_phrasing(self):
+        result = self.provider.resolve('add custom css: .x { padding: 4px; }', {})
+        self.assertEqual(result.action['type'], ActionType.SET_CUSTOM_CSS)
+        self.assertEqual(result.action['css'], '.x { padding: 4px; }')
+
+    def test_set_custom_css_rejects_unsafe_css_at_proposal_time(self):
+        result = self.provider.resolve('set custom css to: </style><script>alert(1)</script>', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('cannot apply', result.reply.lower())
+
+    def test_set_custom_css_rejects_obfuscated_unsafe_css_at_proposal_time(self):
+        """Item 3 (closure) -- the AI proposal path shares the exact same
+        normalized security validator, so a hex-escaped javascript:
+        scheme is rejected here too, not just at final Save."""
+        result = self.provider.resolve(r'set custom css to: .x{background:url(j\61vascript:alert(1))}', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('cannot apply', result.reply.lower())
+
+    def test_set_custom_css_rejects_data_url_at_proposal_time(self):
+        """Item 2 (closure) -- data: URLs are rejected here too."""
+        result = self.provider.resolve('set custom css to: .x{background:url(data:image/png;base64,AAAA)}', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('cannot apply', result.reply.lower())
+
+    def test_ambiguous_custom_css_command_asks_for_content(self):
+        result = self.provider.resolve('what about custom css', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_reset_css_ambiguous_asks_enable_or_disable(self):
+        result = self.provider.resolve('what about reset css', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('enable or disable', result.reply.lower())
+
+    def test_all_css_actions_require_confirmation(self):
+        for action in [
+            {'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': True},
+            {'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': False},
+            {'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'},
+            {'type': ActionType.CLEAR_CUSTOM_CSS},
+        ]:
+            self.assertTrue(requires_confirmation(action))
+
+    def test_short_custom_css_does_not_require_strong_confirmation(self):
+        action = validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'})
+        self.assertFalse(requires_strong_confirmation(action))
+
+    def test_long_custom_css_requires_strong_confirmation(self):
+        action = validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}' * 20})
+        self.assertTrue(requires_strong_confirmation(action))
+
+    def test_validate_action_rejects_set_custom_css_with_non_bool_enabled(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': 'yes'}))
+
+    def test_validate_action_rejects_unsafe_set_custom_css(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '<script>alert(1)</script>'}))
+
+    def test_validate_action_rejects_empty_custom_css(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '   '}))
+
+    def test_validate_action_accepts_clear_custom_css(self):
+        self.assertEqual(validate_action({'type': ActionType.CLEAR_CUSTOM_CSS}), {'type': ActionType.CLEAR_CUSTOM_CSS})
+
+    def test_resolve_asset_references_passes_document_scope_actions_through_unchanged(self):
+        action = {'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'}
+        self.assertEqual(resolve_asset_references(action, request=None), action)
 
 
 class ValidateActionTests(TestCase):
@@ -2359,9 +2461,8 @@ class EmailDocumentHeadSettingsTests(TestCase):
     """`email_title`/`email_subject`/`favicon_url` are deliberately
     distinct from `name` (the builder/dashboard draft name) -- see
     models.py's EmailDocument docstring. reset_css_enabled/
-    custom_css_enabled/custom_css exist as columns (one migration for the
-    whole slice) but are not yet serializer-exposed -- that is Sub-phase
-    2's scope, verified here by their ABSENCE from the API surface."""
+    custom_css_enabled/custom_css persistence/security is covered
+    separately by EmailDocumentCssSettingsTests below (Sub-phase 2)."""
 
     def setUp(self):
         User = get_user_model()
@@ -2438,20 +2539,6 @@ class EmailDocumentHeadSettingsTests(TestCase):
         self.document.refresh_from_db()
         self.assertEqual(self.document.favicon_url, '')
 
-    def test_reset_and_custom_css_fields_not_yet_exposed_via_api(self):
-        """Sub-phase 1 scope boundary: these columns exist (schema-ready
-        for Sub-phase 2) but are not serializer fields yet -- patching
-        them is a silent no-op (DRF ignores unknown keys), never a 400,
-        and GET must not leak them as if they were a supported contract."""
-        self.client.force_login(self.user)
-        response = self._patch_json({'reset_css_enabled': False, 'custom_css': 'body { color: red; }'})
-        self.assertEqual(response.status_code, 200)
-        self.document.refresh_from_db()
-        self.assertTrue(self.document.reset_css_enabled)  # unchanged -- ignored, not applied
-        self.assertNotIn('reset_css_enabled', response.json())
-        self.assertNotIn('custom_css_enabled', response.json())
-        self.assertNotIn('custom_css', response.json())
-
     def test_non_owner_cannot_patch_head_settings(self):
         self.client.force_login(self.other_user)
         response = self._patch_json({'email_title': 'Hijacked'})
@@ -2460,3 +2547,271 @@ class EmailDocumentHeadSettingsTests(TestCase):
     def test_anonymous_cannot_patch_head_settings(self):
         response = self._patch_json({'email_title': 'Hijacked'})
         self.assertEqual(response.status_code, 403)
+
+
+# ============================================================================
+# Email Document Standards — Sub-phase 2 (Reset CSS + Custom CSS)
+# ============================================================================
+
+class EmailDocumentCssSettingsTests(TestCase):
+    """Persistence + the backend security gate for reset_css_enabled/
+    custom_css_enabled/custom_css. The actual Reset CSS text and the
+    non-blocking compatibility-warning detector are frontend-only (see
+    frontend/src/emailbuilder/emailCss.ts's module docstring for why) --
+    nothing here renders CSS, only validates and persists it."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='css.owner', email='css.owner@example.com', password='StrongPass123')
+        self.document = EmailDocument.objects.create(user=self.user, name='August Newsletter', platform='generic', width=700)
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+        self.client.force_login(self.user)
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_reset_css_enabled_by_default(self):
+        self.assertTrue(self.document.reset_css_enabled)
+
+    def test_custom_css_disabled_and_empty_by_default(self):
+        self.assertFalse(self.document.custom_css_enabled)
+        self.assertEqual(self.document.custom_css, '')
+
+    def test_reset_css_can_be_disabled_and_persists(self):
+        response = self._patch_json({'reset_css_enabled': False})
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.reset_css_enabled)
+
+    def test_custom_css_enable_with_valid_css_persists(self):
+        response = self._patch_json({
+            'custom_css_enabled': True,
+            'custom_css': '.brand-heading { color: #002D38; font-weight: 700; }',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.custom_css_enabled)
+        self.assertEqual(self.document.custom_css, '.brand-heading { color: #002D38; font-weight: 700; }')
+
+    def test_custom_css_allows_media_queries_and_pseudo_and_attribute_selectors(self):
+        css = (
+            '@media only screen and (max-width:600px) { .stack { display:block !important; } } '
+            'a[href^="mailto:"] { color: #0082AD; } '
+            '.btn:hover { opacity: 0.9; } '
+            'table { mso-table-lspace: 0pt; mso-table-rspace: 0pt; } '
+            '.icon { background-image: url(https://cdn.example.com/icon.png); }'
+        )
+        response = self._patch_json({'custom_css_enabled': True, 'custom_css': css})
+        self.assertEqual(response.status_code, 200)
+
+    def test_custom_css_image_data_uri_rejected(self):
+        """Item 2 (closure) -- data: URLs are disallowed ENTIRELY, no
+        data:image/ exception. Asset Manager / owned https:// assets are
+        the supported path for images."""
+        response = self._patch_json({
+            'custom_css_enabled': True,
+            'custom_css': '.dot { background-image: url(data:image/png;base64,AAAA); }',
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_style_breakout_rejected(self):
+        response = self._patch_json({'custom_css': 'body{}</style><script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('style', response.json()['errors']['custom_css'][0].lower())
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.custom_css, '')
+
+    def test_custom_css_script_tag_alone_rejected(self):
+        response = self._patch_json({'custom_css': 'body{content:"x"} <script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('script', response.json()['errors']['custom_css'][0].lower())
+
+    def test_custom_css_html_comment_rejected(self):
+        response = self._patch_json({'custom_css': 'body{color:red} <!-- injected -->'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_javascript_scheme_rejected(self):
+        response = self._patch_json({'custom_css': '.x{background:url(javascript:alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_expression_rejected(self):
+        response = self._patch_json({'custom_css': '.x{width:expression(alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_behavior_rejected(self):
+        response = self._patch_json({'custom_css': '.x{behavior:url(evil.htc)}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_moz_binding_rejected(self):
+        response = self._patch_json({'custom_css': '.x{-moz-binding:url(evil.xml)}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_import_rejected(self):
+        response = self._patch_json({'custom_css': '@import url("https://evil.example.com/x.css");'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_non_image_data_uri_rejected(self):
+        response = self._patch_json({'custom_css': "@font-face{src:url(data:font/woff2;base64,AAAA)}"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_obfuscated_javascript_scheme_rejected(self):
+        """Item 3 (closure) -- CSS hex-escaped 'javascript:' (\\61 = a)
+        must be rejected identically to the literal form."""
+        response = self._patch_json({'custom_css': r'.x{background:url(j\61vascript:alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_comment_split_expression_rejected(self):
+        response = self._patch_json({'custom_css': '.x{width:expre/**/ssion(alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_uppercase_style_breakout_rejected(self):
+        response = self._patch_json({'custom_css': 'body{}</STYLE><script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_embedded_html_tag_rejected(self):
+        response = self._patch_json({'custom_css': '.x{content:"<img src=x onerror=alert(1)>"}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_too_long_rejected(self):
+        response = self._patch_json({'custom_css': '.x{color:red}' * 5000})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_large_realistic_stylesheet_persists_and_reloads_exactly(self):
+        """Closure item 7 -- a genuinely large (~8KB), safe, real-world-
+        shaped stylesheet (many distinct rules, not one repeated string)
+        must save and reload byte-for-byte. The AI chat command's 500-char
+        MESSAGE cap (a bounded-vocabulary limitation of the deterministic
+        router) never applies here -- Custom CSS itself is saved/loaded
+        through the normal Document Settings PATCH, capped only at
+        MAX_CUSTOM_CSS_LENGTH (20000)."""
+        rules = [
+            f'.email-brand-{i} {{ color: #002D38; font-weight: 600; padding: {i % 20}px; '
+            f'border-radius: 4px; background-color: #F4F6F8; }}'
+            for i in range(140)
+        ]
+        large_css = '\n'.join(rules)
+        self.assertGreater(len(large_css), 5000)
+        self.assertLess(len(large_css), 20000)
+
+        response = self._patch_json({'custom_css_enabled': True, 'custom_css': large_css})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['custom_css'], large_css)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.custom_css, large_css)
+
+        # Simulates a page reload: GET must return the exact same value.
+        reload_response = self.client.get(self.url)
+        self.assertEqual(reload_response.status_code, 200)
+        self.assertEqual(reload_response.json()['custom_css'], large_css)
+
+    def test_custom_css_blank_is_valid_no_op(self):
+        response = self._patch_json({'custom_css': ''})
+        self.assertEqual(response.status_code, 200)
+
+    def test_api_cannot_bypass_sanitizer_via_direct_model_field_omitted_from_request(self):
+        """The security gate lives in the serializer's validate_custom_css
+        -- there is no alternate write path (no bulk-update endpoint, no
+        other serializer) that reaches EmailDocument.custom_css."""
+        response = self._patch_json({'custom_css': '<script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.custom_css, '')
+
+
+class CustomCssSecurityValidatorTests(TestCase):
+    """Unit-level coverage of the validator function itself, independent
+    of the API layer (EmailDocumentCssSettingsTests already covers it
+    end-to-end through the serializer)."""
+
+    def test_safe_css_returns_no_violations(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertEqual(validate_custom_css_security('.x { color: red; }'), [])
+
+    def test_non_string_rejected(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security(None))
+
+    def test_vbscript_rejected(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security('.x{background:url(vbscript:msgbox(1))}'))
+
+    def test_case_insensitive_matching(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security('.x{background:URL(JAVASCRIPT:alert(1))}'))
+
+    def test_data_url_rejected_unconditionally(self):
+        """Item 2 (closure) -- no data:image/ exception."""
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security('.x{background:url(data:image/png;base64,AAAA)}'))
+        self.assertTrue(validate_custom_css_security('.x{src:url(data:font/woff2;base64,AAAA)}'))
+
+
+class CustomCssSecurityObfuscationTests(TestCase):
+    """Item 3 (closure) -- adversarial/obfuscated variants of every
+    pattern above must still be rejected after normalization. See
+    custom_css_security.py's module docstring ("NORMALIZATION STRATEGY")
+    for exactly what is undone and why."""
+
+    def _rejects(self, css):
+        from .custom_css_security import validate_custom_css_security
+        violations = validate_custom_css_security(css)
+        self.assertTrue(violations, f'expected a violation for: {css!r}')
+
+    def test_hex_escaped_javascript_scheme(self):
+        self._rejects(r'.x{background:url(j\61vascript:alert(1))}')
+
+    def test_hex_escaped_expression(self):
+        self._rejects(r'.x{width:expre\73sion(alert(1))}')
+
+    def test_hex_escaped_import(self):
+        self._rejects(r'\40 import url(evil.css);')
+
+    def test_hex_escaped_behavior(self):
+        self._rejects(r'.x{beh\61vior:url(evil.htc)}')
+
+    def test_hex_escaped_moz_binding(self):
+        self._rejects(r'.x{-moz-b\69nding:url(evil.xml)}')
+
+    def test_hex_escaped_data_scheme_space_terminated(self):
+        # A trailing space after a short hex escape is REQUIRED by the
+        # CSS spec to terminate it before a following hex-digit char
+        # ('a' is itself hex) -- \64ata would otherwise greedily consume
+        # "64a" as one 3-hex-digit escape, not "d" + literal "ata".
+        self._rejects(r'.x{background:url(\64 ata:image/png;base64,AAAA)}')
+
+    def test_literal_nul_control_character_mid_token(self):
+        self._rejects('.x{background:url(java\x00script:alert(1))}')
+
+    def test_mixed_case_javascript_scheme(self):
+        self._rejects('.x{background:url(JavaScript:alert(1))}')
+
+    def test_mixed_case_expression(self):
+        self._rejects('.x{width:EXPRESSION(alert(1))}')
+
+    def test_mixed_case_import(self):
+        self._rejects('@IMPORT url(evil.css);')
+
+    def test_uppercase_style_breakout(self):
+        self._rejects('body{}</STYLE><script>alert(1)</script>')
+
+    def test_comment_split_javascript_scheme(self):
+        self._rejects('.x{background:url(java/**/script:alert(1))}')
+
+    def test_comment_split_expression(self):
+        self._rejects('.x{width:expre/**/ssion(alert(1))}')
+
+    def test_comment_split_moz_binding(self):
+        self._rejects('.x{-moz-/**/binding:url(evil.xml)}')
+
+    def test_quoted_url_javascript_scheme(self):
+        self._rejects('.x{background:url("javascript:alert(1)")}')
+
+    def test_single_quoted_url_javascript_scheme(self):
+        self._rejects(".x{background:url('javascript:alert(1)')}")
+
+    def test_unquoted_url_javascript_scheme(self):
+        self._rejects('.x{background:url(javascript:alert(1))}')
+
+    def test_malformed_url_missing_close_paren_still_rejected(self):
+        self._rejects('.x{background:url(javascript:alert(1)}')

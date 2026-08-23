@@ -12,6 +12,13 @@ export interface RenderableEmail {
   // zero-behavior-change default, not a silent feature loss.
   title?: string;
   faviconUrl?: string;
+  // Sub-phase 2 — same zero-behavior-change-when-omitted convention as
+  // title/faviconUrl above (see emailHead.ts's EmailHeadOptions docstring
+  // for why resetCssEnabled defaults false HERE despite defaulting true
+  // at the EmailDocument model layer).
+  resetCssEnabled?: boolean;
+  customCssEnabled?: boolean;
+  customCss?: string;
 }
 
 // The first email renderer layer: Email Document Model -> email-safe HTML
@@ -65,6 +72,9 @@ export function renderEmailDocument(document: RenderableEmail): string {
     title: document.title ?? '',
     faviconUrl: document.faviconUrl ?? '',
     content: document.content,
+    resetCssEnabled: document.resetCssEnabled,
+    customCssEnabled: document.customCssEnabled,
+    customCss: document.customCss,
   });
   return (
     '<!doctype html>\n'

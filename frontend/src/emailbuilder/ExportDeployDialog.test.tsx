@@ -4,7 +4,15 @@ import { describe, expect, it, vi } from 'vitest';
 import { ExportDeployDialog } from './ExportDeployDialog';
 import { createModule } from './moduleFactory';
 import type { EmailDocument } from './types';
+import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
 import type { EmailDocumentContent, EmailModule } from './edm';
+
+function documentSettingsOf(document: EmailDocument): EmailDocumentSettingsSnapshot {
+  const {
+    email_title, email_subject, favicon_url, reset_css_enabled, custom_css_enabled, custom_css,
+  } = document;
+  return { email_title, email_subject, favicon_url, reset_css_enabled, custom_css_enabled, custom_css };
+}
 
 function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
   return {
@@ -18,6 +26,9 @@ function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
     email_title: '',
     email_subject: '',
     favicon_url: '',
+    reset_css_enabled: true,
+    custom_css_enabled: false,
+    custom_css: '',
     created_at: '2026-08-22T10:00:00Z',
     updated_at: '2026-08-22T10:00:00Z',
     ...overrides,
@@ -26,15 +37,20 @@ function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
 
 function renderDialog(overrides: {
   document?: EmailDocument;
+  documentSettings?: EmailDocumentSettingsSnapshot;
   content?: EmailDocumentContent;
   onSaveAsTemplate?: (name: string) => Promise<EmailDocument>;
 } = {}) {
   const onSaveAsTemplate = overrides.onSaveAsTemplate ?? vi.fn().mockResolvedValue(baseDocument({ id: 2, start_type: 'template' }));
   const onClose = vi.fn();
   const document = overrides.document ?? baseDocument();
+  const documentSettings = overrides.documentSettings ?? documentSettingsOf(document);
   const content = overrides.content ?? document.content;
   render(
-    <ExportDeployDialog document={document} content={content} onSaveAsTemplate={onSaveAsTemplate} onClose={onClose} />,
+    <ExportDeployDialog
+      document={document} documentSettings={documentSettings} content={content}
+      onSaveAsTemplate={onSaveAsTemplate} onClose={onClose}
+    />,
   );
   return { onSaveAsTemplate, onClose };
 }
@@ -113,6 +129,34 @@ describe('ExportDeployDialog', () => {
     await user.click(screen.getByRole('button', { name: /Copy HTML/ }));
     expect(await screen.findByText('Copied')).toBeInTheDocument();
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('<!doctype html>'));
+  });
+
+  it('Email Document Standards Sub-phase 2 — Export includes Reset CSS and Custom CSS when both are enabled', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    renderDialog({
+      document: baseDocument({ reset_css_enabled: true, custom_css_enabled: true, custom_css: '.brand{color:#002D38}' }),
+    });
+
+    await user.click(screen.getByRole('button', { name: /Copy HTML/ }));
+    await screen.findByText('Copied');
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('EMAIL RESET CSS - START'));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('CUSTOM CSS - START'));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('.brand{color:#002D38}'));
+  });
+
+  it('Export omits both CSS blocks when Reset CSS and Custom CSS are disabled', async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
+    renderDialog({
+      document: baseDocument({ reset_css_enabled: false, custom_css_enabled: false, custom_css: '.brand{color:#002D38}' }),
+    });
+
+    await user.click(screen.getByRole('button', { name: /Copy HTML/ }));
+    await screen.findByText('Copied');
+    const [[copiedHtml]] = writeText.mock.calls;
+    expect(copiedHtml).not.toContain('EMAIL RESET CSS');
+    expect(copiedHtml).not.toContain('CUSTOM CSS');
   });
 
   it('Download HTML triggers a client-side download without throwing', async () => {

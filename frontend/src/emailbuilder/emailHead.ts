@@ -13,17 +13,28 @@
 //   10. Outlook OfficeDocumentSettings [Sub-phase 3]
 //   11. scoped Outlook conditional CSS [Sub-phase 3]
 //   12. </head>
-// Positions 7/9/10/11 are NOT implemented yet — this file only emits
-// 1-6 and 8 today; later sub-phases insert at the marked points below,
-// they do not restructure this function.
+// Positions 10/11 are NOT implemented yet (Sub-phase 3) — later phases
+// insert at the marked point below, they do not restructure this function.
 import { escapeAttribute, escapeHtml, sanitizeUrl } from './sanitize';
 import { renderResponsiveStyles } from './responsiveStyles';
+import { renderCustomCssBlock, renderResetCssBlock } from './emailCss';
 import type { EmailDocumentContent } from './edm';
 
 export interface EmailHeadOptions {
   title: string;
   faviconUrl: string;
   content: EmailDocumentContent;
+  // Sub-phase 2 — all optional so every Sub-phase-1 caller/test keeps
+  // compiling and rendering byte-identically without passing them (same
+  // "omitting these is a zero-behavior-change default" convention as
+  // title/faviconUrl). Real callers (EmailBuilderWorkspacePage.tsx) pass
+  // the loaded document's real values — resetCssEnabled defaults true at
+  // the MODEL/DB layer (EmailDocument.reset_css_enabled), not here; this
+  // leaf rendering primitive defaults to false/off like every other
+  // optional field here, so it never surprises an existing test call site.
+  resetCssEnabled?: boolean;
+  customCssEnabled?: boolean;
+  customCss?: string;
 }
 
 // Approved decision F: never blindly emit type="image/x-icon" for
@@ -65,7 +76,9 @@ function renderFaviconLink(faviconUrl: string): string {
   return `<link rel="icon"${typeAttr} href="${escapeAttribute(safeUrl)}" />\n`;
 }
 
-export function renderEmailHead({ title, faviconUrl, content }: EmailHeadOptions): string {
+export function renderEmailHead({
+  title, faviconUrl, content, resetCssEnabled, customCssEnabled, customCss,
+}: EmailHeadOptions): string {
   return (
     '<meta charset="utf-8" />\n'
     // Approved decision B — the existing, stronger, mobile-friendly
@@ -90,9 +103,9 @@ export function renderEmailHead({ title, faviconUrl, content }: EmailHeadOptions
     + '<meta name="x-apple-disable-message-reformatting" />\n'
     + `<title>${escapeHtml(title)}</title>\n`
     + renderFaviconLink(faviconUrl)
-    // --- Sub-phase 2 inserts the Email Reset CSS <style> block here ---
+    + (resetCssEnabled ? renderResetCssBlock() : '')
     + renderResponsiveStyles(content)
-    // --- Sub-phase 2 inserts the optional Custom CSS <style> block here ---
+    + (customCssEnabled ? renderCustomCssBlock(customCss ?? '') : '')
     // --- Sub-phase 3 inserts the Outlook OfficeDocumentSettings XML
     //     block and the scoped Outlook conditional CSS block here ---
   );

@@ -7,8 +7,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .ai_command import (
-    ActionType, CommandResult, get_default_email_command_provider, requires_confirmation, resolve_asset_references,
-    validate_action,
+    ActionType, CommandResult, get_default_email_command_provider, requires_confirmation,
+    requires_strong_confirmation, resolve_asset_references, validate_action,
 )
 from .models import EmailAsset, EmailDocument, SavedEmailModule
 from .serializers import EmailAICommandRequestSerializer, EmailAssetSerializer, EmailDocumentSerializer, SavedEmailModuleSerializer
@@ -141,6 +141,10 @@ class EmailAICommandView(APIView):
             'reply': result.reply,
             'action': validated_action,
             'requires_confirmation': requires_confirmation(validated_action),
+            # Sub-phase 2, item F — a substantial Custom CSS replacement
+            # needs stronger confirmation UI than a trivial property
+            # change; every other action type is always False here.
+            'requires_strong_confirmation': requires_strong_confirmation(validated_action),
             'confidence': result.confidence,
             'provider': result.provider,
         }, status=status.HTTP_200_OK)

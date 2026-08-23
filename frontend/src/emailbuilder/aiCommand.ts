@@ -31,7 +31,19 @@ export type AICommandAction =
   | { type: 'UPDATE_MODULE_PROPS'; target: 'selected'; module_type: AICommandModuleType; patch: Record<string, unknown> }
   | { type: 'DELETE_MODULE'; target: 'selected' }
   | { type: 'DUPLICATE_MODULE'; target: 'selected' }
-  | { type: 'APPLY_GLOBAL_STYLE'; target: 'selected'; module_type: AICommandModuleType; patch: Record<string, unknown> };
+  | { type: 'APPLY_GLOBAL_STYLE'; target: 'selected'; module_type: AICommandModuleType; patch: Record<string, unknown> }
+  // Email Document Standards Sub-phase 2, item F — document-level (not
+  // EDM/module-level) proposals. Never applied without an explicit
+  // Apply click, same as every action type above — see AIEngineerPanel's
+  // onApplyDocumentSettingAction.
+  | { type: 'SET_RESET_CSS_ENABLED'; enabled: boolean }
+  | { type: 'SET_CUSTOM_CSS_ENABLED'; enabled: boolean }
+  | { type: 'SET_CUSTOM_CSS'; css: string }
+  | { type: 'CLEAR_CUSTOM_CSS' };
+
+export const DOCUMENT_SCOPE_ACTION_TYPES = new Set<AICommandAction['type']>([
+  'SET_RESET_CSS_ENABLED', 'SET_CUSTOM_CSS_ENABLED', 'SET_CUSTOM_CSS', 'CLEAR_CUSTOM_CSS',
+]);
 
 export interface AICommandSelectedModuleContext {
   type: AICommandModuleType;
@@ -56,6 +68,10 @@ export interface AICommandResponse {
   reply: string;
   action: AICommandAction;
   requires_confirmation: boolean;
+  // Sub-phase 2, item F — a substantial Custom CSS replacement needs a
+  // stronger confirmation treatment than a trivial property change;
+  // false for every non-CSS action type.
+  requires_strong_confirmation: boolean;
   confidence: number;
   provider: AICommandProviderId;
 }
@@ -93,6 +109,14 @@ export function describeAction(action: AICommandAction): string {
       return 'Duplicate the selected module';
     case 'APPLY_GLOBAL_STYLE':
       return `Apply a style change to every ${action.module_type} module (${Object.keys(action.patch).join(', ')})`;
+    case 'SET_RESET_CSS_ENABLED':
+      return action.enabled ? 'Enable Email Reset CSS' : 'Disable Email Reset CSS';
+    case 'SET_CUSTOM_CSS_ENABLED':
+      return action.enabled ? 'Enable Custom CSS' : 'Disable Custom CSS';
+    case 'SET_CUSTOM_CSS':
+      return 'Update Custom CSS';
+    case 'CLEAR_CUSTOM_CSS':
+      return 'Remove Custom CSS';
     case 'NONE':
     default:
       return 'No change proposed';

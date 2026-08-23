@@ -84,8 +84,11 @@ def _action_schema():
                             'maxItems': MAX_GENERATED_MODULES,
                         },
                         'patch': {'type': ['object', 'null']},
+                        # Sub-phase 2 — document-level CSS actions only.
+                        'enabled': {'type': ['boolean', 'null']},
+                        'css': {'type': ['string', 'null']},
                     },
-                    'required': ['type', 'target', 'module_type', 'modules', 'patch'],
+                    'required': ['type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css'],
                     'additionalProperties': False,
                 },
             },

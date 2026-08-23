@@ -11,6 +11,9 @@ interface ValidationCenterPanelProps {
   platform: EmailPlatform;
   emailTitle?: string;
   faviconUrl?: string;
+  resetCssEnabled?: boolean;
+  customCssEnabled?: boolean;
+  customCss?: string;
   onNavigateToModule: (moduleId: string) => void;
   onApplySafeFix: (moduleId: string, propPatch: Record<string, unknown>) => void;
 }
@@ -48,7 +51,8 @@ const STATUS_LABEL: Record<'good' | 'needs-improvement' | 'needs-attention', str
 // project has consistently avoided; every issue shown here traces to a
 // real, reproducible check.
 export function ValidationCenterPanel({
-  width, content, platform, emailTitle, faviconUrl, onNavigateToModule, onApplySafeFix,
+  width, content, platform, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+  onNavigateToModule, onApplySafeFix,
 }: ValidationCenterPanelProps) {
   const [applyingFixId, setApplyingFixId] = useState<string | null>(null);
   const [applyingAll, setApplyingAll] = useState(false);
@@ -60,11 +64,11 @@ export function ValidationCenterPanel({
   // the shared renderer Code Editor/Preview Studio also depend on.
   const rawHtml = useMemo(() => {
     try {
-      return renderEmailDocument({ width, content, title: emailTitle, faviconUrl });
+      return renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss });
     } catch {
       return null;
     }
-  }, [width, content, emailTitle, faviconUrl]);
+  }, [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
 
   // Re-evaluated on every relevant change automatically (rawHtml/platform
   // are already reactive); revalidateNonce exists only so the explicit

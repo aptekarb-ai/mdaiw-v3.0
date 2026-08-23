@@ -32,6 +32,7 @@ function response(overrides: Partial<AICommandResponse> = {}): AICommandResponse
     reply: 'I will add a button module.',
     action: { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
     requires_confirmation: false,
+    requires_strong_confirmation: false,
     confidence: 0.9,
     provider: 'deterministic',
     ...overrides,
@@ -40,16 +41,21 @@ function response(overrides: Partial<AICommandResponse> = {}): AICommandResponse
 
 function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> = {}) {
   const onApplyAction = vi.fn().mockReturnValue(true);
+  const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
   render(
     <AIEngineerPanel
       platform="generic"
       width={700}
       selectedModule={null}
+      resetCssEnabled
+      customCssEnabled={false}
+      customCss=""
       onApplyAction={onApplyAction}
+      onApplyDocumentSettingAction={onApplyDocumentSettingAction}
       {...overrides}
     />,
   );
-  return { onApplyAction };
+  return { onApplyAction, onApplyDocumentSettingAction };
 }
 
 afterEach(() => {
@@ -275,5 +281,128 @@ describe('AIEngineerPanel', () => {
     await user.click(screen.getByRole('tab', { name: 'History (1)' }));
     expect(screen.getByText('Applied')).toBeInTheDocument();
     expect(screen.getByText('"add a button"')).toBeInTheDocument();
+  });
+});
+
+describe('AIEngineerPanel — Sub-phase 2 document-level CSS actions (item F)', () => {
+  it('a Reset CSS proposal routes Apply through onApplyDocumentSettingAction, not onApplyAction', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'This will disable Email Reset CSS, which may reduce consistency across email clients. Please confirm.',
+      action: { type: 'SET_RESET_CSS_ENABLED', enabled: false },
+      requires_confirmation: true,
+    }));
+    const { onApplyAction, onApplyDocumentSettingAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'disable reset css');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Disable Email Reset CSS');
+
+    expect(screen.getByText(/Current/)).toBeInTheDocument();
+    expect(screen.getByText('Enabled')).toBeInTheDocument();
+    expect(screen.getByText(/Proposed/)).toBeInTheDocument();
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyDocumentSettingAction).toHaveBeenCalledWith({ type: 'SET_RESET_CSS_ENABLED', enabled: false });
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+  });
+
+  it('a Custom CSS proposal shows the current/proposed CSS diff and affected clients', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'I will update your Custom CSS. Please review the proposed change.',
+      action: { type: 'SET_CUSTOM_CSS', css: '.brand { color: #002D38; }' },
+      requires_confirmation: true,
+    }));
+    renderPanel({ customCss: '.old { color: red; }' });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'set custom css to: .brand {{ color: #002D38; }');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Update Custom CSS');
+
+    expect(screen.getByText('.old { color: red; }')).toBeInTheDocument();
+    expect(screen.getByText('.brand { color: #002D38; }')).toBeInTheDocument();
+    expect(screen.getByText(/Affected clients:/)).toBeInTheDocument();
+  });
+
+  it('shows a structural-selector warning inside the proposal without blocking Apply', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'SET_CUSTOM_CSS', css: 'table { display: none; }' },
+      requires_confirmation: true,
+    }));
+    const { onApplyDocumentSettingAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'set custom css to: table {{ display: none; }');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Update Custom CSS');
+
+    expect(await screen.findByText(/sets "display" on every <table>/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).not.toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyDocumentSettingAction).toHaveBeenCalled();
+  });
+
+  it('a substantial Custom CSS replacement requires the extra strong-confirmation checkbox before Apply is enabled', async () => {
+    mockSpeech();
+    const longCss = '.x{color:red}'.repeat(20);
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'SET_CUSTOM_CSS', css: longCss },
+      requires_confirmation: true,
+      requires_strong_confirmation: true,
+    }));
+    const { onApplyDocumentSettingAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'replace custom css with a lot of styles');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Update Custom CSS');
+
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: /substantial amount of Custom CSS/ }));
+    expect(screen.getByRole('button', { name: 'Apply' })).not.toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyDocumentSettingAction).toHaveBeenCalledWith({ type: 'SET_CUSTOM_CSS', css: longCss });
+  });
+
+  it('Cancel on a CSS proposal never calls onApplyDocumentSettingAction', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'CLEAR_CUSTOM_CSS' },
+      requires_confirmation: true,
+    }));
+    const { onApplyDocumentSettingAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'remove custom css');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Remove Custom CSS');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
+  });
+
+  it('a failed document-setting Apply shows an honest failure message', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'SET_RESET_CSS_ENABLED', enabled: true },
+      requires_confirmation: true,
+    }));
+    renderPanel({ onApplyDocumentSettingAction: vi.fn().mockResolvedValue(false) });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'enable reset css');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Enable Email Reset CSS');
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText(/Could not apply — saving to the server failed/)).toBeInTheDocument();
   });
 });

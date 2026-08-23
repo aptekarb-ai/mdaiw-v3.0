@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from .ai_command import MAX_MESSAGE_LENGTH
 from . import module_capabilities
+from .custom_css_security import validate_custom_css_security
 from .edm import UNSAFE_URL_PREFIXES, EdmValidationError, validate_edm, validate_module_instance
 from .models import (
     MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, SavedEmailModule,
@@ -27,11 +28,13 @@ class EmailDocumentSerializer(serializers.ModelSerializer):
             'id', 'name', 'platform', 'width', 'start_type', 'status', 'content',
             # Email Document Standards Sub-phase 1 — deliberately distinct
             # from `name` (see models.py's EmailDocument docstring).
-            # reset_css_enabled/custom_css_enabled/custom_css exist as DB
-            # columns already (one migration for the whole slice) but are
-            # NOT exposed here yet — Sub-phase 2 adds them once the
-            # renderer/UI/sanitization for them exists.
             'email_title', 'email_subject', 'favicon_url',
+            # Sub-phase 2 — reset_css_enabled/custom_css_enabled/custom_css.
+            # custom_css passes through validate_custom_css_security() as
+            # the final persistence-layer security gate (the frontend also
+            # validates before Save/before an AI proposal is shown, but
+            # this is authoritative).
+            'reset_css_enabled', 'custom_css_enabled', 'custom_css',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'status', 'created_at', 'updated_at']
@@ -72,6 +75,14 @@ class EmailDocumentSerializer(serializers.ModelSerializer):
         if not (lowered.startswith('http://') or lowered.startswith('https://')):
             raise serializers.ValidationError('Favicon URL must start with http:// or https://.')
         return trimmed
+
+    def validate_custom_css(self, value):
+        if not value:
+            return value
+        violations = validate_custom_css_security(value)
+        if violations:
+            raise serializers.ValidationError(violations[0])
+        return value
 
     def validate_content(self, value):
         try:
