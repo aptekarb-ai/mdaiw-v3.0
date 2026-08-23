@@ -23,6 +23,12 @@ function layoutDefinition(
     imagePosition: null,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'basic',
+    // Feature 14 V2 — deliberately empty, not omitted: layout modules
+    // have no flat AI-editable scalar prop (their one prop,
+    // columnWidths, is an array edited via the dedicated Column Widths
+    // editor, not a SchemaField). Column-width AI editing is explicitly
+    // deferred; this stays [] rather than fabricating coverage.
+    editableFields: [],
     createDefaultProps: () => ({ columnWidths }),
     createDefaultSettings: () => createResponsiveSettings(ZERO_SPACING, { mobileStack: true }),
     createDefaultColumns: () => createEmptyColumns(columnWidths.length),

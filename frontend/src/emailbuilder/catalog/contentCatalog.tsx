@@ -38,7 +38,10 @@ function contentEditableFields(withImage: boolean, withCta: boolean): SchemaFiel
   ];
   if (withImage) {
     fields.push(
-      { key: 'image.src', label: 'Image URL', kind: 'url', group: 'content' },
+      // Feature 14 V2 — explicitly image_asset (never inferred): the AI
+      // may only set this via the asset-ownership-resolution flow or an
+      // allow-listed external URL.
+      { key: 'image.src', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
       { key: 'image.alt', label: 'Image alt text', kind: 'text', group: 'content' },
     );
   }
@@ -214,7 +217,10 @@ const articleTeaserDefinition: ModuleDefinition<ArticleTeaserModuleProps> = {
     { key: 'eyebrow', label: 'Eyebrow label', kind: 'text', group: 'content' },
     { key: 'heading', label: 'Heading', kind: 'text', group: 'content' },
     { key: 'text', label: 'Teaser text', kind: 'textarea', group: 'content' },
-    { key: 'image.src', label: 'Image URL', kind: 'url', group: 'content' },
+    // Feature 14 V2 — explicitly image_asset (never inferred): the AI
+    // may only set this via the asset-ownership-resolution flow or an
+    // allow-listed external URL.
+    { key: 'image.src', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
     { key: 'image.alt', label: 'Image alt text', kind: 'text', group: 'content' },
     { key: 'ctaText', label: 'Link text', kind: 'text', group: 'content' },
     { key: 'ctaHref', label: 'Link URL', kind: 'url', group: 'content' },

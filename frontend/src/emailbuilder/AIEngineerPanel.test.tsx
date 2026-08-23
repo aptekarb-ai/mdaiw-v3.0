@@ -1,0 +1,279 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { AIEngineerPanel } from './AIEngineerPanel';
+import { requestAICommand } from '../api/client';
+import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { createModule } from './moduleFactory';
+import type { AICommandResponse } from './aiCommand';
+
+vi.mock('../api/client', () => ({ requestAICommand: vi.fn() }));
+vi.mock('../hooks/useSpeechRecognition', () => ({
+  isSpeechRecognitionSupported: vi.fn(),
+  useSpeechRecognition: vi.fn(),
+}));
+
+function mockSpeech(overrides: Partial<ReturnType<typeof useSpeechRecognition>> = {}) {
+  vi.mocked(isSpeechRecognitionSupported).mockReturnValue(true);
+  vi.mocked(useSpeechRecognition).mockReturnValue({
+    status: 'idle',
+    transcript: '',
+    errorMessage: null,
+    start: vi.fn(),
+    stop: vi.fn(),
+    reset: vi.fn(),
+    ...overrides,
+  });
+}
+
+function response(overrides: Partial<AICommandResponse> = {}): AICommandResponse {
+  return {
+    success: true,
+    reply: 'I will add a button module.',
+    action: { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
+    requires_confirmation: false,
+    confidence: 0.9,
+    provider: 'deterministic',
+    ...overrides,
+  };
+}
+
+function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> = {}) {
+  const onApplyAction = vi.fn().mockReturnValue(true);
+  render(
+    <AIEngineerPanel
+      platform="generic"
+      width={700}
+      selectedModule={null}
+      onApplyAction={onApplyAction}
+      {...overrides}
+    />,
+  );
+  return { onApplyAction };
+}
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe('AIEngineerPanel', () => {
+  it('shows the empty-state guidance when no conversation has started', () => {
+    mockSpeech();
+    renderPanel();
+    expect(screen.getByText(/Ask the AI Engineer to add a module/)).toBeInTheDocument();
+  });
+
+  it('mic button is disabled and shows the unsupported-browser message when speech recognition is unavailable', () => {
+    vi.mocked(isSpeechRecognitionSupported).mockReturnValue(false);
+    vi.mocked(useSpeechRecognition).mockReturnValue({
+      status: 'unsupported', transcript: '', errorMessage: null, start: vi.fn(), stop: vi.fn(), reset: vi.fn(),
+    });
+    renderPanel();
+    expect(screen.getByRole('button', { name: 'Talk to the AI Engineer' })).toBeDisabled();
+    expect(screen.getByText(/Voice input is not supported in this browser/)).toBeInTheDocument();
+  });
+
+  it('does not request microphone access merely by rendering — start() is never called on mount', () => {
+    const start = vi.fn();
+    mockSpeech({ start });
+    renderPanel();
+    expect(start).not.toHaveBeenCalled();
+  });
+
+  it('clicking the mic button starts listening, and the transcript fills the composer', async () => {
+    const start = vi.fn((onFinalTranscript?: (text: string) => void) => onFinalTranscript?.('add a button'));
+    mockSpeech({ start });
+    renderPanel();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Talk to the AI Engineer' }));
+
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(screen.getByPlaceholderText(/Type your command/)).toHaveValue('add a button');
+  });
+
+  it('clicking the mic button while listening stops it', async () => {
+    const stop = vi.fn();
+    mockSpeech({ status: 'listening', stop });
+    renderPanel();
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Stop listening' }));
+
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-destructive proposal (single module insert) does not use the confirm-styled card, and Apply invokes onApplyAction', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Add a button module')).toBeInTheDocument();
+    expect(document.querySelector('.ai-engineer-panel__proposal--confirm')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyAction).toHaveBeenCalledWith(
+      { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
+      null,
+    );
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+  });
+
+  it('a destructive/multi-module proposal renders with confirm styling', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'This will delete the selected module. Please confirm.',
+      action: { type: 'DELETE_MODULE', target: 'selected' },
+      requires_confirmation: true,
+    }));
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'delete this');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Delete the selected module')).toBeInTheDocument();
+    expect(document.querySelector('.ai-engineer-panel__proposal--confirm')).not.toBeNull();
+  });
+
+  it('Cancel discards the proposal without calling onApplyAction and records it in history', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onApplyAction).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('tab', { name: 'History (1)' }));
+    expect(screen.getByText('Cancelled')).toBeInTheDocument();
+  });
+
+  it('the composer is disabled while a proposal is pending, until it is resolved', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    expect(screen.getByPlaceholderText(/Type your command/)).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByPlaceholderText(/Type your command/)).not.toBeDisabled();
+  });
+
+  it('when onApplyAction reports failure (stale selection), shows an honest failure message instead of claiming success', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'text', patch: { color: '#76C043' } },
+    }));
+    const onApplyAction = vi.fn().mockReturnValue(false);
+    renderPanel({ onApplyAction, selectedModule: createModule('text', 0) });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make it green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Update the selected text module/);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText(/Could not apply/)).toBeInTheDocument();
+  });
+
+  it('an unsupported command (NONE action) shows the clarifying reply with no proposal card', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: "I'm not sure how to do that yet.",
+      action: { type: 'NONE' },
+    }));
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'convert this to two columns');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText("I'm not sure how to do that yet.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+  });
+
+  it('a rejected request shows a safe error message and records it in history as Failed', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockRejectedValue(new Error('network down'));
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('We could not reach the AI Engineer. Please try again.')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'History (1)' }));
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+  });
+
+  it('sends only type/props for a selected module in the supported AI vocabulary', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const textModule = createModule('text', 0);
+    renderPanel({ selectedModule: textModule });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make it bigger');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
+      selected_module: { type: 'text', props: textModule.props },
+    }));
+  });
+
+  it('sends selected_module context for a layout module too (Phase A: every registered type is now a potential AI target)', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const layoutModule = createModule('layout-2col-50-50', 0);
+    renderPanel({ selectedModule: layoutModule });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
+      selected_module: { type: 'layout-2col-50-50', props: layoutModule.props },
+    }));
+  });
+
+  it('sends selected_module context as null when nothing is selected', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    renderPanel({ selectedModule: null });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({ selected_module: null }));
+  });
+
+  it('the History tab lists an applied action with its status and summary', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await user.click(screen.getByRole('tab', { name: 'History (1)' }));
+    expect(screen.getByText('Applied')).toBeInTheDocument();
+    expect(screen.getByText('"add a button"')).toBeInTheDocument();
+  });
+});

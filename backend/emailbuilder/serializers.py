@@ -1,6 +1,8 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from .ai_command import MAX_MESSAGE_LENGTH
+from . import module_capabilities
 from .edm import UNSAFE_URL_PREFIXES, EdmValidationError, validate_edm, validate_module_instance
 from .models import (
     MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, SavedEmailModule,
@@ -158,3 +160,23 @@ class EmailAssetSerializer(serializers.ModelSerializer):
             attrs['height'] = None
             attrs['file_size'] = None
         return attrs
+
+
+class SelectedModuleContextSerializer(serializers.Serializer):
+    """Feature 14 V2 — the currently-selected canvas module, sent as
+    context for a natural-language command. `type` is restricted to every
+    module type the generated capability manifest knows about (Phase A:
+    all 53 registered types, not the V1 5-type subset) — see
+    module_capabilities.py. A type the manifest doesn't recognize is
+    rejected here at the request-validation boundary, the same posture
+    V1 had for its narrower list."""
+
+    type = serializers.ChoiceField(choices=list(module_capabilities.get_all_module_types()))
+    props = serializers.DictField(required=False, default=dict)
+
+
+class EmailAICommandRequestSerializer(serializers.Serializer):
+    message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=False)
+    selected_module = SelectedModuleContextSerializer(required=False, allow_null=True, default=None)
+    platform = serializers.CharField(required=False, allow_null=True, default=None, max_length=20)
+    width = serializers.IntegerField(required=False, allow_null=True, default=None)

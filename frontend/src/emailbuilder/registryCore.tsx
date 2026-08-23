@@ -29,13 +29,31 @@ export type ModulePlatform = 'generic' | 'sfmc' | 'marketo' | 'hubspot' | 'pardo
 
 export type ModuleImagePosition = 'left' | 'right' | 'top' | 'background';
 
+// Feature 14 V2 — the SEMANTIC contract a field's value carries, distinct
+// from `kind` (which is only a UI-control-rendering hint). This is what
+// the Email AI Engineer's server-side validator dispatches on — a `kind:
+// 'url'` field is NOT safe for the AI to set to an arbitrary string
+// unless its `valueType` also says so; an `image_asset` field requires
+// the asset-ownership-resolution flow (see backend/emailbuilder/
+// ai_command.py) instead of accepting a bare URL. Deliberately does NOT
+// include a "rich_text"/HTML-formatted value type — no field anywhere in
+// this registry carries HTML/markdown-formatted content today, and
+// listing an unused category here would misrepresent a capability that
+// does not exist.
+export type SchemaFieldValueType =
+  | 'text' | 'number' | 'color' | 'url' | 'image_asset' | 'boolean' | 'select' | 'align' | 'font';
+
 // A single scalar-leaf field a module's Properties panel can edit
-// generically (propertyEditor: 'schema'). One level of nesting is
-// supported via a dot path (e.g. 'image.src'). Repeating list fields
-// (nav links, product items, social platforms, feature rows) are
-// intentionally NOT schema-editable in Feature 04 — item-by-item list
-// editing is Feature 06 (Module Element Editor) territory; Feature 04
-// ships these modules with curated, sensible defaults instead.
+// generically (propertyEditor: 'schema'), OR — as of Feature 14 V2 — a
+// field a bespoke-editor module type (propertyEditor: 'text'/'image'/
+// 'button'/'basic'/'composite') additionally declares here purely as AI/
+// capability-manifest metadata, without changing which component renders
+// its Properties-panel UI. One level of nesting is supported via a dot
+// path (e.g. 'image.src'). Repeating list fields (nav links, product
+// items, social platforms, feature rows) are intentionally NOT
+// schema-editable — item-by-item list editing (manual UI: Feature 06;
+// AI: deferred to a future phase, see Feature 14 V2's Phase A report) —
+// modules ship these with curated, sensible defaults instead.
 export interface SchemaField {
   key: string;
   label: string;
@@ -46,6 +64,20 @@ export interface SchemaField {
   group: 'content' | 'style';
   // Required when kind === 'select'; ignored otherwise.
   options?: { value: string; label: string }[];
+  // Feature 14 V2 — semantic value contract for the AI/capability-
+  // manifest layer. Optional: when omitted, the manifest generator
+  // infers it from `kind` (see moduleCapabilities.ts's inferValueType).
+  // MUST be set explicitly (never inferred) on any field whose value is
+  // a real image/asset URL — see the module-level docstring above and
+  // moduleCapabilities.ts's hand-reviewed image_asset audit.
+  valueType?: SchemaFieldValueType;
+  // Optional bounds the AI layer enforces for 'number' fields (ignored
+  // for every other valueType). Mirrors what
+  // backend/emailbuilder/ai_command.py's INT_PROP_RANGES hand-maintained
+  // today; Feature 14 V2 moves this into the registry itself so it's
+  // derived from the manifest instead of duplicated in Python.
+  min?: number;
+  max?: number;
 }
 
 // Feature 06 — see ModuleDefinition.repeatableField's docstring.

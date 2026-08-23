@@ -23,6 +23,17 @@ const textDefinition: ModuleDefinition<TextModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'text',
+  // Feature 14 V2 — this bespoke-editor module has no `propertyEditor:
+  // 'schema'` form, but still declares editableFields purely as
+  // capability-manifest metadata for the Email AI Engineer; the manual
+  // Properties panel is unaffected (it does not read this array).
+  editableFields: [
+    { key: 'text', label: 'Text', kind: 'textarea', valueType: 'text', group: 'content' },
+    { key: 'align', label: 'Alignment', kind: 'align', valueType: 'align', group: 'style' },
+    { key: 'color', label: 'Text color', kind: 'color', valueType: 'color', group: 'style' },
+    { key: 'backgroundColor', label: 'Background color', kind: 'color', valueType: 'color', group: 'style' },
+    { key: 'fontSize', label: 'Font size (px)', kind: 'number', valueType: 'number', group: 'style', min: 8, max: 72 },
+  ],
   createDefaultProps: () => ({
     text: 'Add your heading or paragraph text here.',
     align: 'left',
@@ -85,6 +96,16 @@ const imageDefinition: ModuleDefinition<ImageModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'image',
+  // Feature 14 V2 — `src` is explicitly `image_asset` (never inferred):
+  // the AI may only set it via the asset-ownership-resolution flow or an
+  // allow-listed external URL, never an arbitrary AI-invented string.
+  editableFields: [
+    { key: 'src', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
+    { key: 'alt', label: 'Alt text', kind: 'text', valueType: 'text', group: 'content' },
+    { key: 'href', label: 'Link URL', kind: 'url', valueType: 'url', group: 'content' },
+    { key: 'align', label: 'Alignment', kind: 'align', valueType: 'align', group: 'style' },
+    { key: 'backgroundColor', label: 'Background color', kind: 'color', valueType: 'color', group: 'style' },
+  ],
   createDefaultProps: () => ({
     // Empty by design (no external network dependency for a fresh
     // module) — the builder shows a polished placeholder until the user
@@ -137,6 +158,15 @@ const buttonDefinition: ModuleDefinition<ButtonModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'button',
+  editableFields: [
+    { key: 'text', label: 'Button text', kind: 'text', valueType: 'text', group: 'content' },
+    { key: 'href', label: 'Link URL', kind: 'url', valueType: 'url', group: 'content' },
+    { key: 'align', label: 'Alignment', kind: 'align', valueType: 'align', group: 'style' },
+    { key: 'backgroundColor', label: 'Background color', kind: 'color', valueType: 'color', group: 'style' },
+    { key: 'textColor', label: 'Text color', kind: 'color', valueType: 'color', group: 'style' },
+    { key: 'fontSize', label: 'Font size (px)', kind: 'number', valueType: 'number', group: 'style', min: 8, max: 72 },
+    { key: 'borderRadius', label: 'Corner radius (px)', kind: 'number', valueType: 'number', group: 'style', min: 0, max: 50 },
+  ],
   createDefaultProps: () => ({
     text: 'Shop Now',
     href: '',
@@ -220,6 +250,11 @@ const dividerDefinition: ModuleDefinition<DividerModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'basic',
+  editableFields: [
+    { key: 'color', label: 'Color', kind: 'color', valueType: 'color', group: 'style' },
+    { key: 'thickness', label: 'Thickness (px)', kind: 'number', valueType: 'number', group: 'style', min: 1, max: 12 },
+    { key: 'align', label: 'Alignment', kind: 'align', valueType: 'align', group: 'style' },
+  ],
   createDefaultProps: () => ({ color: '#D9E2E5', thickness: 1, width: { desktop: percent(100) }, align: 'center' }),
   createDefaultSettings: () => createResponsiveSettings(DEFAULT_SPACING),
   renderPreview: (module) => (
@@ -263,6 +298,9 @@ const spacerDefinition: ModuleDefinition<SpacerModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'basic',
+  editableFields: [
+    { key: 'height', label: 'Height (px)', kind: 'number', valueType: 'number', group: 'style', min: 4, max: 200 },
+  ],
   createDefaultProps: () => ({ height: 24, mobileHeight: undefined }),
   createDefaultSettings: () => createResponsiveSettings({ paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }),
   renderPreview: (module, viewport = 'desktop') => {
@@ -297,6 +335,16 @@ function compositeDefinition(
     imagePosition: imageFirst ? 'left' : 'right',
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'composite',
+    editableFields: [
+      { key: 'image.src', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
+      { key: 'image.alt', label: 'Image alt text', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'text.text', label: 'Text', kind: 'textarea', valueType: 'text', group: 'content' },
+      { key: 'text.ctaText', label: 'Button text', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'text.ctaHref', label: 'Button link', kind: 'url', valueType: 'url', group: 'content' },
+      { key: 'text.align', label: 'Text alignment', kind: 'align', valueType: 'align', group: 'style' },
+      { key: 'text.color', label: 'Text color', kind: 'color', valueType: 'color', group: 'style' },
+      { key: 'text.fontSize', label: 'Font size (px)', kind: 'number', valueType: 'number', group: 'style', min: 8, max: 72 },
+    ],
     createDefaultProps: () => ({
       // Empty src for the same reason as the standalone Image module —
       // no external network dependency; ImagePreview shows a builder

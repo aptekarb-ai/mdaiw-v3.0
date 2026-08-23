@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getCurrentUser, initializeCsrf, loginWithPassword, logout } from './client';
+import { getCurrentUser, initializeCsrf, loginWithPassword, logout, requestAICommand } from './client';
 
 function mockFetchOnce(body: unknown, init: { ok?: boolean; status?: number } = {}) {
   const { ok = true, status = 200 } = init;
@@ -80,5 +80,25 @@ describe('api client', () => {
     const [url, options] = fetchMock.mock.calls[0];
     expect(url).toContain('/api/v1/auth/logout/');
     expect(options.method).toBe('POST');
+  });
+
+  it('requestAICommand posts to the AI Engineer endpoint and returns the parsed response', async () => {
+    const fetchMock = mockFetchOnce({
+      success: true,
+      reply: 'I will add a button module.',
+      action: { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
+      requires_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestAICommand({ message: 'add a button', selected_module: null });
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/v1/email-builder/ai-command/');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toEqual({ message: 'add a button', selected_module: null });
+    expect(result.action).toEqual({ type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] });
   });
 });

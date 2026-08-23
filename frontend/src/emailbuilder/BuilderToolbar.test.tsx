@@ -129,6 +129,27 @@ describe('BuilderToolbar — Validation Center entry point (Feature 12)', () => 
   });
 });
 
+describe('BuilderToolbar — AI Engineer entry point (Feature 14)', () => {
+  it('clicking AI Engineer calls onEditorModeChange("ai")', async () => {
+    const user = userEvent.setup();
+    const { onEditorModeChange } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    expect(onEditorModeChange).toHaveBeenCalledWith('ai');
+  });
+
+  it('reflects editorMode="ai" as active', () => {
+    renderToolbar({ editorMode: 'ai' });
+    expect(screen.getByRole('button', { name: 'AI Engineer' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('Desktop/Mobile device buttons are disabled in AI Engineer mode', () => {
+    renderToolbar({ editorMode: 'ai' });
+    expect(screen.getByRole('button', { name: 'Desktop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
+  });
+});
+
 describe('BuilderToolbar — Export / Deploy entry point (Feature 13)', () => {
   it('clicking Export calls onOpenExportDialog', async () => {
     const user = userEvent.setup();

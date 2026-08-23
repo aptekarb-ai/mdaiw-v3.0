@@ -14,7 +14,7 @@ const PLATFORM_LABELS: Record<EmailPlatform, string> = {
   other: 'Other',
 };
 
-export type EditorMode = 'visual' | 'code' | 'preview' | 'validate';
+export type EditorMode = 'visual' | 'code' | 'preview' | 'validate' | 'ai';
 
 interface BuilderToolbarProps {
   name: string;
@@ -125,6 +125,15 @@ export function BuilderToolbar({
             onClick={() => onEditorModeChange('validate')}
           >
             Validate
+          </button>
+          <button
+            type="button"
+            aria-pressed={editorMode === 'ai'}
+            className={editorMode === 'ai' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
+            onClick={() => onEditorModeChange('ai')}
+          >
+            <span className="mdaiw-icon mdaiw-icon--ai-assistants" aria-hidden="true" />
+            AI Engineer
           </button>
         </div>
 

@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "generatedFrom": "frontend/src/emailbuilder/emailClients.ts",
+  "clientCount": 9,
+  "clients": [
+    {
+      "id": "apple-mail",
+      "name": "Apple Mail",
+      "platformLabel": "macOS",
+      "engine": "webkit",
+      "outlookAffinity": "OTHER"
+    },
+    {
+      "id": "gmail-android",
+      "name": "Gmail",
+      "platformLabel": "Android",
+      "engine": "blink",
+      "outlookAffinity": "OTHER"
+    },
+    {
+      "id": "gmail-desktop",
+      "name": "Gmail",
+      "platformLabel": "Desktop",
+      "engine": "webkit",
+      "outlookAffinity": "OTHER"
+    },
+    {
+      "id": "iphone-mail",
+      "name": "iPhone Mail",
+      "platformLabel": "iOS",
+      "engine": "webkit",
+      "outlookAffinity": "OTHER"
+    },
+    {
+      "id": "outlook-2016",
+      "name": "Outlook 2016",
+      "platformLabel": "Windows",
+      "engine": "outlook-word",
+      "outlookAffinity": "OUTLOOK_CLASSIC"
+    },
+    {
+      "id": "outlook-new",
+      "name": "Outlook (New)",
+      "platformLabel": "Windows",
+      "engine": "outlook-webview",
+      "outlookAffinity": "NEW_OUTLOOK"
+    },
+    {
+      "id": "samsung-mail",
+      "name": "Samsung Mail",
+      "platformLabel": "Android",
+      "engine": "blink",
+      "outlookAffinity": "OTHER"
+    },
+    {
+      "id": "thunderbird",
+      "name": "Thunderbird",
+      "platformLabel": "Desktop",
+      "engine": "gecko",
+      "outlookAffinity": "OTHER"
+    },
+    {
+      "id": "yahoo-mail",
+      "name": "Yahoo Mail",
+      "platformLabel": "Web",
+      "engine": "blink",
+      "outlookAffinity": "OTHER"
+    }
+  ]
+}

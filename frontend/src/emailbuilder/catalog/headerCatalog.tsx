@@ -78,7 +78,10 @@ const DEFAULT_NAV_LINKS: NavLink[] = [
 
 function editableFields(variant: HeaderVariant): SchemaField[] {
   const fields: SchemaField[] = [
-    { key: 'logoSrc', label: 'Logo image URL', kind: 'url', group: 'content' },
+    // Feature 14 V2 — explicitly image_asset (never inferred): the AI
+    // may only set this via the asset-ownership-resolution flow or an
+    // allow-listed external URL.
+    { key: 'logoSrc', label: 'Logo image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
     { key: 'logoAlt', label: 'Logo alt text', kind: 'text', group: 'content' },
     { key: 'logoHref', label: 'Logo link', kind: 'url', group: 'content' },
   ];

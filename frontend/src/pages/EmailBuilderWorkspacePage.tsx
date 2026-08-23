@@ -13,6 +13,8 @@ import { SaveModuleDialog } from '../emailbuilder/SaveModuleDialog';
 import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
 import { PreviewStudioPanel } from '../emailbuilder/PreviewStudioPanel';
 import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
+import { AIEngineerPanel } from '../emailbuilder/AIEngineerPanel';
+import type { AICommandAction } from '../emailbuilder/aiCommand';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
 import { saveEmailAsTemplate } from '../emailbuilder/duplicateEmailDocument';
@@ -202,6 +204,64 @@ export function EmailBuilderWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [builder.modules]);
 
+  // Feature 14 — applies an AI Engineer-proposed action through the SAME
+  // builder mutation functions every manual edit uses (no parallel
+  // mutation system), so it participates in undo/redo for free. For the
+  // three "target: selected" action types, the canvas selection at Apply
+  // time must still be the exact module that was selected when the
+  // command was sent (`capturedSelectedModuleId`) — if the user changed
+  // the selection while the proposal card was showing, this safely
+  // declines rather than silently mutating the wrong module.
+  const handleApplyAiAction = useCallback((action: AICommandAction, capturedSelectedModuleId: string | null): boolean => {
+    const targetsCurrentSelection = action.type === 'UPDATE_MODULE_PROPS' || action.type === 'DELETE_MODULE' || action.type === 'DUPLICATE_MODULE';
+    if (targetsCurrentSelection && builder.selectedModuleId !== capturedSelectedModuleId) {
+      return false;
+    }
+
+    switch (action.type) {
+      case 'INSERT_MODULE': {
+        const entries = action.modules.map((entry) => ({ type: entry.module_type, patch: entry.patch }));
+        builder.addModulesWithProps(entries);
+        return true;
+      }
+      case 'UPDATE_MODULE_PROPS': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        handleUpdateProps(builder.selectedModuleId, action.patch);
+        return true;
+      }
+      case 'DELETE_MODULE': {
+        if (!builder.selectedModuleId) return false;
+        const path = findModulePath(builder.modules, builder.selectedModuleId);
+        if (path?.layout && path?.column) {
+          builder.deleteNestedModule(path.layout.id, path.column.id, builder.selectedModuleId);
+        } else {
+          builder.deleteModule(builder.selectedModuleId);
+        }
+        return true;
+      }
+      case 'DUPLICATE_MODULE': {
+        if (!builder.selectedModuleId) return false;
+        const path = findModulePath(builder.modules, builder.selectedModuleId);
+        if (path?.layout && path?.column) {
+          builder.duplicateNestedModule(path.layout.id, path.column.id, builder.selectedModuleId);
+        } else {
+          builder.duplicateModule(builder.selectedModuleId);
+        }
+        return true;
+      }
+      case 'APPLY_GLOBAL_STYLE': {
+        builder.applyGlobalStyle(action.module_type, action.patch);
+        return true;
+      }
+      case 'NONE':
+      default:
+        return false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, [builder, handleUpdateProps]);
+
   const handleAddModule = useCallback((type: EmailModuleType) => {
     if (activeColumn && !isLayoutModuleType(type)) {
       builder.insertNestedModule(activeColumn.layoutId, activeColumn.columnId, type);
@@ -325,6 +385,13 @@ export function EmailBuilderWorkspacePage() {
               builder.selectModule(moduleId);
             }}
             onApplySafeFix={handleUpdateProps}
+          />
+        ) : editorMode === 'ai' ? (
+          <AIEngineerPanel
+            platform={document.platform}
+            width={document.width}
+            selectedModule={builder.selectedModule}
+            onApplyAction={handleApplyAiAction}
           />
         ) : (
         <>

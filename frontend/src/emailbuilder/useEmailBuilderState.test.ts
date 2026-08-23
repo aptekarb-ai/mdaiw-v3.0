@@ -408,3 +408,61 @@ describe('useEmailBuilderState — Feature 05 nested (column) operations', () =>
     expect(first.columns![0].modules[0].id).not.toBe(second.columns![0].modules[0].id);
   });
 });
+
+describe('useEmailBuilderState — Feature 14 AI Engineer mutators', () => {
+  it('addModuleWithProps appends a module with the given props in one history commit', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModuleWithProps('button', { text: 'Buy Now' }));
+
+    expect(result.current.modules).toHaveLength(1);
+    expect(result.current.modules[0].type).toBe('button');
+    expect((result.current.modules[0].props as { text: string }).text).toBe('Buy Now');
+    expect(result.current.canUndo).toBe(true);
+
+    act(() => result.current.undo());
+    expect(result.current.modules).toHaveLength(0);
+  });
+
+  it('addModulesWithProps inserts several modules as a single undo step', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModulesWithProps([
+      { type: 'text', patch: {} },
+      { type: 'button', patch: { text: 'Shop' } },
+    ]));
+
+    expect(result.current.modules).toHaveLength(2);
+    expect(result.current.modules.map((m) => m.type)).toEqual(['text', 'button']);
+    expect(result.current.selectedModuleId).toBe(result.current.modules[1].id);
+
+    act(() => result.current.undo());
+    expect(result.current.modules).toHaveLength(0);
+  });
+
+  it('applyGlobalStyle patches every top-level module of the given type, leaving others untouched', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => {
+      result.current.addModule('button');
+      result.current.addModule('text');
+      result.current.addModule('button');
+    });
+
+    act(() => result.current.applyGlobalStyle('button', { backgroundColor: '#76C043' }));
+
+    const [first, second, third] = result.current.modules;
+    expect((first.props as { backgroundColor?: string }).backgroundColor).toBe('#76C043');
+    expect((second.props as { backgroundColor?: string }).backgroundColor).not.toBe('#76C043');
+    expect((third.props as { backgroundColor?: string }).backgroundColor).toBe('#76C043');
+  });
+
+  it('applyGlobalStyle also reaches modules nested inside layout columns', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('layout-2col-50-50'));
+    const layout = result.current.modules[0];
+    act(() => result.current.insertNestedModule(layout.id, layout.columns![0].id, 'text'));
+
+    act(() => result.current.applyGlobalStyle('text', { color: '#0082AD' }));
+
+    const nested = result.current.modules[0].columns![0].modules[0];
+    expect((nested.props as { color?: string }).color).toBe('#0082AD');
+  });
+});

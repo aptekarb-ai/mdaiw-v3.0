@@ -18,6 +18,7 @@ vi.mock('../api/client', async () => {
     listSavedModules: vi.fn(),
     createSavedModule: vi.fn(),
     deleteSavedModule: vi.fn(),
+    requestAICommand: vi.fn(),
   };
 });
 
@@ -1352,5 +1353,160 @@ describe('EmailBuilderWorkspacePage — Feature 13 Export / Deploy', () => {
     await user.click(screen.getByRole('button', { name: 'Save as Template' }));
 
     await waitFor(() => expect(patchedModuleCount).toBe(1));
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
+  async function openAiEngineer(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    return screen.findByPlaceholderText(/Type your command/);
+  }
+
+  it('typed add-module command shows a proposal, and Apply adds the module to the canvas', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will add a button module.',
+      action: { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
+      requires_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const input = await openAiEngineer(user);
+
+    await user.type(input, 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Add a button module')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getByText('Shop Now')).toBeInTheDocument();
+  });
+
+  it('a destructive command shows a confirmation-styled proposal, and Cancel leaves the module untouched', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'This will delete the selected module. Please confirm.',
+      action: { type: 'DELETE_MODULE', target: 'selected' },
+      requires_confirmation: true,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    const input = await screen.findByPlaceholderText(/Type your command/);
+    await user.type(input, 'delete this');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Delete the selected module')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getByText('Add your heading or paragraph text here.', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('applying a delete removes the selected module and participates in Undo', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'This will delete the selected module. Please confirm.',
+      action: { type: 'DELETE_MODULE', target: 'selected' },
+      requires_confirmation: true,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    const input = await screen.findByPlaceholderText(/Type your command/);
+    await user.type(input, 'delete this');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Delete the selected module');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.queryByText('Add your heading or paragraph text here.', { selector: 'p' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('Add your heading or paragraph text here.', { selector: 'p' })).toBeInTheDocument();
+  });
+
+  it('an ambiguous/unsupported command shows the clarifying reply without a proposal card', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I'm not sure how to do that yet. I can add a text/image/button/divider/spacer, "
+        + "change the selected module's color/text/size/alignment, delete or duplicate the "
+        + 'selected module, or apply a style change to every module of one type.',
+      action: { type: 'NONE' },
+      requires_confirmation: false,
+      confidence: 0.2,
+      provider: 'deterministic',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const input = await openAiEngineer(user);
+
+    await user.type(input, 'convert this to two columns');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/I'm not sure how to do that yet/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'History (1)' }));
+    expect(screen.getByText('Needs clarification')).toBeInTheDocument();
+  });
+
+  it('a failed request shows a safe error message and records it in history', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.requestAICommand).mockRejectedValue({ message: 'Server error' });
+    const user = userEvent.setup();
+    renderPage();
+    const input = await openAiEngineer(user);
+
+    await user.type(input, 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('We could not reach the AI Engineer. Please try again.')).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'History (1)' }));
+    expect(screen.getByText('Failed')).toBeInTheDocument();
+  });
+
+  it('sends the currently selected module as context', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will update the selected text module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'text', patch: { color: '#76C043' } },
+      requires_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    const input = await screen.findByPlaceholderText(/Type your command/);
+    await user.type(input, 'make the text green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(client.requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'make the text green',
+      selected_module: expect.objectContaining({ type: 'text' }),
+    })));
   });
 });

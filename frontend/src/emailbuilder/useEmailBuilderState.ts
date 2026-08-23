@@ -52,6 +52,17 @@ export interface UseEmailBuilderState {
   loadModules: (modules: EmailModule[]) => void;
   addModule: (type: EmailModuleType) => void;
   insertModuleAt: (type: EmailModuleType, index: number) => void;
+  // Feature 14 — AI Engineer. Same top-level append as addModule, but the
+  // new module's props are seeded from an already-validated patch (see
+  // ai_command.py's `_validate_patch`) in the SAME history commit, so
+  // "add a green button" is one undo step, not two.
+  addModuleWithProps: (type: EmailModuleType, patch: Record<string, unknown>) => string;
+  addModulesWithProps: (entries: { type: EmailModuleType; patch: Record<string, unknown> }[]) => string[];
+  // Feature 14 — GLOBAL_STYLE action: applies one prop patch to every
+  // module of `moduleType` anywhere in the tree (top-level AND nested
+  // inside layout columns — "every button in the email", not just the
+  // top-level ones), as a single history commit.
+  applyGlobalStyle: (moduleType: EmailModuleType, patch: Record<string, unknown>) => void;
   addSavedModule: (saved: SavedEmailModule) => void;
   insertSavedModuleAt: (saved: SavedEmailModule, index: number) => void;
   selectModule: (id: string | null) => void;
@@ -156,6 +167,53 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     commit(reindex(positioned));
     setSelectedModuleId(newModule.id);
     setSelectedColumn(null);
+  }, [commit]);
+
+  const addModuleWithProps = useCallback((type: EmailModuleType, patch: Record<string, unknown>) => {
+    const current = modulesRef.current;
+    const created = createModule(type, current.length);
+    const withProps = Object.keys(patch).length ? { ...created, props: { ...created.props, ...patch } } : created;
+    commit([...current, withProps]);
+    setSelectedModuleId(withProps.id);
+    setSelectedColumn(null);
+    return withProps.id;
+  }, [commit]);
+
+  const addModulesWithProps = useCallback((entries: { type: EmailModuleType; patch: Record<string, unknown> }[]) => {
+    const current = modulesRef.current;
+    const appended: EmailModule[] = [];
+    let runningLength = current.length;
+    for (const entry of entries) {
+      const created = createModule(entry.type, runningLength);
+      const withProps = Object.keys(entry.patch).length
+        ? { ...created, props: { ...created.props, ...entry.patch } }
+        : created;
+      appended.push(withProps);
+      runningLength += 1;
+    }
+    commit(reindex([...current, ...appended]));
+    const ids = appended.map((module) => module.id);
+    setSelectedModuleId(ids[ids.length - 1] ?? null);
+    setSelectedColumn(null);
+    return ids;
+  }, [commit]);
+
+  const applyGlobalStyle = useCallback((moduleType: EmailModuleType, patch: Record<string, unknown>) => {
+    const current = modulesRef.current;
+    const applyToList = (list: EmailModule[]): EmailModule[] => list.map((module) => {
+      let updated = module;
+      if (updated.type === moduleType) {
+        updated = { ...updated, props: { ...updated.props, ...patch } };
+      }
+      if (updated.columns) {
+        updated = {
+          ...updated,
+          columns: updated.columns.map((column) => ({ ...column, modules: applyToList(column.modules) })),
+        };
+      }
+      return updated;
+    });
+    commit(applyToList(current));
   }, [commit]);
 
   const addSavedModule = useCallback((saved: SavedEmailModule) => {
@@ -343,6 +401,9 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     loadModules,
     addModule,
     insertModuleAt,
+    addModuleWithProps,
+    addModulesWithProps,
+    applyGlobalStyle,
     addSavedModule,
     insertSavedModuleAt,
     selectModule,
