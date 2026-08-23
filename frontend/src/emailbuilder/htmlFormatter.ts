@@ -23,9 +23,17 @@ function isOpeningTag(tag: string): boolean {
 }
 
 export function formatEmailHtml(html: string): string {
-  // Split into tags and text, keeping both — every element of `parts` is
-  // either a complete `<...>` tag or a run of text between tags.
-  const parts = html.split(/(<[^>]+>)/).filter((part) => part.length > 0);
+  // Split into comments, tags, and text, keeping all three. The comment
+  // alternative MUST be tried first and MUST scan to the nearest `-->`
+  // (not the nearest `>`): MSO conditional comments such as
+  // `<!--[if mso]><table ...><tr><td><![endif]-->` contain real `<tag>`
+  // markup inside them, so the old bare `<[^>]+>` tag pattern split a
+  // single opaque comment into fake `<table>`/`<tr>`/`<td>` tokens that
+  // corrupted depth tracking and shredded the comment across several
+  // indented lines. Matching `<!--...-->` as one atomic unit first keeps
+  // every MSO/IE conditional comment — including the downlevel-revealed
+  // `<!--[if !mso]><!-->...<!--<![endif]-->` idiom — a single opaque line.
+  const parts = html.split(/(<!--[\s\S]*?-->|<[^>]+>)/).filter((part) => part.length > 0);
   const lines: string[] = [];
   let depth = 0;
 

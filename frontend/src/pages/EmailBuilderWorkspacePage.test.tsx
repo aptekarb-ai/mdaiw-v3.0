@@ -67,6 +67,9 @@ function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
     start_type: 'blank',
     status: 'draft',
     content: { version: 1, modules: [] },
+    email_title: '',
+    email_subject: '',
+    favicon_url: '',
     created_at: '2026-08-20T10:00:00Z',
     updated_at: '2026-08-20T10:00:00Z',
     ...overrides,
@@ -1120,6 +1123,71 @@ describe('EmailBuilderWorkspacePage — Feature 10 Platform Environment', () => 
     await user.click(screen.getByRole('button', { name: /Generic/ }));
     await screen.findByRole('dialog', { name: 'Platform / Environment Mode' });
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 1 (Document Settings)', () => {
+  it('clicking the toolbar Document Settings chip opens the dialog pre-filled from the loaded document', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({
+      email_title: 'Existing Title', email_subject: 'Existing Subject', favicon_url: 'https://cdn.example.com/fav.png',
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    expect(await screen.findByRole('dialog', { name: 'Document Settings' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Existing Title')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Existing Subject')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://cdn.example.com/fav.png')).toBeInTheDocument();
+  });
+
+  it('saving Document Settings PATCHes only title/subject/favicon (content untouched) and closes the dialog', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ email_title: 'August Sale' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.type(screen.getByLabelText('Email Title'), 'August Sale');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', {
+      email_title: 'August Sale', email_subject: '', favicon_url: '',
+    }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('a failed save shows an inline error and keeps the dialog open', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.updateEmailDocument).mockRejectedValue({ message: 'Server error' });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.type(screen.getByLabelText('Email Title'), 'August Sale');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server error');
+    expect(screen.getByRole('dialog', { name: 'Document Settings' })).toBeInTheDocument();
+  });
+
+  it('Cancel closes the dialog without calling updateEmailDocument', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(client.updateEmailDocument).not.toHaveBeenCalled();

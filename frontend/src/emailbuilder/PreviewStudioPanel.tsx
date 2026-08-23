@@ -8,6 +8,8 @@ import './PreviewStudioPanel.css';
 interface PreviewStudioPanelProps {
   width: number;
   content: EmailDocumentContent;
+  emailTitle?: string;
+  faviconUrl?: string;
 }
 
 type SubView = 'desktop' | 'mobile' | 'dark' | 'clients';
@@ -30,14 +32,17 @@ const provider = createLocalHeuristicProvider();
 // computed by the provider-adapter interface (previewProviders.ts) so a
 // future real render provider (Email on Acid/Litmus) can replace
 // `localHeuristicProvider` without this component changing.
-export function PreviewStudioPanel({ width, content }: PreviewStudioPanelProps) {
+export function PreviewStudioPanel({ width, content, emailTitle, faviconUrl }: PreviewStudioPanelProps) {
   const [subView, setSubView] = useState<SubView>('desktop');
   const [compareMode, setCompareMode] = useState(false);
   const [clientResults, setClientResults] = useState<Map<string, ClientRenderResult>>(new Map());
   const [runningAll, setRunningAll] = useState(false);
   const [refreshingClientId, setRefreshingClientId] = useState<string | null>(null);
 
-  const rawHtml = useMemo(() => renderEmailDocument({ width, content }), [width, content]);
+  const rawHtml = useMemo(
+    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl }),
+    [width, content, emailTitle, faviconUrl],
+  );
 
   // `forceRefresh` distinguishes "just show me the current state" (tab
   // open, content changed — reuse a cached result when the content is

@@ -56,6 +56,30 @@ class EmailDocument(models.Model):
         related_name='email_documents',
     )
     name = models.CharField(max_length=120)
+    # Email Document Standards slice — three DELIBERATELY distinct
+    # concepts, never conflated in UI copy or code:
+    #   `name`          the builder/dashboard draft name (above) — never
+    #                    rendered into the email itself.
+    #   `email_title`   rendered verbatim (escaped) into <title> in <head>.
+    #   `email_subject` document/send metadata only — NEVER rendered as
+    #                    HTML markup (no fake <meta name="subject">);
+    #                    exposed for the Email Builder UI, the Email AI
+    #                    Engineer, and future Send/Test/Export integrations.
+    email_title = models.CharField(max_length=150, blank=True, default='')
+    email_subject = models.CharField(max_length=200, blank=True, default='')
+    # Optional. Absent/blank by default. Many email clients ignore
+    # favicons entirely — this is a nice-to-have enhancement, never
+    # presented as an email-client compatibility requirement. Must pass
+    # the same URL-security allow-list as every other URL in this app
+    # (see serializers.py's validate_favicon_url / edm.UNSAFE_URL_PREFIXES).
+    favicon_url = models.URLField(max_length=2000, blank=True, default='')
+    # Reset/Custom CSS — schema added now (Sub-phase 1) so Sub-phase 2
+    # doesn't need a second migration; the renderer/UI only start USING
+    # these once Sub-phase 2 lands. Reset defaults ON per approved
+    # decision; Custom CSS defaults OFF/empty.
+    reset_css_enabled = models.BooleanField(default=True)
+    custom_css_enabled = models.BooleanField(default=False)
+    custom_css = models.TextField(blank=True, default='')
     platform = models.CharField(
         max_length=20, choices=EmailPlatform.choices, default=EmailPlatform.GENERIC,
     )

@@ -33,6 +33,7 @@ interface BuilderToolbarProps {
   onEditorModeChange: (mode: EditorMode) => void;
   onOpenPlatformDialog: () => void;
   onOpenExportDialog: () => void;
+  onOpenDocumentSettingsDialog: () => void;
 }
 
 function statusLabel(saveStatus: SaveStatus, dirty: boolean): string {
@@ -49,6 +50,7 @@ function Separator() {
 export function BuilderToolbar({
   name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode, editorMode,
   onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onOpenPlatformDialog, onOpenExportDialog,
+  onOpenDocumentSettingsDialog,
 }: BuilderToolbarProps) {
   const navigate = useNavigate();
 
@@ -78,6 +80,15 @@ export function BuilderToolbar({
             {PLATFORM_LABELS[platform]}
           </button>
           <span className="builder-toolbar__chip">{width}px</span>
+          <button
+            type="button"
+            className="builder-toolbar__chip builder-toolbar__chip--button"
+            onClick={onOpenDocumentSettingsDialog}
+            title="Email title, subject, and favicon"
+          >
+            <span className="mdaiw-icon mdaiw-icon--edit" aria-hidden="true" />
+            Document Settings
+          </button>
         </div>
       </div>
 

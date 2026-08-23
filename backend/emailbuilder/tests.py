@@ -2349,3 +2349,114 @@ class ProviderSelectionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body['provider'], 'deterministic')
+
+
+# ============================================================================
+# Email Document Standards + Outlook Compatibility Baseline — Sub-phase 1
+# ============================================================================
+
+class EmailDocumentHeadSettingsTests(TestCase):
+    """`email_title`/`email_subject`/`favicon_url` are deliberately
+    distinct from `name` (the builder/dashboard draft name) -- see
+    models.py's EmailDocument docstring. reset_css_enabled/
+    custom_css_enabled/custom_css exist as columns (one migration for the
+    whole slice) but are not yet serializer-exposed -- that is Sub-phase
+    2's scope, verified here by their ABSENCE from the API surface."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='doc.owner', email='owner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='doc.intruder', email='intruder@example.com', password='StrongPass123')
+        self.document = EmailDocument.objects.create(user=self.user, name='August Newsletter', platform='generic', width=700)
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_defaults_on_a_freshly_created_document(self):
+        self.assertEqual(self.document.email_title, '')
+        self.assertEqual(self.document.email_subject, '')
+        self.assertEqual(self.document.favicon_url, '')
+        self.assertTrue(self.document.reset_css_enabled)
+        self.assertFalse(self.document.custom_css_enabled)
+        self.assertEqual(self.document.custom_css, '')
+
+    def test_name_title_and_subject_are_independently_settable(self):
+        """Proves the three concepts are genuinely distinct fields, not
+        aliases of one another."""
+        self.client.force_login(self.user)
+        response = self._patch_json({
+            'name': 'Internal Draft Name',
+            'email_title': 'Big August Sale',
+            'email_subject': "Don't miss our biggest sale of the year",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.name, 'Internal Draft Name')
+        self.assertEqual(self.document.email_title, 'Big August Sale')
+        self.assertEqual(self.document.email_subject, "Don't miss our biggest sale of the year")
+
+    def test_email_title_and_subject_are_trimmed(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'email_title': '  Padded Title  ', 'email_subject': '  Padded Subject  '})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['email_title'], 'Padded Title')
+        self.assertEqual(response.json()['email_subject'], 'Padded Subject')
+
+    def test_email_title_and_subject_may_be_blank(self):
+        """Blank subject is not an error at the model/serializer layer --
+        decision P defers any "recommended" framing to Validation Center
+        (Sub-phase 4), never a hard rejection here."""
+        self.client.force_login(self.user)
+        response = self._patch_json({'email_title': '', 'email_subject': ''})
+        self.assertEqual(response.status_code, 200)
+
+    def test_favicon_https_url_accepted(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': 'https://example.com/favicon.png'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['favicon_url'], 'https://example.com/favicon.png')
+
+    def test_favicon_javascript_scheme_rejected(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': 'javascript:alert(1)'})
+        self.assertEqual(response.status_code, 400)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.favicon_url, '')
+
+    def test_favicon_data_scheme_rejected(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': 'data:image/png;base64,AAAA'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_favicon_blank_clears_it(self):
+        self.document.favicon_url = 'https://example.com/old-favicon.png'
+        self.document.save()
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': ''})
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.favicon_url, '')
+
+    def test_reset_and_custom_css_fields_not_yet_exposed_via_api(self):
+        """Sub-phase 1 scope boundary: these columns exist (schema-ready
+        for Sub-phase 2) but are not serializer fields yet -- patching
+        them is a silent no-op (DRF ignores unknown keys), never a 400,
+        and GET must not leak them as if they were a supported contract."""
+        self.client.force_login(self.user)
+        response = self._patch_json({'reset_css_enabled': False, 'custom_css': 'body { color: red; }'})
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.reset_css_enabled)  # unchanged -- ignored, not applied
+        self.assertNotIn('reset_css_enabled', response.json())
+        self.assertNotIn('custom_css_enabled', response.json())
+        self.assertNotIn('custom_css', response.json())
+
+    def test_non_owner_cannot_patch_head_settings(self):
+        self.client.force_login(self.other_user)
+        response = self._patch_json({'email_title': 'Hijacked'})
+        self.assertEqual(response.status_code, 404)
+
+    def test_anonymous_cannot_patch_head_settings(self):
+        response = self._patch_json({'email_title': 'Hijacked'})
+        self.assertEqual(response.status_code, 403)

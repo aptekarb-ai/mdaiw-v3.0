@@ -34,6 +34,9 @@ function source(): EmailDocument {
         },
       ],
     },
+    email_title: '',
+    email_subject: '',
+    favicon_url: '',
     created_at: '2026-08-20T10:00:00Z',
     updated_at: '2026-08-20T10:00:00Z',
   };

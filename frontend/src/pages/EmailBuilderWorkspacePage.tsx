@@ -16,6 +16,7 @@ import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
 import { AIEngineerPanel } from '../emailbuilder/AIEngineerPanel';
 import type { AICommandAction } from '../emailbuilder/aiCommand';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
+import { DocumentSettingsDialog, type DocumentSettingsInput } from '../emailbuilder/DocumentSettingsDialog';
 import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
 import { saveEmailAsTemplate } from '../emailbuilder/duplicateEmailDocument';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
@@ -44,6 +45,7 @@ export function EmailBuilderWorkspacePage() {
   const [savingModule, setSavingModule] = useState(false);
   const [platformDialogOpen, setPlatformDialogOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [documentSettingsDialogOpen, setDocumentSettingsDialogOpen] = useState(false);
 
   const builder = useEmailBuilderState();
   const savedModulesState = useSavedModules();
@@ -104,6 +106,15 @@ export function EmailBuilderWorkspacePage() {
   const handleApplyPlatform = useCallback(async (platform: EmailPlatform) => {
     if (!id) return;
     const saved = await updateEmailDocument(id, { platform });
+    setDocument(saved);
+  }, [id]);
+
+  // Email Document Standards Sub-phase 1 — same content-untouched PATCH
+  // pattern as handleApplyPlatform; throws on failure so
+  // DocumentSettingsDialog can show its own inline error and stay open.
+  const handleApplyDocumentSettings = useCallback(async (input: DocumentSettingsInput) => {
+    if (!id) return;
+    const saved = await updateEmailDocument(id, input);
     setDocument(saved);
   }, [id]);
 
@@ -353,6 +364,7 @@ export function EmailBuilderWorkspacePage() {
         onEditorModeChange={setEditorMode}
         onOpenPlatformDialog={() => setPlatformDialogOpen(true)}
         onOpenExportDialog={() => setExportDialogOpen(true)}
+        onOpenDocumentSettingsDialog={() => setDocumentSettingsDialogOpen(true)}
       />
 
       {saveStatus === 'error' && (
@@ -369,17 +381,23 @@ export function EmailBuilderWorkspacePage() {
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
             platform={document.platform}
+            emailTitle={document.email_title}
+            faviconUrl={document.favicon_url}
           />
         ) : editorMode === 'preview' ? (
           <PreviewStudioPanel
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
+            emailTitle={document.email_title}
+            faviconUrl={document.favicon_url}
           />
         ) : editorMode === 'validate' ? (
           <ValidationCenterPanel
             width={document.width}
             content={{ version: 1, modules: builder.modules }}
             platform={document.platform}
+            emailTitle={document.email_title}
+            faviconUrl={document.favicon_url}
             onNavigateToModule={(moduleId) => {
               setEditorMode('visual');
               builder.selectModule(moduleId);
@@ -470,6 +488,14 @@ export function EmailBuilderWorkspacePage() {
           content={{ version: 1, modules: builder.modules }}
           onSaveAsTemplate={handleSaveAsTemplate}
           onClose={() => setExportDialogOpen(false)}
+        />
+      )}
+
+      {documentSettingsDialogOpen && (
+        <DocumentSettingsDialog
+          document={document}
+          onApply={handleApplyDocumentSettings}
+          onClose={() => setDocumentSettingsDialogOpen(false)}
         />
       )}
     </div>

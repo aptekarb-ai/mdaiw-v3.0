@@ -1,10 +1,17 @@
 import type { EmailDocumentContent } from './edm';
 import { renderModuleWithOuterStructure } from './registryCore';
-import { renderResponsiveStyles } from './responsiveStyles';
+import { renderEmailHead } from './emailHead';
 
 export interface RenderableEmail {
   width: number;
   content: EmailDocumentContent;
+  // Email Document Standards Sub-phase 1 — optional so every EXISTING
+  // caller/test (CodeEditorPanel, PreviewStudioPanel, ExportDeployDialog,
+  // htmlRenderer.test.ts) keeps compiling unchanged; '' matches today's
+  // always-empty-title baseline exactly, so omitting these is a
+  // zero-behavior-change default, not a silent feature loss.
+  title?: string;
+  faviconUrl?: string;
 }
 
 // The first email renderer layer: Email Document Model -> email-safe HTML
@@ -54,21 +61,21 @@ export function renderEmailBody(document: RenderableEmail): string {
 
 export function renderEmailDocument(document: RenderableEmail): string {
   const body = renderEmailBody(document);
-  // Feature 07 — the ONE controlled responsive <style> block for the
-  // whole document (instruction 45), generated purely from the EDM by
-  // responsiveStyles.ts's centralized generator — never arbitrary user
-  // CSS (instruction 49), and '' (nothing emitted) when the document has
-  // no responsive overrides at all.
-  const responsiveStyles = renderResponsiveStyles(document.content);
+  const head = renderEmailHead({
+    title: document.title ?? '',
+    faviconUrl: document.faviconUrl ?? '',
+    content: document.content,
+  });
   return (
     '<!doctype html>\n'
-    + '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+    // xmlns:v/xmlns:o (VML/Office) — Email Document Standards Sub-phase 1.
+    // The canonical XHTML namespace is UNCHANGED (still http://, never
+    // https://). Namespaces only — actual VML markup generation (ghost
+    // tables, VML buttons/backgrounds) is a later Feature 14 Repair
+    // Engine phase, not this slice.
+    + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">\n'
     + '<head>\n'
-    + '<meta charset="utf-8" />\n'
-    + '<meta name="viewport" content="width=device-width, initial-scale=1.0" />\n'
-    + '<meta http-equiv="X-UA-Compatible" content="IE=edge" />\n'
-    + '<title></title>\n'
-    + responsiveStyles
+    + head
     + '</head>\n'
     // No margin/padding reset on <body> — background-color matches the
     // outer wrapper table exactly, so any client-default body margin is

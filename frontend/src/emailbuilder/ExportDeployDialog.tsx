@@ -84,8 +84,10 @@ export function ExportDeployDialog({ document, content, onSaveAsTemplate, onClos
   }, [onClose]);
 
   const rawHtml = useMemo(
-    () => renderEmailDocument({ width: document.width, content }),
-    [document.width, content],
+    () => renderEmailDocument({
+      width: document.width, content, title: document.email_title, faviconUrl: document.favicon_url,
+    }),
+    [document.width, document.email_title, document.favicon_url, content],
   );
 
   const summary = useMemo(

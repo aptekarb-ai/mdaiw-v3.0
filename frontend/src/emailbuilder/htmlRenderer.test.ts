@@ -282,6 +282,24 @@ describe('renderEmailDocument', () => {
     expect(html).not.toContain('<script');
   });
 
+  // Email Document Standards Sub-phase 1.
+  it('declares the XHTML, VML, and Office XML namespaces on <html>', () => {
+    const html = renderEmailDocument(withModules([]));
+    expect(html).toContain('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">');
+  });
+
+  it('threads the optional title/faviconUrl through to the <head>', () => {
+    const html = renderEmailDocument({ ...withModules([]), title: 'August Newsletter', faviconUrl: 'https://cdn.example.com/fav.png' });
+    expect(html).toContain('<title>August Newsletter</title>');
+    expect(html).toContain('<link rel="icon" type="image/png" href="https://cdn.example.com/fav.png" />');
+  });
+
+  it('omitting title/faviconUrl produces an empty <title> and no favicon link — unchanged from the pre-Sub-phase-1 baseline', () => {
+    const html = renderEmailDocument(withModules([]));
+    expect(html).toContain('<title></title>');
+    expect(html).not.toContain('rel="icon"');
+  });
+
   it('the fluid-width outer table fix still passes every compatibility check (Outlook Safe included)', () => {
     const modules = [
       createModule('layout-2col-50-50', 0),

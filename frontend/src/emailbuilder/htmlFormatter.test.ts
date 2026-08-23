@@ -42,4 +42,68 @@ describe('formatEmailHtml', () => {
     const output = formatEmailHtml(input);
     expect(output.split('\n')[0]).toBe('<!doctype html>');
   });
+
+  // Email Document Standards Sub-phase 1 — MSO conditional comments contain
+  // real `<tag>` markup (e.g. the Outlook ghost-table wrapper), which used
+  // to fool the old bare `<[^>]+>` tag splitter into treating the comment's
+  // internal tags as genuine nesting. They must stay opaque: one unbroken
+  // line, and no effect on the depth of the real HTML around them.
+  it('keeps an MSO conditional comment containing real tags on a single opaque line', () => {
+    const openComment = '<!--[if mso]><table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td><![endif]-->';
+    const closeComment = '<!--[if mso]></td></tr></table><![endif]-->';
+    const input = `<div>${openComment}<p>Hi</p>${closeComment}</div>`;
+    const output = formatEmailHtml(input);
+    const lines = output.split('\n').map((line) => line.trim());
+    expect(lines).toContain(openComment);
+    expect(lines).toContain(closeComment);
+  });
+
+  it('does not let an MSO comment with embedded tags change surrounding indentation depth', () => {
+    const openComment = '<!--[if mso]><table role="presentation" width="600" align="center"><tr><td><![endif]-->';
+    const closeComment = '<!--[if mso]></td></tr></table><![endif]-->';
+    const input = (
+      '<table role="presentation" width="100%">'
+      + '<tr><td align="center">'
+      + openComment
+      + '<table role="presentation" width="100%"><tr><td>Body</td></tr></table>'
+      + closeComment
+      + '</td></tr>'
+      + '</table>'
+    );
+    // Neither MSO comment opens or closes a real nesting level — both sit at
+    // whatever real depth surrounds them (one level deeper than <td>, the
+    // same depth the real inner <table> itself opens at), never a level
+    // deeper as if `<table><tr><td>` inside the comment text were genuine
+    // markup, and never dedented as if `</td></tr></table>` inside the
+    // closing comment were a genuine close.
+    expect(formatEmailHtml(input)).toBe(
+      '<table role="presentation" width="100%">\n'
+      + '  <tr>\n'
+      + '    <td align="center">\n'
+      + `      ${openComment}\n`
+      + '      <table role="presentation" width="100%">\n'
+      + '        <tr>\n'
+      + '          <td>\n'
+      + '            Body\n'
+      + '          </td>\n'
+      + '        </tr>\n'
+      + '      </table>\n'
+      + `      ${closeComment}\n`
+      + '    </td>\n'
+      + '  </tr>\n'
+      + '</table>',
+    );
+  });
+
+  // The downlevel-revealed idiom used by emailHead.ts's X-UA-Compatible
+  // block: `<!--[if !mso]><!-->` is itself ONE full HTML comment (it closes
+  // at its own embedded `-->`), previously split into two fake tokens by
+  // the naive `<[^>]+>` matcher.
+  it('keeps the downlevel-revealed "if !mso" comment pair each on one opaque line', () => {
+    const input = '<!--[if !mso]><!-->\n<meta http-equiv="X-UA-Compatible" content="IE=edge" />\n<!--<![endif]-->';
+    const output = formatEmailHtml(input);
+    const lines = output.split('\n').map((line) => line.trim());
+    expect(lines).toContain('<!--[if !mso]><!-->');
+    expect(lines).toContain('<!--<![endif]-->');
+  });
 });

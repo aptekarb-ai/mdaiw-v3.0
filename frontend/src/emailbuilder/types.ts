@@ -17,6 +17,13 @@ export interface EmailDocument {
   start_type: EmailStartType;
   status: EmailDocumentStatus;
   content: EmailDocumentContent;
+  // Email Document Standards Sub-phase 1 — deliberately distinct from
+  // `name` (the builder/dashboard draft name above). `email_title`
+  // renders into <title>; `email_subject` is send/document metadata,
+  // never rendered as markup. See DocumentSettingsDialog.tsx.
+  email_title: string;
+  email_subject: string;
+  favicon_url: string;
   created_at: string;
   updated_at: string;
 }
@@ -37,6 +44,9 @@ export interface UpdateEmailDocumentInput {
   content?: EmailDocumentContent;
   name?: string;
   platform?: EmailPlatform;
+  email_title?: string;
+  email_subject?: string;
+  favicon_url?: string;
 }
 
 // Feature 04 — a personal Saved Module, as returned by

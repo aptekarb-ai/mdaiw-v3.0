@@ -25,6 +25,13 @@ class EmailDocumentSerializer(serializers.ModelSerializer):
         model = EmailDocument
         fields = [
             'id', 'name', 'platform', 'width', 'start_type', 'status', 'content',
+            # Email Document Standards Sub-phase 1 — deliberately distinct
+            # from `name` (see models.py's EmailDocument docstring).
+            # reset_css_enabled/custom_css_enabled/custom_css exist as DB
+            # columns already (one migration for the whole slice) but are
+            # NOT exposed here yet — Sub-phase 2 adds them once the
+            # renderer/UI/sanitization for them exists.
+            'email_title', 'email_subject', 'favicon_url',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'status', 'created_at', 'updated_at']
@@ -42,6 +49,29 @@ class EmailDocumentSerializer(serializers.ModelSerializer):
                 f'Width must be between {MIN_EMAIL_WIDTH} and {MAX_EMAIL_WIDTH} pixels.',
             )
         return value
+
+    def validate_email_title(self, value):
+        # Optional — blank is valid (renders as an empty <title>, same as
+        # today's always-empty baseline). Only trims; escaping for HTML
+        # output is the renderer's job (htmlRenderer.ts), not storage.
+        return value.strip()
+
+    def validate_email_subject(self, value):
+        # Never rendered as markup — pure document/send metadata, so no
+        # HTML-safety concern here, just trimming.
+        return value.strip()
+
+    def validate_favicon_url(self, value):
+        if not value:
+            return value
+        trimmed = value.strip()
+        lowered = trimmed.lower()
+        for scheme in UNSAFE_URL_PREFIXES:
+            if lowered.startswith(scheme):
+                raise serializers.ValidationError(f'Favicon URL must not use an unsafe scheme ("{scheme}").')
+        if not (lowered.startswith('http://') or lowered.startswith('https://')):
+            raise serializers.ValidationError('Favicon URL must start with http:// or https://.')
+        return trimmed
 
     def validate_content(self, value):
         try:
