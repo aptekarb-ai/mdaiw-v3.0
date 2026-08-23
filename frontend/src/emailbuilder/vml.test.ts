@@ -217,14 +217,14 @@ describe('renderVmlBackground', () => {
 describe('VML integration — button module, full rendered document', () => {
   it('renders no VML when outlookVml is unset (existing behavior unchanged)', () => {
     const button = createModule('button', 0) as unknown as EmailModule<ButtonModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([button]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([button as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 
   it('renders real VML paired with the HTML fallback when outlookVml is enabled', () => {
     const button = createModule('button', 0) as unknown as EmailModule<ButtonModuleProps>;
     button.settings = { ...button.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([button]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([button as unknown as EmailModule]) });
     expect(html).toContain('v:roundrect');
     expect(html).toContain('<!--[if !mso]><!-->');
     expect(html).toContain('<a href=');
@@ -234,7 +234,7 @@ describe('VML integration — button module, full rendered document', () => {
     const button = createModule('button', 0) as unknown as EmailModule<ButtonModuleProps>;
     button.settings = { ...button.settings, outlookVml: true };
     button.props = { ...button.props, widthMode: 'full' };
-    const html = renderEmailBody({ width: 700, content: contentOf([button]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([button as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 });
@@ -242,7 +242,7 @@ describe('VML integration — button module, full rendered document', () => {
 describe('VML integration — hero-background-image module, full rendered document', () => {
   it('renders no VML when outlookVml is unset (existing behavior unchanged)', () => {
     const hero = createModule('hero-background-image', 0) as unknown as EmailModule<HeroModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([hero]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([hero as unknown as EmailModule]) });
     expect(html).not.toContain('v:rect');
   });
 
@@ -250,7 +250,7 @@ describe('VML integration — hero-background-image module, full rendered docume
     const hero = createModule('hero-background-image', 0) as unknown as EmailModule<HeroModuleProps>;
     hero.settings = { ...hero.settings, outlookVml: true };
     hero.props = { ...hero.props, imageSrc: 'https://cdn.example.com/hero.jpg' };
-    const html = renderEmailBody({ width: 700, content: contentOf([hero]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([hero as unknown as EmailModule]) });
     expect(html).toContain('<!--[if gte mso 9]>');
     expect(html).toContain('<v:rect');
     expect(html).toContain('background="https://cdn.example.com/hero.jpg"');
@@ -260,7 +260,7 @@ describe('VML integration — hero-background-image module, full rendered docume
     const hero = createModule('hero-background-image', 0) as unknown as EmailModule<HeroModuleProps>;
     hero.settings = { ...hero.settings, outlookVml: true };
     hero.props = { ...hero.props, imageSrc: 'https://cdn.example.com/hero.jpg', ctaHref: 'https://example.com/shop', ctaText: 'Shop Now' };
-    const html = renderEmailBody({ width: 700, content: contentOf([hero]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([hero as unknown as EmailModule]) });
     expect(html).toContain('<v:rect');
     expect(html).toContain('<v:roundrect');
     expect(html).toContain('href="https://example.com/shop"');
@@ -270,11 +270,11 @@ describe('VML integration — hero-background-image module, full rendered docume
 describe('VML integration — image-text / text-image composite module (nested text.ctaText)', () => {
   it('renders no VML when outlookVml is unset, or when no ctaText is set', () => {
     const module = createModule('image-text', 0) as unknown as EmailModule<CompositeModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
 
     module.settings = { ...module.settings, outlookVml: true };
-    const htmlNoCta = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const htmlNoCta = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(htmlNoCta).not.toContain('v:roundrect');
   });
 
@@ -282,7 +282,7 @@ describe('VML integration — image-text / text-image composite module (nested t
     const module = createModule('text-image', 0) as unknown as EmailModule<CompositeModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, text: { ...module.props.text, ctaText: 'Shop Now', ctaHref: 'https://example.com/shop' } };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).toContain('<v:roundrect');
     expect(html).toContain('href="https://example.com/shop"');
     expect(html).toContain('<!--[if !mso]><!-->');
@@ -292,7 +292,7 @@ describe('VML integration — image-text / text-image composite module (nested t
 describe('VML integration — cta-dual module (two independent CTAs, one filled + one outline)', () => {
   it('renders no VML for either button when outlookVml is unset', () => {
     const module = createModule('cta-dual', 0) as unknown as EmailModule<CtaModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 
@@ -304,7 +304,7 @@ describe('VML integration — cta-dual module (two independent CTAs, one filled 
       ctaHref: 'https://example.com/primary', ctaText: 'Get Started',
       secondaryCtaHref: 'https://example.com/secondary', secondaryCtaText: 'Learn More',
     };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html.match(/<v:roundrect/g)).toHaveLength(2);
     expect(html).toContain('stroke="f"');
     expect(html).toContain('stroke="t"');
@@ -316,7 +316,7 @@ describe('VML integration — cta-dual module (two independent CTAs, one filled 
     const module = createModule('cta-dual', 0) as unknown as EmailModule<CtaModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, ctaHref: 'javascript:alert(1)', secondaryCtaHref: 'javascript:alert(2)' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('javascript:alert');
   });
 });
@@ -326,7 +326,7 @@ describe('VML integration — content-heading-text-cta module (and the withCta c
     const module = createModule('content-heading-text-cta', 0) as unknown as EmailModule<ContentBlockModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, ctaHref: 'https://example.com/read', ctaText: 'Read More' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).toContain('<v:roundrect');
     expect(html).toContain('<!--[if !mso]><!-->');
   });
@@ -334,7 +334,7 @@ describe('VML integration — content-heading-text-cta module (and the withCta c
   it('the CTA-less Heading + Text variant never renders VML even when outlookVml is enabled', () => {
     const module = createModule('content-heading-text', 0) as unknown as EmailModule<ContentBlockModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 
@@ -342,7 +342,7 @@ describe('VML integration — content-heading-text-cta module (and the withCta c
     const module = createModule('content-image-left', 0) as unknown as EmailModule<ContentBlockModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, ctaHref: 'https://example.com/shop', ctaText: 'Shop Now' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).toContain('<v:roundrect');
   });
 });
@@ -352,14 +352,14 @@ describe('VML integration — header-logo-cta module; header-logo-nav plain link
     const module = createModule('header-logo-cta', 0) as unknown as EmailModule<HeaderModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, ctaHref: 'https://example.com/shop', ctaText: 'Shop Now' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).toContain('<v:roundrect');
   });
 
   it('header-logo-nav renders its navLinks as plain text links — never VML-wrapped, even with outlookVml enabled', () => {
     const module = createModule('header-logo-nav', 0) as unknown as EmailModule<HeaderModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 });
@@ -375,7 +375,7 @@ describe('VML integration — hero variants share the same button pairing (cente
     const module = createModule(type, 0) as unknown as EmailModule<HeroModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, ctaHref: 'https://example.com/learn', ctaText: 'Learn More' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).toContain('<v:roundrect');
   });
 });
@@ -384,7 +384,7 @@ describe('VML integration — multi-CTA product modules (independent per-item VM
   it('product-single (one item) renders exactly one VML button', () => {
     const module = createModule('product-single', 0) as unknown as EmailModule<ProductGridModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html.match(/<v:roundrect/g)).toHaveLength(1);
   });
 
@@ -395,7 +395,7 @@ describe('VML integration — multi-CTA product modules (independent per-item VM
       ...module.props,
       items: module.props.items.map((item, i) => ({ ...item, ctaHref: `https://example.com/product-${i}` })),
     };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html.match(/<v:roundrect/g)).toHaveLength(2);
     expect(html).toContain('href="https://example.com/product-0"');
     expect(html).toContain('href="https://example.com/product-1"');
@@ -404,13 +404,13 @@ describe('VML integration — multi-CTA product modules (independent per-item VM
   it('product-grid (four items) renders four independent VML buttons', () => {
     const module = createModule('product-grid', 0) as unknown as EmailModule<ProductGridModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html.match(/<v:roundrect/g)).toHaveLength(4);
   });
 
   it('renders no VML for any item when outlookVml is unset', () => {
     const module = createModule('product-grid', 0) as unknown as EmailModule<ProductGridModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 });
@@ -418,7 +418,7 @@ describe('VML integration — multi-CTA product modules (independent per-item VM
 describe('VML integration — bordered/rounded "pill" links (social-icon-row, social-follow-us, footer-social-legal)', () => {
   it('social-icon-row: renders no VML when outlookVml is unset (existing behavior unchanged)', () => {
     const module = createModule('social-icon-row', 0) as unknown as EmailModule<SocialModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 
@@ -433,7 +433,7 @@ describe('VML integration — bordered/rounded "pill" links (social-icon-row, so
         { label: 'LinkedIn', href: 'https://linkedin.com/example' },
       ],
     };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     // Multiple pill links in one module — each gets its own VML shape.
     expect(html.match(/<v:roundrect/g)).toHaveLength(3);
     expect(html).toContain('href="https://facebook.com/example"');
@@ -453,14 +453,14 @@ describe('VML integration — bordered/rounded "pill" links (social-icon-row, so
     const module = createModule('social-icon-row', 0) as unknown as EmailModule<SocialModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, platforms: [{ label: 'Facebook', href: 'javascript:alert(1)' }] };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('javascript:alert');
   });
 
   it('social-icon-row: VML is strictly [if mso]-scoped; the plain-HTML pill fallback is strictly [if !mso]-scoped (Classic vs. New Outlook separation)', () => {
     const module = createModule('social-icon-row', 0) as unknown as EmailModule<SocialModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     const msoBlocks = [...html.matchAll(/<!--\[if mso\]>([\s\S]*?)<!\[endif\]-->/g)].map((m) => m[1]);
     const pillMsoBlocks = msoBlocks.filter((block) => block.includes('<v:roundrect'));
     expect(pillMsoBlocks.length).toBe(module.props.platforms.length);
@@ -476,7 +476,7 @@ describe('VML integration — bordered/rounded "pill" links (social-icon-row, so
   it('social-follow-us: same shared pill VML pairing applies', () => {
     const module = createModule('social-follow-us', 0) as unknown as EmailModule<SocialModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html.match(/<v:roundrect/g)?.length).toBe(module.props.platforms.length);
   });
 
@@ -484,7 +484,7 @@ describe('VML integration — bordered/rounded "pill" links (social-icon-row, so
     const module = createModule('footer-social-legal', 0) as unknown as EmailModule<FooterModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, preferenceText: 'Manage preferences', preferenceHref: 'https://example.com/prefs' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html.match(/<v:roundrect/g)?.length).toBe(module.props.socialPlatforms.length);
     // The unsubscribe/preference anchors are never wrapped in VML — they
     // carry no border/border-radius styling at all.
@@ -496,7 +496,7 @@ describe('VML integration — bordered/rounded "pill" links (social-icon-row, so
 
   it('footer-social-legal: renders no VML when outlookVml is unset (existing behavior unchanged)', () => {
     const module = createModule('footer-social-legal', 0) as unknown as EmailModule<FooterModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 });
@@ -505,19 +505,19 @@ describe('VML — plain text/navigation links (no bordered/rounded container) ar
   it('header-logo-nav plain nav links stay plain HTML even with outlookVml enabled', () => {
     const module = createModule('header-logo-nav', 0) as unknown as EmailModule<HeaderModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 
   it('footer-preference-unsubscribe plain underlined links stay plain HTML', () => {
     const module = createModule('footer-preference-unsubscribe', 0) as unknown as EmailModule<FooterModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 
   it('content-article-teaser\'s "Read More" link stays a plain text link', () => {
     const module = createModule('content-article-teaser', 0) as unknown as EmailModule<ArticleTeaserModuleProps>;
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     expect(html).not.toContain('v:roundrect');
   });
 });
@@ -527,7 +527,7 @@ describe('VML — Classic Outlook / New Outlook conditional-comment separation (
     const module = createModule('cta-dual', 0) as unknown as EmailModule<CtaModuleProps>;
     module.settings = { ...module.settings, outlookVml: true };
     module.props = { ...module.props, ctaHref: 'https://example.com/primary', secondaryCtaHref: 'https://example.com/secondary' };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     // The document also has its own unrelated outer [if mso] width-table
     // wrapper (a separate, pre-existing bulletproof-email technique) — so
     // only the mso blocks containing a v:roundrect are the button ones;
@@ -549,7 +549,7 @@ describe('VML — Classic Outlook / New Outlook conditional-comment separation (
       ...module.props,
       items: module.props.items.map((item, i) => ({ ...item, ctaHref: `https://example.com/product-${i}` })),
     };
-    const html = renderEmailBody({ width: 700, content: contentOf([module]) });
+    const html = renderEmailBody({ width: 700, content: contentOf([module as unknown as EmailModule]) });
     // Simulate what New Outlook (a Chromium engine that ignores MSO
     // conditional comments entirely) sees: strip every [if mso]...[endif]
     // block and confirm four real, clickable <a> buttons remain.

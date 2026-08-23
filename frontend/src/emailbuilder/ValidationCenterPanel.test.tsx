@@ -20,7 +20,12 @@ vi.mock('./learningSignals', async (importOriginal) => {
   };
 });
 
-function textModuleWith(overrides: Partial<TextModuleProps>): EmailModule<TextModuleProps> {
+// Returns the widened EmailModule (not EmailModule<TextModuleProps>) — every
+// call site below only needs a real module for the shared content()/render
+// path, never typed .props access afterward, and the widened return avoids
+// forcing TextModuleProps to satisfy EmailModule<Record<string, unknown>>'s
+// index signature (same posture as layoutModel.test.ts's textModule()).
+function textModuleWith(overrides: Partial<TextModuleProps>): EmailModule {
   const module = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
   return { ...module, props: { ...module.props, ...overrides } };
 }
