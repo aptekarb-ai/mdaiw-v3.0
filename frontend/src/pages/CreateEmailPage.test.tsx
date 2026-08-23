@@ -112,7 +112,10 @@ describe('CreateEmailPage', () => {
   it('accepts a valid custom width', async () => {
     vi.mocked(client.createEmailDocument).mockResolvedValue({
       id: 42, name: 'August Product Newsletter', platform: 'generic', width: 900,
-      start_type: 'blank', status: 'draft', content: { version: 1, modules: [] }, created_at: '', updated_at: '',
+      start_type: 'blank', status: 'draft', content: { version: 1, modules: [] },
+      email_title: '', email_subject: '', favicon_url: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      created_at: '', updated_at: '',
     });
     const user = userEvent.setup();
     renderPage();
@@ -138,7 +141,10 @@ describe('CreateEmailPage', () => {
   it('submits the setup and navigates to the pending builder route on success', async () => {
     vi.mocked(client.createEmailDocument).mockResolvedValue({
       id: 7, name: 'August Product Newsletter', platform: 'generic', width: 700,
-      start_type: 'blank', status: 'draft', content: { version: 1, modules: [] }, created_at: '', updated_at: '',
+      start_type: 'blank', status: 'draft', content: { version: 1, modules: [] },
+      email_title: '', email_subject: '', favicon_url: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      created_at: '', updated_at: '',
     });
     const user = userEvent.setup();
     renderPage();
@@ -214,7 +220,10 @@ describe('CreateEmailPage', () => {
 
     resolveCreate({
       id: 1, name: 'August Product Newsletter', platform: 'generic', width: 700,
-      start_type: 'blank', status: 'draft', content: { version: 1, modules: [] }, created_at: '', updated_at: '',
+      start_type: 'blank', status: 'draft', content: { version: 1, modules: [] },
+      email_title: '', email_subject: '', favicon_url: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      created_at: '', updated_at: '',
     });
     expect(await screen.findByText('Builder pending page')).toBeInTheDocument();
   });

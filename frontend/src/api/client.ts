@@ -10,6 +10,7 @@ import type {
   CreateSavedModuleInput, EmailAsset, EmailDocument, SavedEmailModule,
   UpdateEmailAssetInput, UpdateEmailDocumentInput,
 } from '../emailbuilder/types';
+import type { AICommandRequest, AICommandResponse } from '../emailbuilder/aiCommand';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -227,5 +228,16 @@ export async function updateEmailAsset(
 export async function deleteEmailAsset(id: number | string): Promise<void> {
   await apiRequest<void>(`/api/v1/email-builder/assets/${id}/`, {
     method: 'DELETE',
+  });
+}
+
+// Feature 14 — AI Engineer Voice. Stateless single call: the server only
+// interprets `message` into a validated action; applying it happens
+// entirely client-side (see EmailBuilderWorkspacePage's
+// handleApplyAiAction) through the existing builder mutation functions.
+export async function requestAICommand(input: AICommandRequest): Promise<AICommandResponse> {
+  return apiRequest<AICommandResponse>('/api/v1/email-builder/ai-command/', {
+    method: 'POST',
+    body: JSON.stringify(input),
   });
 }

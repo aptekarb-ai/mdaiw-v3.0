@@ -244,6 +244,48 @@ PROFILE_PHOTO_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 EMAIL_ASSET_MAX_BYTES = 5 * 1024 * 1024
 EMAIL_ASSET_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
+# Module-4 Feature 14 (Email AI Engineer). 3-way provider selection via
+# EMAILBUILDER_AI_COMMAND_PROVIDER: 'openai' (the SAME OPENAI_API_KEY
+# value Yukti/LP AI Review already use — one secret, not a new one),
+# 'local' (EMAILBUILDER_LOCAL_AI_BASE_URL below — any OpenAI-compatible
+# server), or anything else/unset — deterministic only. See
+# emailbuilder/ai_command.py::get_default_email_command_provider(). The
+# deterministic router (emailbuilder/ai_command.py::
+# RuleBasedEmailCommandProvider) is always fully functional regardless of
+# provider selection — same "AI is optional, deterministic is the
+# baseline" posture as YUKTI_AI_PROVIDER above. No API key or local
+# server is ever required for normal operation.
+EMAILBUILDER_AI_COMMAND_PROVIDER = os.environ.get('EMAILBUILDER_AI_COMMAND_PROVIDER', '')
+EMAILBUILDER_AI_COMMAND_MODEL = os.environ.get('EMAILBUILDER_AI_COMMAND_MODEL', 'gpt-4o-mini')
+EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS = float(os.environ.get('EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS', '15'))
+EMAILBUILDER_AI_COMMAND_MAX_OUTPUT_TOKENS = int(os.environ.get('EMAILBUILDER_AI_COMMAND_MAX_OUTPUT_TOKENS', '500'))
+# Separate, tighter throttle for the paid provider call itself — a traffic
+# spike degrades to the free deterministic router rather than the API
+# bill (same reasoning as YUKTI_AI_MAX_REQUESTS_PER_WINDOW).
+EMAILBUILDER_AI_COMMAND_MAX_REQUESTS_PER_WINDOW = int(
+    os.environ.get('EMAILBUILDER_AI_COMMAND_MAX_REQUESTS_PER_WINDOW', '20'),
+)
+EMAILBUILDER_AI_COMMAND_WINDOW_SECONDS = int(os.environ.get('EMAILBUILDER_AI_COMMAND_WINDOW_SECONDS', '60'))
+# General per-user throttle on the whole /ai-command/ endpoint, independent
+# of which provider answers (mirrors YUKTI_INTENT_MAX_REQUESTS below).
+EMAILBUILDER_AI_COMMAND_REQUEST_MAX = int(os.environ.get('EMAILBUILDER_AI_COMMAND_REQUEST_MAX', '30'))
+EMAILBUILDER_AI_COMMAND_REQUEST_WINDOW_SECONDS = int(
+    os.environ.get('EMAILBUILDER_AI_COMMAND_REQUEST_WINDOW_SECONDS', '60'),
+)
+
+# Feature 14 V2 Phase A — optional local/self-hosted provider
+# (EMAILBUILDER_AI_COMMAND_PROVIDER='local'). Any OpenAI-compatible HTTP
+# endpoint works (Ollama, llama.cpp's llama-server, LM Studio, etc.) — see
+# emailbuilder/ai_command_local.py. Both unset (the default) means the
+# local provider is never constructed and the deterministic router alone
+# answers every request — no local server is required for normal
+# operation. EMAILBUILDER_LOCAL_AI_API_KEY is almost never needed (most
+# local servers ignore it) but is provided for the rare server that
+# checks for a bearer token.
+EMAILBUILDER_LOCAL_AI_BASE_URL = os.environ.get('EMAILBUILDER_LOCAL_AI_BASE_URL', '')
+EMAILBUILDER_LOCAL_AI_MODEL = os.environ.get('EMAILBUILDER_LOCAL_AI_MODEL', '')
+EMAILBUILDER_LOCAL_AI_API_KEY = os.environ.get('EMAILBUILDER_LOCAL_AI_API_KEY', '')
+
 # Django upload-size ceiling — comfortably covers FACE_MAX_FRAMES frames at
 # FACE_FRAME_MAX_BYTES each, so an oversized multipart request is rejected by
 # Django itself before any per-file validation or model inference runs.

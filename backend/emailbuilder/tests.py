@@ -1484,3 +1484,1618 @@ class EmailAssetTests(TestCase):
         response = self.client.delete(f'{self.url}{asset_id}/')
         self.assertEqual(response.status_code, 403)
         self.assertTrue(EmailAsset.objects.filter(pk=asset_id).exists())
+
+
+# --- Feature 14 -- AI Engineer Voice --------------------------------------
+
+from unittest.mock import MagicMock  # noqa: E402
+
+from django.core.cache import cache as _cache  # noqa: E402
+from django.test import override_settings  # noqa: E402
+
+from .ai_command import (  # noqa: E402
+    ActionType,
+    FallbackEmailCommandProvider,
+    RuleBasedEmailCommandProvider,
+    _resolve_color,
+    get_default_email_command_provider,
+    requires_confirmation,
+    requires_strong_confirmation,
+    resolve_asset_references,
+    validate_action,
+)
+from .ai_command_openai import OpenAIEmailCommandProvider  # noqa: E402
+from .ai_command_local import LocalEmailCommandProvider  # noqa: E402
+from . import module_capabilities  # noqa: E402
+from .knowledge.rules import KnowledgeRule, KnowledgeRuleValidationError, find_rule, load_rules  # noqa: E402
+
+
+def _selected(module_type, **props):
+    return {'type': module_type, 'props': props}
+
+
+class RuleBasedEmailCommandProviderTests(TestCase):
+    """The deterministic provider is the fully-functional baseline --
+    every one of these must pass with zero configuration, zero network."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_add_single_module(self):
+        result = self.provider.resolve('add a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+        self.assertEqual(result.action['modules'], [{'module_type': 'button', 'patch': {}}])
+        self.assertEqual(result.provider, 'deterministic')
+
+    def test_add_multiple_modules_bounded(self):
+        result = self.provider.resolve('add a text, an image, a button, a divider and a spacer', {})
+        modules = result.action['modules']
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+        self.assertEqual(len(modules), 5)
+        self.assertEqual({m['module_type'] for m in modules}, {'text', 'image', 'button', 'divider', 'spacer'})
+
+    def test_add_unknown_module_asks_which(self):
+        result = self.provider.resolve('add a widget', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('which one', result.reply)
+
+    def test_update_selected_module_color(self):
+        context = {'selected_module': _selected('text', color='#333333')}
+        result = self.provider.resolve('change the color to green', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'text',
+            'patch': {'color': '#76C043'},
+        })
+
+    def test_update_selected_module_hex_color(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('set the background color to #112233', context)
+        self.assertEqual(result.action['patch'], {'backgroundColor': '#112233'})
+
+    def test_update_font_size_bigger_relative_to_current(self):
+        context = {'selected_module': _selected('text', fontSize=16)}
+        result = self.provider.resolve('make the text bigger', context)
+        self.assertEqual(result.action['patch'], {'fontSize': 20})
+
+    def test_update_font_size_explicit(self):
+        context = {'selected_module': _selected('text', fontSize=16)}
+        result = self.provider.resolve('set font size to 30', context)
+        self.assertEqual(result.action['patch'], {'fontSize': 30})
+
+    def test_update_alignment(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('align this center', context)
+        self.assertEqual(result.action['patch'], {'align': 'center'})
+
+    def test_set_text_content(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('set the text to Welcome to our sale', context)
+        self.assertEqual(result.action['patch'].get('text'), 'Welcome to our sale')
+
+    def test_update_without_selection_asks_to_select(self):
+        result = self.provider.resolve('change the color to green', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('Select a module', result.reply)
+
+    def test_update_unsupported_selected_type(self):
+        context = {'selected_module': _selected('layout-2col-50-50')}
+        result = self.provider.resolve('change the color to green', context)
+        # layout-2col-50-50 is not in SUPPORTED_MODULE_TYPES; the serializer
+        # would reject it before this ever runs, but the provider itself
+        # must also degrade safely rather than crash.
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_delete_selected_requires_confirmation(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('delete this module', context)
+        self.assertEqual(result.action, {'type': ActionType.DELETE_MODULE, 'target': 'selected'})
+        self.assertTrue(requires_confirmation(result.action))
+
+    def test_delete_without_selection(self):
+        result = self.provider.resolve('delete this', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_duplicate_selected(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('duplicate this module', context)
+        self.assertEqual(result.action, {'type': ActionType.DUPLICATE_MODULE, 'target': 'selected'})
+        self.assertFalse(requires_confirmation(result.action))
+
+    def test_global_style_requires_confirmation(self):
+        result = self.provider.resolve('make all buttons green', {})
+        self.assertEqual(result.action, {
+            'type': ActionType.APPLY_GLOBAL_STYLE, 'target': 'selected', 'module_type': 'button',
+            'patch': {'backgroundColor': '#76C043'},
+        })
+        self.assertTrue(requires_confirmation(result.action))
+
+    def test_global_style_headings_maps_to_text(self):
+        result = self.provider.resolve('make every heading use the brand dark color', {})
+        self.assertEqual(result.action['module_type'], 'text')
+        self.assertEqual(result.action['patch'], {'color': '#002D38'})
+
+    def test_ambiguous_command_returns_clarification(self):
+        result = self.provider.resolve('make it pop', {'selected_module': _selected('text')})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertTrue(result.reply)
+
+    def test_unsupported_command_safe_response(self):
+        result = self.provider.resolve('convert this section to two columns 40/60', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('not sure how to do that yet', result.reply)
+
+    def test_empty_message(self):
+        result = self.provider.resolve('', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_generate_modules_bounded_vocabulary_example(self):
+        result = self.provider.resolve('add a header text, a hero image and a shop now button', {})
+        modules = result.action['modules']
+        self.assertLessEqual(len(modules), 5)
+        for entry in modules:
+            self.assertIn(entry['module_type'], ('text', 'image', 'button'))
+
+
+class ResolveColorTests(TestCase):
+    def test_hex_passthrough_uppercased(self):
+        self.assertEqual(_resolve_color('#abcdef'), '#ABCDEF')
+
+    def test_named_color(self):
+        self.assertEqual(_resolve_color('green'), '#76C043')
+
+    def test_unknown_word_returns_none(self):
+        self.assertIsNone(_resolve_color('paisley'))
+
+    def test_non_string_returns_none(self):
+        self.assertIsNone(_resolve_color(123))
+
+
+class EmailAiEngineerCssCommandTests(TestCase):
+    """Item F -- deterministic (zero-token) CSS commands: reset CSS
+    enable/disable, custom CSS enable/disable/set/clear. Proposal-only:
+    these tests exercise CommandResult/validate_action, never mutate a
+    document -- applying a proposal is the frontend's job (Apply button),
+    same contract as every other action type."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_enable_reset_css(self):
+        result = self.provider.resolve('enable reset css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': True})
+
+    def test_disable_reset_css(self):
+        result = self.provider.resolve('please disable reset css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': False})
+
+    def test_enable_custom_css(self):
+        result = self.provider.resolve('turn on custom css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': True})
+
+    def test_disable_custom_css(self):
+        result = self.provider.resolve('turn off custom css', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': False})
+
+    def test_clear_custom_css(self):
+        result = self.provider.resolve('remove custom css', {})
+        self.assertEqual(result.action, {'type': ActionType.CLEAR_CUSTOM_CSS})
+
+    def test_set_custom_css(self):
+        result = self.provider.resolve('set custom css to: .brand { color: #002D38; }', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_CUSTOM_CSS, 'css': '.brand { color: #002D38; }'})
+
+    def test_set_custom_css_with_add_phrasing(self):
+        result = self.provider.resolve('add custom css: .x { padding: 4px; }', {})
+        self.assertEqual(result.action['type'], ActionType.SET_CUSTOM_CSS)
+        self.assertEqual(result.action['css'], '.x { padding: 4px; }')
+
+    def test_set_custom_css_rejects_unsafe_css_at_proposal_time(self):
+        result = self.provider.resolve('set custom css to: </style><script>alert(1)</script>', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('cannot apply', result.reply.lower())
+
+    def test_set_custom_css_rejects_obfuscated_unsafe_css_at_proposal_time(self):
+        """Item 3 (closure) -- the AI proposal path shares the exact same
+        normalized security validator, so a hex-escaped javascript:
+        scheme is rejected here too, not just at final Save."""
+        result = self.provider.resolve(r'set custom css to: .x{background:url(j\61vascript:alert(1))}', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('cannot apply', result.reply.lower())
+
+    def test_set_custom_css_rejects_data_url_at_proposal_time(self):
+        """Item 2 (closure) -- data: URLs are rejected here too."""
+        result = self.provider.resolve('set custom css to: .x{background:url(data:image/png;base64,AAAA)}', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('cannot apply', result.reply.lower())
+
+    def test_ambiguous_custom_css_command_asks_for_content(self):
+        result = self.provider.resolve('what about custom css', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_reset_css_ambiguous_asks_enable_or_disable(self):
+        result = self.provider.resolve('what about reset css', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('enable or disable', result.reply.lower())
+
+    def test_all_css_actions_require_confirmation(self):
+        for action in [
+            {'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': True},
+            {'type': ActionType.SET_CUSTOM_CSS_ENABLED, 'enabled': False},
+            {'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'},
+            {'type': ActionType.CLEAR_CUSTOM_CSS},
+        ]:
+            self.assertTrue(requires_confirmation(action))
+
+    def test_short_custom_css_does_not_require_strong_confirmation(self):
+        action = validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'})
+        self.assertFalse(requires_strong_confirmation(action))
+
+    def test_long_custom_css_requires_strong_confirmation(self):
+        action = validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}' * 20})
+        self.assertTrue(requires_strong_confirmation(action))
+
+    def test_validate_action_rejects_set_custom_css_with_non_bool_enabled(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_RESET_CSS_ENABLED, 'enabled': 'yes'}))
+
+    def test_validate_action_rejects_unsafe_set_custom_css(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '<script>alert(1)</script>'}))
+
+    def test_validate_action_rejects_empty_custom_css(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_CUSTOM_CSS, 'css': '   '}))
+
+    def test_validate_action_accepts_clear_custom_css(self):
+        self.assertEqual(validate_action({'type': ActionType.CLEAR_CUSTOM_CSS}), {'type': ActionType.CLEAR_CUSTOM_CSS})
+
+    def test_resolve_asset_references_passes_document_scope_actions_through_unchanged(self):
+        action = {'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'}
+        self.assertEqual(resolve_asset_references(action, request=None), action)
+
+
+class KnowledgeRuleTests(TestCase):
+    """Sub-phase 3, item 13 -- the KnowledgeRule contract stays satisfied
+    by every real rule, and load_rules()/find_rule() behave as the
+    deterministic explain intent (below) depends on."""
+
+    def test_load_rules_returns_nine_outlook_rules_and_five_document_rules(self):
+        rules = load_rules()
+        self.assertEqual(len(rules), 14)
+        for rule in rules:
+            self.assertIsInstance(rule, KnowledgeRule)
+        outlook_rules = [r for r in rules if r.category == 'outlook']
+        document_rules = [r for r in rules if r.category == 'document']
+        self.assertEqual(len(outlook_rules), 9)
+        self.assertEqual(len(document_rules), 5)
+
+    def test_row_collapse_rule_is_kept_in_sync_with_the_repair_engines_actual_safe_fix(self):
+        """Sub-phase 4, item 5/7 -- the Repair Engine's deterministic safe
+        fix for outlook-classic:unsafe-global-row-collapse disables Custom
+        CSS; this knowledge rule must say so, never disagree."""
+        rule = find_rule('global-row-collapse-danger')
+        self.assertTrue(rule.safe_auto_fix)
+        self.assertIn('disables Custom CSS', rule.suggested_fix)
+
+    def test_every_rule_id_is_unique(self):
+        rules = load_rules()
+        ids = [rule.id for rule in rules]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_find_rule_returns_the_matching_rule(self):
+        rule = find_rule('office-96-dpi')
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule.id, 'office-96-dpi')
+
+    def test_find_rule_returns_none_for_an_unknown_id(self):
+        self.assertIsNone(find_rule('not-a-real-rule-id'))
+
+    def test_knowledge_rule_rejects_an_unknown_category(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(
+                id='bad', category='not-a-real-category', title='t', description='d', severity='info',
+                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
+                references=(), confidence=1.0,
+            )
+
+    def test_knowledge_rule_rejects_an_unknown_affected_client(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(
+                id='bad', category='outlook', title='t', description='d', severity='info',
+                affected_clients=('SOME_OTHER_CLIENT',), detection={}, suggested_fix=None, safe_auto_fix=False,
+                references=(), confidence=1.0,
+            )
+
+    def test_knowledge_rule_rejects_an_out_of_range_confidence(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(
+                id='bad', category='outlook', title='t', description='d', severity='info',
+                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
+                references=(), confidence=1.5,
+            )
+
+
+class EmailAiEngineerExplainIntentTests(TestCase):
+    """Sub-phase 3, item 13 -- deterministic (zero-OpenAI-token) "explain
+    X" intent on the always-available RuleBasedEmailCommandProvider,
+    sourced from knowledge/rules.py. Never mutates the document -- action
+    is always NONE, exactly like a genuine out-of-vocabulary command, but
+    with a real, specific reply instead of the generic clarify message."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_explain_new_outlook_vs_word_engine(self):
+        result = self.provider.resolve('explain the difference between new outlook and the word engine', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Word', result.reply)
+        self.assertIn('New Outlook', result.reply)
+
+    def test_explain_96_dpi(self):
+        result = self.provider.resolve('what is 96 dpi for outlook', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('PixelsPerInch', result.reply)
+
+    def test_explain_allowpng(self):
+        result = self.provider.resolve('explain allowpng', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('AllowPNG', result.reply)
+
+    def test_explain_vml_namespace(self):
+        result = self.provider.resolve('why does vml need a namespace', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('xmlns:v', result.reply)
+
+    def test_explain_vml_fallback(self):
+        result = self.provider.resolve('why does vml need a fallback', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('fallback', result.reply.lower())
+
+    def test_explain_row_collapse_danger(self):
+        result = self.provider.resolve('explain the row collapse trick', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('tr', result.reply)
+
+    def test_explain_spacer_row(self):
+        result = self.provider.resolve('what is a spacer row', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('spacer', result.reply.lower())
+
+    def test_explain_font_fallback(self):
+        result = self.provider.resolve('explain outlook font fallback', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('font', result.reply.lower())
+
+    def test_explain_conditional_comment_scope(self):
+        result = self.provider.resolve('explain conditional comment scope', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('mso', result.reply.lower())
+
+    def test_explain_bare_vml_falls_back_to_namespace_rule(self):
+        result = self.provider.resolve('explain vml', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('xmlns:v', result.reply)
+
+    # --- Sub-phase 4, item 6 -- document-standards explain topics ---
+
+    def test_explain_email_title(self):
+        result = self.provider.resolve('explain the email title', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('document name', result.reply)
+
+    def test_explain_email_subject(self):
+        result = self.provider.resolve('what is the subject for', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('send/document metadata', result.reply)
+
+    def test_explain_favicon(self):
+        result = self.provider.resolve('explain favicon requirements', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('http', result.reply.lower())
+
+    def test_explain_reset_css(self):
+        result = self.provider.resolve('explain reset css', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('compatibility baseline', result.reply)
+
+    def test_explain_required_meta_baseline(self):
+        result = self.provider.resolve('what is the required meta baseline', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('charset', result.reply)
+
+    def test_explain_title_never_collides_with_the_set_title_mutation_command(self):
+        """A pure "explain the title" question must never be misread as a
+        mutating SET_EMAIL_TITLE command."""
+        result = self.provider.resolve('explain the email title', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_title_command_still_works_after_the_explain_topics_were_added(self):
+        result = self.provider.resolve('set the title to Summer Sale', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_EMAIL_TITLE, 'value': 'Summer Sale'})
+
+    def test_explain_unrecognized_topic_asks_which_one(self):
+        result = self.provider.resolve('explain something totally unrelated to outlook', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Which one', result.reply)
+
+    def test_explain_never_returns_a_mutating_action_type(self):
+        for message in [
+            'explain 96 dpi', 'why does vml need a fallback', 'what is allowpng',
+        ]:
+            result = self.provider.resolve(message, {})
+            self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_explain_is_checked_before_custom_css_pattern_so_it_never_mutates_css(self):
+        """An "explain" question about a CSS-adjacent Outlook topic must
+        never be misread as a custom-css mutation command."""
+        result = self.provider.resolve('explain the row collapse trick', {})
+        self.assertNotIn('css', result.action)
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+
+class EmailAiEngineerDocumentSettingsCommandTests(TestCase):
+    """Sub-phase 4, item 3 -- title/subject/favicon deterministic commands,
+    pulled forward onto the SAME proposal-before-apply/DOCUMENT_SCOPE
+    contract the Reset/Custom CSS actions already established."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_set_title(self):
+        result = self.provider.resolve('set the title to Summer Sale', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_EMAIL_TITLE, 'title': 'Summer Sale'})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_change_title_phrasing(self):
+        result = self.provider.resolve('change the email title to My Newsletter', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_EMAIL_TITLE, 'title': 'My Newsletter'})
+
+    def test_ambiguous_title_command_asks_for_the_value(self):
+        result = self.provider.resolve('what about the title', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_subject(self):
+        result = self.provider.resolve('set the subject to Big News Today', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_EMAIL_SUBJECT, 'subject': 'Big News Today'})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_ambiguous_subject_command_asks_for_the_value(self):
+        result = self.provider.resolve('change the subject', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_favicon_url(self):
+        result = self.provider.resolve('set favicon url to https://example.com/favicon.png', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_set_favicon_without_the_word_url(self):
+        result = self.provider.resolve('set the favicon to https://example.com/favicon.png', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+
+    def test_set_favicon_rejects_an_unsafe_scheme(self):
+        result = self.provider.resolve('set favicon url to javascript:alert(1)', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_favicon_with_no_value_asks_for_one(self):
+        result = self.provider.resolve('set favicon url to', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_remove_favicon(self):
+        result = self.provider.resolve('remove the favicon', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.CLEAR_FAVICON})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_clear_favicon_phrasing(self):
+        result = self.provider.resolve('clear the favicon', {})
+        self.assertEqual(validate_action(result.action), {'type': ActionType.CLEAR_FAVICON})
+
+
+class ValidateActionTests(TestCase):
+    """The shared allow-list gate -- must reject anything malformed or
+    outside the known vocabulary regardless of which provider produced
+    it, matching the module docstring's defense-in-depth guarantee."""
+
+    def test_none_action(self):
+        self.assertIsNone(validate_action(None))
+
+    def test_not_a_dict(self):
+        self.assertIsNone(validate_action('delete everything'))
+
+    def test_unknown_action_type_rejected(self):
+        self.assertIsNone(validate_action({'type': 'DROP_DATABASE'}))
+
+    def test_insert_module_unknown_type_dropped(self):
+        # Feature 14 V2 — 'layout-2col-50-50' is now a genuinely
+        # registered type (Phase A removed the old 5-type cap), so this
+        # test uses a truly nonexistent type string to keep testing
+        # "unknown type dropped, known type kept."
+        result = validate_action({
+            'type': ActionType.INSERT_MODULE,
+            'modules': [{'module_type': 'not-a-real-type', 'patch': {}}, {'module_type': 'button', 'patch': {}}],
+        })
+        self.assertEqual(result['modules'], [{'module_type': 'button', 'patch': {}}])
+
+    def test_insert_module_all_unknown_rejected(self):
+        result = validate_action({
+            'type': ActionType.INSERT_MODULE,
+            'modules': [{'module_type': 'script', 'patch': {}}],
+        })
+        self.assertIsNone(result)
+
+    def test_insert_module_capped_at_max(self):
+        modules = [{'module_type': 'text', 'patch': {}} for _ in range(20)]
+        result = validate_action({'type': ActionType.INSERT_MODULE, 'modules': modules})
+        self.assertEqual(len(result['modules']), 5)
+
+    def test_update_props_unknown_module_type_rejected(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'not-a-real-type', 'patch': {'color': 'green'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_props_unknown_prop_key_dropped(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'text',
+            'patch': {'color': 'green', 'onclick': 'alert(1)'},
+        })
+        self.assertEqual(result['patch'], {'color': '#76C043'})
+        self.assertNotIn('onclick', result['patch'])
+
+    def test_update_props_javascript_href_rejected(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'button',
+            'patch': {'href': 'javascript:alert(document.cookie)'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_props_data_url_href_rejected(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'button',
+            'patch': {'href': 'data:text/html,<script>alert(1)</script>'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_props_valid_https_href_accepted(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'button',
+            'patch': {'href': 'https://example.com/shop'},
+        })
+        self.assertEqual(result['patch'], {'href': 'https://example.com/shop'})
+
+    def test_update_props_font_size_out_of_range_rejected(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'text', 'patch': {'fontSize': 999},
+        })
+        self.assertIsNone(result)
+
+    def test_update_props_empty_patch_rejected(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'text', 'patch': {},
+        })
+        self.assertIsNone(result)
+
+    def test_image_src_never_settable_as_bare_string(self):
+        """Feature 14 V2 -- `src` IS an AI-editable field now (valueType
+        'image_asset'), but only via the {assetId}/{url} marker shape a
+        provider must use -- never a bare AI-invented string. This proves
+        a compromised provider trying to set it directly still gets
+        silently dropped; see AssetSecurityTests for the marker-shape
+        acceptance/rejection cases."""
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'image',
+            'patch': {'src': 'https://evil.example.com/tracker.png', 'alt': 'Logo'},
+        })
+        self.assertEqual(result['patch'], {'alt': 'Logo'})
+
+    def test_delete_module_always_target_selected(self):
+        result = validate_action({'type': ActionType.DELETE_MODULE, 'target': 'anything-else'})
+        self.assertEqual(result, {'type': ActionType.DELETE_MODULE, 'target': 'selected'})
+
+    def test_global_style_rejects_unknown_module_type(self):
+        result = validate_action({'type': ActionType.APPLY_GLOBAL_STYLE, 'module_type': 'nope', 'patch': {'color': 'green'}})
+        self.assertIsNone(result)
+
+    def test_none_action_type_passthrough(self):
+        self.assertEqual(validate_action({'type': ActionType.NONE}), {'type': ActionType.NONE})
+
+    # --- Sub-phase 4, item 3 -- title/subject/favicon action validation ---
+
+    def test_set_email_title_maps_value_to_title_key(self):
+        result = validate_action({'type': ActionType.SET_EMAIL_TITLE, 'value': ' My Email '})
+        self.assertEqual(result, {'type': ActionType.SET_EMAIL_TITLE, 'title': 'My Email'})
+
+    def test_set_email_title_rejects_empty_value(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_EMAIL_TITLE, 'value': '   '}))
+
+    def test_set_email_title_rejects_missing_value(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_EMAIL_TITLE}))
+
+    def test_set_email_subject_maps_value_to_subject_key(self):
+        result = validate_action({'type': ActionType.SET_EMAIL_SUBJECT, 'value': 'Big News'})
+        self.assertEqual(result, {'type': ActionType.SET_EMAIL_SUBJECT, 'subject': 'Big News'})
+
+    def test_set_favicon_accepts_a_safe_https_url(self):
+        result = validate_action({'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+        self.assertEqual(result, {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+
+    def test_set_favicon_rejects_an_unsafe_scheme(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_FAVICON, 'url': 'javascript:alert(1)'}))
+
+    def test_set_favicon_rejects_a_non_http_scheme(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_FAVICON, 'url': 'ftp://example.com/x.png'}))
+
+    def test_set_favicon_rejects_empty_url(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_FAVICON, 'url': ''}))
+
+    def test_clear_favicon(self):
+        self.assertEqual(validate_action({'type': ActionType.CLEAR_FAVICON}), {'type': ActionType.CLEAR_FAVICON})
+
+    def test_new_document_actions_require_confirmation(self):
+        for action in [
+            {'type': ActionType.SET_EMAIL_TITLE, 'title': 'x'},
+            {'type': ActionType.SET_EMAIL_SUBJECT, 'subject': 'x'},
+            {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/x.png'},
+            {'type': ActionType.CLEAR_FAVICON},
+        ]:
+            self.assertTrue(requires_confirmation(action))
+
+
+class EmailAICommandViewTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='ai.tester', email='ai.tester@example.com', password='StrongPass123')
+        self.url = '/api/v1/email-builder/ai-command/'
+        _cache.clear()
+
+    def _post(self, data):
+        return self.client.post(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_unauthenticated_rejected(self):
+        response = self._post({'message': 'add a button'})
+        self.assertEqual(response.status_code, 403)
+
+    def test_deterministic_add_module_end_to_end(self):
+        """No OPENAI_API_KEY is configured in this test settings module --
+        this genuinely exercises the deterministic provider, which is the
+        real, always-available baseline this feature must never depend on
+        an API key for."""
+        self.client.force_login(self.user)
+        response = self._post({'message': 'add a button'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['success'])
+        self.assertEqual(body['provider'], 'deterministic')
+        self.assertEqual(body['action']['type'], 'INSERT_MODULE')
+        self.assertFalse(body['requires_confirmation'])
+
+    def test_deterministic_delete_requires_confirmation_end_to_end(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'delete this module',
+            'selected_module': {'type': 'button', 'props': {}},
+        })
+        body = response.json()
+        self.assertEqual(body['action']['type'], 'DELETE_MODULE')
+        self.assertTrue(body['requires_confirmation'])
+
+    def test_blank_message_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post({'message': ''})
+        self.assertEqual(response.status_code, 400)
+
+    def test_message_too_long_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post({'message': 'a' * 501})
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_selected_module_type_rejected(self):
+        # Feature 14 V2 — 'layout-2col-50-50' is now a genuinely
+        # registered type (Phase A removed the old 5-type cap), so this
+        # request-boundary rejection test uses a type string the manifest
+        # has never heard of.
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'change the color',
+            'selected_module': {'type': 'not-a-real-type', 'props': {}},
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_rate_limited(self):
+        self.client.force_login(self.user)
+        with override_settings(EMAILBUILDER_AI_COMMAND_REQUEST_MAX=1):
+            first = self._post({'message': 'add a button'})
+            second = self._post({'message': 'add a button'})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()['code'], 'RATE_LIMITED')
+
+    def test_ai_unavailable_falls_back_to_deterministic(self):
+        """Selecting the openai provider without an API key must still
+        answer via the deterministic router -- never a 500, never a
+        broken feature."""
+        self.client.force_login(self.user)
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY=''):
+            response = self._post({'message': 'add a button'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['provider'], 'deterministic')
+
+    def test_ai_configured_but_call_fails_falls_back_to_deterministic(self):
+        """With a key configured but the provider itself raising (e.g. a
+        malformed/failed response), the view must still degrade to the
+        deterministic router -- proves the FallbackEmailCommandProvider
+        wiring end-to-end without a real network call."""
+        self.client.force_login(self.user)
+        broken_client = MagicMock()
+        broken_client.chat.completions.create.side_effect = RuntimeError('boom')
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY='sk-test'):
+            provider = get_default_email_command_provider()
+            provider.primary._client_factory = lambda: broken_client
+            result = provider.resolve('add a button', {})
+        self.assertEqual(result.provider, 'deterministic')
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+
+class OpenAIEmailCommandProviderTests(TestCase):
+    """Unit-tests the real request/response mapping logic with an injected
+    fake client -- no network call, no API key required. This is how the
+    OpenAI integration is verified in this environment (no
+    OPENAI_API_KEY configured here) -- see feature report."""
+
+    def _fake_completion(self, payload_dict):
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=json.dumps(payload_dict)))]
+        return completion
+
+    def test_raises_when_no_api_key(self):
+        provider = OpenAIEmailCommandProvider(client_factory=MagicMock())
+        with override_settings(OPENAI_API_KEY=''):
+            with self.assertRaises(Exception):
+                provider.resolve('add a button', {})
+
+    def test_maps_valid_structured_response(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'Adding a button.',
+            'confidence': 0.95,
+            'action': {
+                'type': 'INSERT_MODULE', 'target': None, 'module_type': None,
+                'modules': [{'module_type': 'button', 'patch': {}}], 'patch': None,
+            },
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('add a button', {})
+        self.assertEqual(result.provider, 'openai')
+        self.assertEqual(result.action['type'], 'INSERT_MODULE')
+        # The raw provider action still passes through the SAME
+        # validate_action() gate the view applies -- proven here directly.
+        validated = validate_action(result.action)
+        self.assertEqual(validated['modules'], [{'module_type': 'button', 'patch': {}}])
+
+    def test_malformed_json_response_raises_unavailable(self):
+        client = MagicMock()
+        bad_completion = MagicMock()
+        bad_completion.choices = [MagicMock(message=MagicMock(content='not valid json'))]
+        client.chat.completions.create.return_value = bad_completion
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            with self.assertRaises(Exception):
+                provider.resolve('add a button', {})
+
+    def test_provider_exception_wrapped_and_never_leaked(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError('secret internal detail')
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            try:
+                provider.resolve('add a button', {})
+                self.fail('expected an exception')
+            except Exception as exc:  # noqa: BLE001
+                self.assertNotIn('secret internal detail', str(exc))
+
+    def test_action_with_unsupported_module_type_is_rejected_by_shared_gate(self):
+        """Proves defense-in-depth: even if the model's JSON schema were
+        somehow bypassed, the shared validate_action() gate still refuses
+        anything outside the generated module-capability manifest's known
+        types. 'hero-image-cta' is a real, registered type (Phase A
+        removed the old 5-type cap) — this uses a type string the
+        manifest has never heard of instead."""
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.9,
+            'action': {
+                'type': 'INSERT_MODULE', 'target': None, 'module_type': None,
+                'modules': [{'module_type': 'not-a-real-type', 'patch': {}}], 'patch': None,
+            },
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('add a hero', {})
+        self.assertIsNone(validate_action(result.action))
+
+
+# ============================================================================
+# Feature 14 V2 — Phase A (Engine Foundation)
+# ============================================================================
+
+class ModuleCapabilitiesDriftTests(TestCase):
+    """The committed shared/module-capabilities.generated.json must stay in
+    lockstep with edm.py's ALLOWED_MODULE_TYPES -- both are meant to
+    describe the SAME 53-type registry (the frontend registry is the one
+    real source of truth; this proves the two independently-read-from
+    artifacts on the Python side haven't drifted apart). If a type is
+    added to one without the other, this fails loudly."""
+
+    def test_manifest_type_set_matches_edm_allowed_types(self):
+        from .edm import ALLOWED_MODULE_TYPES
+        self.assertEqual(module_capabilities.get_all_module_types(), frozenset(ALLOWED_MODULE_TYPES))
+
+    def test_manifest_module_count_is_53(self):
+        self.assertEqual(module_capabilities.manifest_module_count(), 53)
+        self.assertEqual(len(module_capabilities.get_all_module_types()), 53)
+
+    def test_every_module_capability_has_required_keys(self):
+        for module_type in module_capabilities.get_all_module_types():
+            with self.subTest(module_type=module_type):
+                capability = module_capabilities.get_module_capability(module_type)
+                self.assertIsNotNone(capability)
+                for key in ('type', 'label', 'category', 'isLayout', 'columnCount', 'editableFields', 'hasRepeatableField'):
+                    self.assertIn(key, capability)
+
+    def test_layout_types_have_no_editable_fields(self):
+        """Approved Phase A scope: layout modules' only prop (columnWidths)
+        is an array, not a flat scalar field -- never fabricated coverage
+        here."""
+        layout_types = [t for t in module_capabilities.get_all_module_types() if t.startswith('layout-')]
+        self.assertEqual(len(layout_types), 10)
+        for module_type in layout_types:
+            with self.subTest(module_type=module_type):
+                capability = module_capabilities.get_module_capability(module_type)
+                self.assertTrue(capability['isLayout'])
+                self.assertEqual(capability['editableFields'], [])
+
+    def test_image_asset_fields_are_never_inferred_from_a_url_kind_alone(self):
+        """Every field the manifest marks as image_asset must have been
+        hand-tagged at the source (registryCore.tsx's valueType) -- this
+        does not prove the absence of a missed field, but it does prove
+        the ones we know are images (image module's src, hero's imageSrc,
+        header's logoSrc, content's image.src, composite's image.src) are
+        correctly tagged and not left as a generic 'url'."""
+        expected_image_fields = {
+            'image': 'src',
+            'hero-image-cta': 'imageSrc',
+            'hero-background-image': 'imageSrc',
+            'header-logo-center': 'logoSrc',
+            'content-image-left': 'image.src',
+            'content-article-teaser': 'image.src',
+            'image-text': 'image.src',
+            'text-image': 'image.src',
+        }
+        for module_type, field_key in expected_image_fields.items():
+            with self.subTest(module_type=module_type, field=field_key):
+                field = module_capabilities.get_editable_field(module_type, field_key)
+                self.assertIsNotNone(field)
+                self.assertEqual(field['valueType'], 'image_asset')
+
+    def test_missing_manifest_file_raises_loudly(self):
+        import tempfile
+
+        from .module_capabilities import ModuleCapabilityManifestError
+
+        module_capabilities.reset_cache_for_tests()
+        try:
+            with override_settings(BASE_DIR=tempfile.mkdtemp()):
+                with self.assertRaises(ModuleCapabilityManifestError):
+                    module_capabilities.get_all_module_types()
+        finally:
+            module_capabilities.reset_cache_for_tests()
+
+
+class AllModuleTypeValidationTests(TestCase):
+    """Feature 14 V2 Phase A -- validate_action() must handle EVERY
+    registered module type via the generated capability manifest, not
+    just Feature 14 V1's 5-type subset. Loop-driven (subTest) rather than
+    53+ hand-written methods."""
+
+    def test_every_module_type_is_insertable(self):
+        for module_type in module_capabilities.get_all_module_types():
+            with self.subTest(module_type=module_type):
+                result = validate_action({
+                    'type': ActionType.INSERT_MODULE,
+                    'modules': [{'module_type': module_type, 'patch': {}}],
+                })
+                self.assertIsNotNone(result)
+                self.assertEqual(result['modules'][0]['module_type'], module_type)
+
+    def test_every_editable_field_accepts_an_in_range_value_and_rejects_an_unknown_key(self):
+        sample_values = {'text': 'Hello world', 'url': 'https://example.com', 'color': 'green', 'align': 'center', 'font': 'Sample'}
+        checked = 0
+        for module_type in module_capabilities.get_all_module_types():
+            for field in module_capabilities.get_editable_fields(module_type):
+                value_type = field['valueType']
+                if value_type == 'image_asset':
+                    continue  # covered by AssetSecurityTests -- never a bare value
+                if value_type == 'number':
+                    value = field.get('min', 10)
+                elif value_type == 'select':
+                    options = field.get('options') or []
+                    if not options:
+                        continue
+                    value = options[0]['value']
+                elif value_type == 'boolean':
+                    value = True
+                else:
+                    value = sample_values[value_type]
+
+                with self.subTest(module_type=module_type, field=field['key']):
+                    result = validate_action({
+                        'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': module_type,
+                        'patch': {field['key']: value, 'totally-unknown-key-xyz': 'nope'},
+                    })
+                    self.assertIsNotNone(result)
+                    self.assertIn(field['key'], result['patch'])
+                    self.assertNotIn('totally-unknown-key-xyz', result['patch'])
+                    checked += 1
+        # Sanity: this test is only meaningful if it actually walked a
+        # realistic number of fields (regression guard against a future
+        # refactor accidentally emptying every module's editableFields).
+        self.assertGreater(checked, 50)
+
+    def test_module_types_with_no_editable_fields_reject_any_prop_edit(self):
+        for module_type in module_capabilities.get_all_module_types():
+            if module_capabilities.get_editable_fields(module_type):
+                continue
+            with self.subTest(module_type=module_type):
+                result = validate_action({
+                    'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': module_type, 'patch': {'anything': 'value'},
+                })
+                self.assertIsNone(result)
+
+
+class ValidateFieldValueTests(TestCase):
+    """Direct unit tests of _validate_field_value's per-valueType dispatch
+    using synthetic field dicts -- covers every valueType branch
+    explicitly, independent of which real catalog fields happen to use
+    it today (e.g. no field currently uses 'boolean', but the dispatch
+    branch itself must still be proven correct)."""
+
+    def setUp(self):
+        from .ai_command import _validate_field_value
+        self.validate = _validate_field_value
+
+    def test_color_valid_and_invalid(self):
+        field = {'valueType': 'color'}
+        self.assertEqual(self.validate(field, 'green'), '#76C043')
+        self.assertIsNone(self.validate(field, 'not-a-color'))
+
+    def test_number_within_and_outside_bounds(self):
+        field = {'valueType': 'number', 'min': 8, 'max': 72}
+        self.assertEqual(self.validate(field, 40), 40)
+        self.assertIsNone(self.validate(field, 999))
+        self.assertIsNone(self.validate(field, 'not-a-number'))
+
+    def test_align_closed_set(self):
+        field = {'valueType': 'align'}
+        self.assertEqual(self.validate(field, 'center'), 'center')
+        self.assertIsNone(self.validate(field, 'justify'))
+
+    def test_url_safe_and_unsafe(self):
+        field = {'valueType': 'url'}
+        self.assertEqual(self.validate(field, 'https://example.com'), 'https://example.com')
+        self.assertIsNone(self.validate(field, 'javascript:alert(1)'))
+
+    def test_boolean(self):
+        field = {'valueType': 'boolean'}
+        self.assertEqual(self.validate(field, True), True)
+        self.assertIsNone(self.validate(field, 'true'))
+
+    def test_select_closed_options(self):
+        field = {'valueType': 'select', 'options': [{'value': 'a', 'label': 'A'}, {'value': 'b', 'label': 'B'}]}
+        self.assertEqual(self.validate(field, 'a'), 'a')
+        self.assertIsNone(self.validate(field, 'c'))
+
+    def test_text_and_font_length_capped(self):
+        for value_type in ('text', 'font'):
+            field = {'valueType': value_type}
+            self.assertEqual(self.validate(field, 'Hello'), 'Hello')
+            self.assertIsNone(self.validate(field, 'x' * 201))
+
+    def test_image_asset_requires_marker_shape(self):
+        field = {'valueType': 'image_asset'}
+        self.assertIsNone(self.validate(field, 'https://example.com/logo.png'))
+        self.assertEqual(self.validate(field, {'assetId': 5}), {'assetId': 5})
+        self.assertEqual(self.validate(field, {'url': 'https://example.com/logo.png'}), {'url': 'https://example.com/logo.png'})
+        self.assertIsNone(self.validate(field, {'url': 'javascript:alert(1)'}))
+        self.assertIsNone(self.validate(field, {'assetId': -1}))
+        self.assertIsNone(self.validate(field, {'assetId': 'not-a-number'}))
+
+    def test_unknown_value_type_rejected(self):
+        field = {'valueType': 'something-made-up'}
+        self.assertIsNone(self.validate(field, 'anything'))
+
+
+class AssetSecurityTests(TestCase):
+    """Feature 14 V2 Phase A -- the AI may only set an image_asset field
+    via an owned EmailAsset or an allow-listed external URL, never an
+    arbitrary AI-invented URL. Covers the full request->view path
+    (resolve_asset_references), not just the pure validate_action() gate."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='asset.owner', email='owner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='asset.intruder', email='intruder@example.com', password='StrongPass123')
+        self.owned_asset = EmailAsset.objects.create(
+            user=self.user, name='Logo', category='logo',
+            source_type='external', external_url='https://example.com/owned-logo.png',
+        )
+        self.other_users_asset = EmailAsset.objects.create(
+            user=self.other_user, name='Not yours', category='image',
+            source_type='external', external_url='https://example.com/intruder-logo.png',
+        )
+        self.url = '/api/v1/email-builder/ai-command/'
+        _cache.clear()
+
+    def _apply_image_action(self, patch):
+        """Bypasses the message-parsing router entirely by calling
+        resolve_asset_references directly against a pre-validated action
+        -- isolates the asset-resolution logic under test from the
+        deterministic router's own (unrelated) command-recognition
+        behavior."""
+        from django.test import RequestFactory
+
+        factory = RequestFactory()
+        request = factory.post(self.url)
+        request.user = self.user
+        action = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'image', 'patch': patch,
+        })
+        return resolve_asset_references(action, request)
+
+    def test_owned_asset_id_resolves_to_its_external_url(self):
+        result = self._apply_image_action({'src': {'assetId': self.owned_asset.pk}})
+        self.assertEqual(result['patch']['src'], 'https://example.com/owned-logo.png')
+
+    def test_other_users_asset_id_does_not_resolve(self):
+        result = self._apply_image_action({'src': {'assetId': self.other_users_asset.pk}})
+        self.assertNotIn('src', result.get('patch', {}))
+
+    def test_nonexistent_asset_id_does_not_resolve(self):
+        result = self._apply_image_action({'src': {'assetId': 999999}})
+        self.assertNotIn('src', result.get('patch', {}))
+
+    def test_malformed_asset_id_rejected_at_validation(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'image',
+            'patch': {'src': {'assetId': 'not-an-int'}},
+        })
+        self.assertNotIn('src', (action or {}).get('patch', {}))
+
+    def test_bare_string_image_url_never_accepted(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'image',
+            'patch': {'src': 'https://attacker.example.com/tracker.png'},
+        })
+        self.assertNotIn('src', (action or {}).get('patch', {}))
+
+    def test_disallowed_url_scheme_rejected(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_MODULE_PROPS, 'module_type': 'image',
+            'patch': {'src': {'url': 'javascript:alert(document.cookie)'}},
+        })
+        self.assertNotIn('src', (action or {}).get('patch', {}))
+
+    def test_well_formed_external_url_marker_accepted(self):
+        result = self._apply_image_action({'src': {'url': 'https://cdn.example.com/hero.png'}})
+        self.assertEqual(result['patch']['src'], 'https://cdn.example.com/hero.png')
+
+    def test_asset_resolution_drops_field_when_patch_becomes_empty_reduces_to_none_action(self):
+        result = self._apply_image_action({'src': {'assetId': self.other_users_asset.pk}})
+        self.assertEqual(result['type'], ActionType.NONE)
+
+    def test_ai_command_view_end_to_end_with_owned_asset(self):
+        self.client.force_login(self.user)
+        response = self.client.post(
+            self.url,
+            data=json.dumps({
+                'message': 'set the image',
+                'selected_module': {'type': 'image', 'props': {}},
+            }),
+            content_type='application/json',
+        )
+        # The deterministic router itself never proposes an image_asset
+        # patch (no NL vocabulary for "use asset N" — that's an OpenAI/
+        # local-provider-only capability, see ai_command_local.py's system
+        # prompt) — this just proves the endpoint round-trips cleanly with
+        # an EmailAsset fixture present, not that this exact message
+        # triggers asset resolution.
+        self.assertEqual(response.status_code, 200)
+
+
+class LocalEmailCommandProviderTests(TestCase):
+    """Mirrors OpenAIEmailCommandProviderTests exactly -- injected mock
+    client, zero real network calls, zero real local server required.
+    Genuinely proves the request/response mapping and safety behavior;
+    does NOT prove a real Ollama/llama.cpp/LM Studio server round-trips
+    correctly (see the Phase A report's LOCAL PROVIDER: NOT AVAILABLE
+    note)."""
+
+    def _fake_completion(self, action_payload):
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=json.dumps(action_payload)))]
+        return completion
+
+    def test_raises_when_no_base_url_configured(self):
+        provider = LocalEmailCommandProvider(client_factory=lambda: MagicMock())
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL=''):
+            with self.assertRaises(Exception):
+                provider.resolve('add a button', {})
+
+    def test_successful_call_maps_to_command_result(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'I will add a button.', 'confidence': 0.8,
+            'action': {
+                'type': 'INSERT_MODULE', 'target': None, 'module_type': None,
+                'modules': [{'module_type': 'button', 'patch': {}}], 'patch': None,
+            },
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            result = provider.resolve('add a button', {})
+        self.assertEqual(result.provider, 'local')
+        self.assertEqual(result.action['type'], 'INSERT_MODULE')
+
+    def test_malformed_json_response_raises_provider_unavailable(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = MagicMock(
+            choices=[MagicMock(message=MagicMock(content='not valid json'))],
+        )
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            with self.assertRaises(Exception):
+                provider.resolve('add a button', {})
+
+    def test_call_exception_does_not_leak_internal_detail(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError('secret internal detail')
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            try:
+                provider.resolve('add a button', {})
+                self.fail('expected an exception')
+            except Exception as exc:  # noqa: BLE001
+                self.assertNotIn('secret internal detail', str(exc))
+
+    def test_action_with_unsupported_module_type_is_rejected_by_shared_gate(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.9,
+            'action': {
+                'type': 'INSERT_MODULE', 'target': None, 'module_type': None,
+                'modules': [{'module_type': 'not-a-real-type', 'patch': {}}], 'patch': None,
+            },
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            result = provider.resolve('add a hero', {})
+        self.assertIsNone(validate_action(result.action))
+
+
+class ProviderSelectionTests(TestCase):
+    """The 3-way EMAILBUILDER_AI_COMMAND_PROVIDER switch (Phase A) --
+    proves the deterministic router is ALWAYS the safe default, and that
+    each optional provider is only ever wired in when BOTH selected AND
+    configured, exactly mirroring V1's OpenAI-only posture extended to a
+    third option."""
+
+    def test_default_unset_provider_is_deterministic_only(self):
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='', OPENAI_API_KEY='', EMAILBUILDER_LOCAL_AI_BASE_URL=''):
+            provider = get_default_email_command_provider()
+        self.assertIsInstance(provider, RuleBasedEmailCommandProvider)
+
+    def test_local_selected_but_not_configured_is_deterministic_only(self):
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='local', EMAILBUILDER_LOCAL_AI_BASE_URL=''):
+            provider = get_default_email_command_provider()
+        self.assertIsInstance(provider, RuleBasedEmailCommandProvider)
+
+    def test_local_selected_and_configured_wraps_with_fallback(self):
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='local', EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
+            provider = get_default_email_command_provider()
+        self.assertIsInstance(provider, FallbackEmailCommandProvider)
+        self.assertIsInstance(provider.primary, LocalEmailCommandProvider)
+        self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
+
+    def test_openai_selected_but_not_configured_is_deterministic_only(self):
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY=''):
+            provider = get_default_email_command_provider()
+        self.assertIsInstance(provider, RuleBasedEmailCommandProvider)
+
+    def test_openai_selected_and_configured_wraps_with_fallback(self):
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY='sk-test'):
+            provider = get_default_email_command_provider()
+        self.assertIsInstance(provider, FallbackEmailCommandProvider)
+        self.assertIsInstance(provider.primary, OpenAIEmailCommandProvider)
+
+    def test_end_to_end_deterministic_still_works_with_no_provider_configured(self):
+        """The zero-paid-token baseline -- no OPENAI_API_KEY, no local
+        server, the endpoint must still work completely."""
+        User = get_user_model()
+        user = User.objects.create_user(username='baseline.user', email='baseline@example.com', password='StrongPass123')
+        self.client.force_login(user)
+        _cache.clear()
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='', OPENAI_API_KEY='', EMAILBUILDER_LOCAL_AI_BASE_URL=''):
+            response = self.client.post(
+                '/api/v1/email-builder/ai-command/',
+                data=json.dumps({'message': 'add a button'}),
+                content_type='application/json',
+            )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['provider'], 'deterministic')
+
+
+# ============================================================================
+# Email Document Standards + Outlook Compatibility Baseline — Sub-phase 1
+# ============================================================================
+
+class EmailDocumentHeadSettingsTests(TestCase):
+    """`email_title`/`email_subject`/`favicon_url` are deliberately
+    distinct from `name` (the builder/dashboard draft name) -- see
+    models.py's EmailDocument docstring. reset_css_enabled/
+    custom_css_enabled/custom_css persistence/security is covered
+    separately by EmailDocumentCssSettingsTests below (Sub-phase 2)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='doc.owner', email='owner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='doc.intruder', email='intruder@example.com', password='StrongPass123')
+        self.document = EmailDocument.objects.create(user=self.user, name='August Newsletter', platform='generic', width=700)
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_defaults_on_a_freshly_created_document(self):
+        self.assertEqual(self.document.email_title, '')
+        self.assertEqual(self.document.email_subject, '')
+        self.assertEqual(self.document.favicon_url, '')
+        self.assertTrue(self.document.reset_css_enabled)
+        self.assertFalse(self.document.custom_css_enabled)
+        self.assertEqual(self.document.custom_css, '')
+
+    def test_name_title_and_subject_are_independently_settable(self):
+        """Proves the three concepts are genuinely distinct fields, not
+        aliases of one another."""
+        self.client.force_login(self.user)
+        response = self._patch_json({
+            'name': 'Internal Draft Name',
+            'email_title': 'Big August Sale',
+            'email_subject': "Don't miss our biggest sale of the year",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.name, 'Internal Draft Name')
+        self.assertEqual(self.document.email_title, 'Big August Sale')
+        self.assertEqual(self.document.email_subject, "Don't miss our biggest sale of the year")
+
+    def test_email_title_and_subject_are_trimmed(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'email_title': '  Padded Title  ', 'email_subject': '  Padded Subject  '})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['email_title'], 'Padded Title')
+        self.assertEqual(response.json()['email_subject'], 'Padded Subject')
+
+    def test_email_title_and_subject_may_be_blank(self):
+        """Blank subject is not an error at the model/serializer layer --
+        decision P defers any "recommended" framing to Validation Center
+        (Sub-phase 4), never a hard rejection here."""
+        self.client.force_login(self.user)
+        response = self._patch_json({'email_title': '', 'email_subject': ''})
+        self.assertEqual(response.status_code, 200)
+
+    def test_favicon_https_url_accepted(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': 'https://example.com/favicon.png'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['favicon_url'], 'https://example.com/favicon.png')
+
+    def test_favicon_javascript_scheme_rejected(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': 'javascript:alert(1)'})
+        self.assertEqual(response.status_code, 400)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.favicon_url, '')
+
+    def test_favicon_data_scheme_rejected(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': 'data:image/png;base64,AAAA'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_favicon_blank_clears_it(self):
+        self.document.favicon_url = 'https://example.com/old-favicon.png'
+        self.document.save()
+        self.client.force_login(self.user)
+        response = self._patch_json({'favicon_url': ''})
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.favicon_url, '')
+
+    def test_non_owner_cannot_patch_head_settings(self):
+        self.client.force_login(self.other_user)
+        response = self._patch_json({'email_title': 'Hijacked'})
+        self.assertEqual(response.status_code, 404)
+
+    def test_anonymous_cannot_patch_head_settings(self):
+        response = self._patch_json({'email_title': 'Hijacked'})
+        self.assertEqual(response.status_code, 403)
+
+
+# ============================================================================
+# Email Document Standards — Sub-phase 2 (Reset CSS + Custom CSS)
+# ============================================================================
+
+class EmailDocumentCssSettingsTests(TestCase):
+    """Persistence + the backend security gate for reset_css_enabled/
+    custom_css_enabled/custom_css. The actual Reset CSS text and the
+    non-blocking compatibility-warning detector are frontend-only (see
+    frontend/src/emailbuilder/emailCss.ts's module docstring for why) --
+    nothing here renders CSS, only validates and persists it."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='css.owner', email='css.owner@example.com', password='StrongPass123')
+        self.document = EmailDocument.objects.create(user=self.user, name='August Newsletter', platform='generic', width=700)
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+        self.client.force_login(self.user)
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_reset_css_enabled_by_default(self):
+        self.assertTrue(self.document.reset_css_enabled)
+
+    def test_custom_css_disabled_and_empty_by_default(self):
+        self.assertFalse(self.document.custom_css_enabled)
+        self.assertEqual(self.document.custom_css, '')
+
+    def test_reset_css_can_be_disabled_and_persists(self):
+        response = self._patch_json({'reset_css_enabled': False})
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.reset_css_enabled)
+
+    def test_custom_css_enable_with_valid_css_persists(self):
+        response = self._patch_json({
+            'custom_css_enabled': True,
+            'custom_css': '.brand-heading { color: #002D38; font-weight: 700; }',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.custom_css_enabled)
+        self.assertEqual(self.document.custom_css, '.brand-heading { color: #002D38; font-weight: 700; }')
+
+    def test_custom_css_allows_media_queries_and_pseudo_and_attribute_selectors(self):
+        css = (
+            '@media only screen and (max-width:600px) { .stack { display:block !important; } } '
+            'a[href^="mailto:"] { color: #0082AD; } '
+            '.btn:hover { opacity: 0.9; } '
+            'table { mso-table-lspace: 0pt; mso-table-rspace: 0pt; } '
+            '.icon { background-image: url(https://cdn.example.com/icon.png); }'
+        )
+        response = self._patch_json({'custom_css_enabled': True, 'custom_css': css})
+        self.assertEqual(response.status_code, 200)
+
+    def test_custom_css_image_data_uri_rejected(self):
+        """Item 2 (closure) -- data: URLs are disallowed ENTIRELY, no
+        data:image/ exception. Asset Manager / owned https:// assets are
+        the supported path for images."""
+        response = self._patch_json({
+            'custom_css_enabled': True,
+            'custom_css': '.dot { background-image: url(data:image/png;base64,AAAA); }',
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_style_breakout_rejected(self):
+        response = self._patch_json({'custom_css': 'body{}</style><script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('style', response.json()['errors']['custom_css'][0].lower())
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.custom_css, '')
+
+    def test_custom_css_script_tag_alone_rejected(self):
+        response = self._patch_json({'custom_css': 'body{content:"x"} <script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('script', response.json()['errors']['custom_css'][0].lower())
+
+    def test_custom_css_html_comment_rejected(self):
+        response = self._patch_json({'custom_css': 'body{color:red} <!-- injected -->'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_javascript_scheme_rejected(self):
+        response = self._patch_json({'custom_css': '.x{background:url(javascript:alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_expression_rejected(self):
+        response = self._patch_json({'custom_css': '.x{width:expression(alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_behavior_rejected(self):
+        response = self._patch_json({'custom_css': '.x{behavior:url(evil.htc)}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_moz_binding_rejected(self):
+        response = self._patch_json({'custom_css': '.x{-moz-binding:url(evil.xml)}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_import_rejected(self):
+        response = self._patch_json({'custom_css': '@import url("https://evil.example.com/x.css");'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_non_image_data_uri_rejected(self):
+        response = self._patch_json({'custom_css': "@font-face{src:url(data:font/woff2;base64,AAAA)}"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_obfuscated_javascript_scheme_rejected(self):
+        """Item 3 (closure) -- CSS hex-escaped 'javascript:' (\\61 = a)
+        must be rejected identically to the literal form."""
+        response = self._patch_json({'custom_css': r'.x{background:url(j\61vascript:alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_comment_split_expression_rejected(self):
+        response = self._patch_json({'custom_css': '.x{width:expre/**/ssion(alert(1))}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_uppercase_style_breakout_rejected(self):
+        response = self._patch_json({'custom_css': 'body{}</STYLE><script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_embedded_html_tag_rejected(self):
+        response = self._patch_json({'custom_css': '.x{content:"<img src=x onerror=alert(1)>"}'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_too_long_rejected(self):
+        response = self._patch_json({'custom_css': '.x{color:red}' * 5000})
+        self.assertEqual(response.status_code, 400)
+
+    def test_custom_css_large_realistic_stylesheet_persists_and_reloads_exactly(self):
+        """Closure item 7 -- a genuinely large (~8KB), safe, real-world-
+        shaped stylesheet (many distinct rules, not one repeated string)
+        must save and reload byte-for-byte. The AI chat command's 500-char
+        MESSAGE cap (a bounded-vocabulary limitation of the deterministic
+        router) never applies here -- Custom CSS itself is saved/loaded
+        through the normal Document Settings PATCH, capped only at
+        MAX_CUSTOM_CSS_LENGTH (20000)."""
+        rules = [
+            f'.email-brand-{i} {{ color: #002D38; font-weight: 600; padding: {i % 20}px; '
+            f'border-radius: 4px; background-color: #F4F6F8; }}'
+            for i in range(140)
+        ]
+        large_css = '\n'.join(rules)
+        self.assertGreater(len(large_css), 5000)
+        self.assertLess(len(large_css), 20000)
+
+        response = self._patch_json({'custom_css_enabled': True, 'custom_css': large_css})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['custom_css'], large_css)
+
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.custom_css, large_css)
+
+        # Simulates a page reload: GET must return the exact same value.
+        reload_response = self.client.get(self.url)
+        self.assertEqual(reload_response.status_code, 200)
+        self.assertEqual(reload_response.json()['custom_css'], large_css)
+
+    def test_custom_css_blank_is_valid_no_op(self):
+        response = self._patch_json({'custom_css': ''})
+        self.assertEqual(response.status_code, 200)
+
+    def test_api_cannot_bypass_sanitizer_via_direct_model_field_omitted_from_request(self):
+        """The security gate lives in the serializer's validate_custom_css
+        -- there is no alternate write path (no bulk-update endpoint, no
+        other serializer) that reaches EmailDocument.custom_css."""
+        response = self._patch_json({'custom_css': '<script>alert(1)</script>'})
+        self.assertEqual(response.status_code, 400)
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.custom_css, '')
+
+
+class CustomCssSecurityValidatorTests(TestCase):
+    """Unit-level coverage of the validator function itself, independent
+    of the API layer (EmailDocumentCssSettingsTests already covers it
+    end-to-end through the serializer)."""
+
+    def test_safe_css_returns_no_violations(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertEqual(validate_custom_css_security('.x { color: red; }'), [])
+
+    def test_non_string_rejected(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security(None))
+
+    def test_vbscript_rejected(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security('.x{background:url(vbscript:msgbox(1))}'))
+
+    def test_case_insensitive_matching(self):
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security('.x{background:URL(JAVASCRIPT:alert(1))}'))
+
+    def test_data_url_rejected_unconditionally(self):
+        """Item 2 (closure) -- no data:image/ exception."""
+        from .custom_css_security import validate_custom_css_security
+        self.assertTrue(validate_custom_css_security('.x{background:url(data:image/png;base64,AAAA)}'))
+        self.assertTrue(validate_custom_css_security('.x{src:url(data:font/woff2;base64,AAAA)}'))
+
+
+class CustomCssSecurityObfuscationTests(TestCase):
+    """Item 3 (closure) -- adversarial/obfuscated variants of every
+    pattern above must still be rejected after normalization. See
+    custom_css_security.py's module docstring ("NORMALIZATION STRATEGY")
+    for exactly what is undone and why."""
+
+    def _rejects(self, css):
+        from .custom_css_security import validate_custom_css_security
+        violations = validate_custom_css_security(css)
+        self.assertTrue(violations, f'expected a violation for: {css!r}')
+
+    def test_hex_escaped_javascript_scheme(self):
+        self._rejects(r'.x{background:url(j\61vascript:alert(1))}')
+
+    def test_hex_escaped_expression(self):
+        self._rejects(r'.x{width:expre\73sion(alert(1))}')
+
+    def test_hex_escaped_import(self):
+        self._rejects(r'\40 import url(evil.css);')
+
+    def test_hex_escaped_behavior(self):
+        self._rejects(r'.x{beh\61vior:url(evil.htc)}')
+
+    def test_hex_escaped_moz_binding(self):
+        self._rejects(r'.x{-moz-b\69nding:url(evil.xml)}')
+
+    def test_hex_escaped_data_scheme_space_terminated(self):
+        # A trailing space after a short hex escape is REQUIRED by the
+        # CSS spec to terminate it before a following hex-digit char
+        # ('a' is itself hex) -- \64ata would otherwise greedily consume
+        # "64a" as one 3-hex-digit escape, not "d" + literal "ata".
+        self._rejects(r'.x{background:url(\64 ata:image/png;base64,AAAA)}')
+
+    def test_literal_nul_control_character_mid_token(self):
+        self._rejects('.x{background:url(java\x00script:alert(1))}')
+
+    def test_mixed_case_javascript_scheme(self):
+        self._rejects('.x{background:url(JavaScript:alert(1))}')
+
+    def test_mixed_case_expression(self):
+        self._rejects('.x{width:EXPRESSION(alert(1))}')
+
+    def test_mixed_case_import(self):
+        self._rejects('@IMPORT url(evil.css);')
+
+    def test_uppercase_style_breakout(self):
+        self._rejects('body{}</STYLE><script>alert(1)</script>')
+
+    def test_comment_split_javascript_scheme(self):
+        self._rejects('.x{background:url(java/**/script:alert(1))}')
+
+    def test_comment_split_expression(self):
+        self._rejects('.x{width:expre/**/ssion(alert(1))}')
+
+    def test_comment_split_moz_binding(self):
+        self._rejects('.x{-moz-/**/binding:url(evil.xml)}')
+
+    def test_quoted_url_javascript_scheme(self):
+        self._rejects('.x{background:url("javascript:alert(1)")}')
+
+    def test_single_quoted_url_javascript_scheme(self):
+        self._rejects(".x{background:url('javascript:alert(1)')}")
+
+    def test_unquoted_url_javascript_scheme(self):
+        self._rejects('.x{background:url(javascript:alert(1))}')
+
+    def test_malformed_url_missing_close_paren_still_rejected(self):
+        self._rejects('.x{background:url(javascript:alert(1)}')

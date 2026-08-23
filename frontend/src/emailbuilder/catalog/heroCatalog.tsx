@@ -54,7 +54,10 @@ function editableFields(hasImage: boolean): SchemaField[] {
   ];
   if (hasImage) {
     fields.push(
-      { key: 'imageSrc', label: 'Image URL', kind: 'url', group: 'content' },
+      // Feature 14 V2 — explicitly image_asset (never inferred): the AI
+      // may only set this via the asset-ownership-resolution flow or an
+      // allow-listed external URL.
+      { key: 'imageSrc', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
       { key: 'imageAlt', label: 'Image alt text', kind: 'text', group: 'content' },
     );
   }

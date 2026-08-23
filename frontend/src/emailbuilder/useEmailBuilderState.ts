@@ -24,8 +24,38 @@ const HISTORY_LIMIT = 50;
 // without needing a real debounce timer.
 const COALESCE_WINDOW_MS = 800;
 
+// Email Document Standards Sub-phase 2 (closure) — document-level email
+// settings (title/subject/favicon/Reset CSS/Custom CSS) join the SAME
+// undo/redo history as the module tree, rather than a second, competing
+// history system. Every history entry snapshots BOTH halves together —
+// see HistoryEntry below — so a sequence like "edit module A -> edit CSS
+// -> edit module B" undoes/redoes each step individually and in the
+// correct order, exactly like three module edits would.
+export interface EmailDocumentSettingsSnapshot {
+  email_title: string;
+  email_subject: string;
+  favicon_url: string;
+  reset_css_enabled: boolean;
+  custom_css_enabled: boolean;
+  custom_css: string;
+}
+
+export const EMPTY_DOCUMENT_SETTINGS: EmailDocumentSettingsSnapshot = {
+  email_title: '',
+  email_subject: '',
+  favicon_url: '',
+  reset_css_enabled: true,
+  custom_css_enabled: false,
+  custom_css: '',
+};
+
+interface HistoryEntry {
+  modules: EmailModule[];
+  documentSettings: EmailDocumentSettingsSnapshot;
+}
+
 interface HistoryRef {
-  stack: EmailModule[][];
+  stack: HistoryEntry[];
   index: number;
 }
 
@@ -46,12 +76,48 @@ export interface UseEmailBuilderState {
   // selection target (not a nested module inside it, not the layout's
   // own outer chrome). See useEmailBuilderState.ts's selectColumn.
   selectedColumn: SelectedColumnRef | null;
+  // Email Document Standards Sub-phase 2 (closure) — the LIVE, editable,
+  // undo/redo-participating document settings. `EmailDocument.email_title`
+  // etc. (the last-fetched-from-server record) is stale until Save; this
+  // is the value Preview/Code/Export/DocumentSettingsDialog/AI Engineer
+  // must all read, exactly the same "live builder state, not the stale
+  // fetched record" relationship `modules` already has with
+  // `EmailDocument.content`.
+  documentSettings: EmailDocumentSettingsSnapshot;
   dirty: boolean;
   canUndo: boolean;
   canRedo: boolean;
-  loadModules: (modules: EmailModule[]) => void;
+  loadModules: (modules: EmailModule[], documentSettings?: EmailDocumentSettingsSnapshot) => void;
+  // One history commit per call (never coalesced — item 1's "CSS A ->
+  // Save CSS B -> Undo = A -> Redo = B" requires each Apply to be its own
+  // undo step). Used by DocumentSettingsDialog's Apply and by the AI
+  // Engineer's document-level (Reset/Custom CSS) proposals — the SAME
+  // function, so there is exactly one code path that ever changes these
+  // fields, matching every other builder mutator's "one function, every
+  // caller" shape.
+  updateDocumentSettings: (patch: Partial<EmailDocumentSettingsSnapshot>) => void;
+  // Sub-phase 4, item 4 — the Repair Engine's "Apply" for a (possibly
+  // multi-issue) proposal: every module prop patch AND the document
+  // patch land in ONE history commit, so a batch of several repaired
+  // issues undoes/redoes as a single step, exactly like any other single
+  // Apply — never one history entry per issue.
+  applyRepairPatch: (
+    modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
+    documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
+  ) => void;
   addModule: (type: EmailModuleType) => void;
   insertModuleAt: (type: EmailModuleType, index: number) => void;
+  // Feature 14 — AI Engineer. Same top-level append as addModule, but the
+  // new module's props are seeded from an already-validated patch (see
+  // ai_command.py's `_validate_patch`) in the SAME history commit, so
+  // "add a green button" is one undo step, not two.
+  addModuleWithProps: (type: EmailModuleType, patch: Record<string, unknown>) => string;
+  addModulesWithProps: (entries: { type: EmailModuleType; patch: Record<string, unknown> }[]) => string[];
+  // Feature 14 — GLOBAL_STYLE action: applies one prop patch to every
+  // module of `moduleType` anywhere in the tree (top-level AND nested
+  // inside layout columns — "every button in the email", not just the
+  // top-level ones), as a single history commit.
+  applyGlobalStyle: (moduleType: EmailModuleType, patch: Record<string, unknown>) => void;
   addSavedModule: (saved: SavedEmailModule) => void;
   insertSavedModuleAt: (saved: SavedEmailModule, index: number) => void;
   selectModule: (id: string | null) => void;
@@ -82,36 +148,38 @@ export interface UseEmailBuilderState {
 
 export function useEmailBuilderState(): UseEmailBuilderState {
   const [modules, setModules] = useState<EmailModule[]>([]);
+  const [documentSettings, setDocumentSettings] = useState<EmailDocumentSettingsSnapshot>(EMPTY_DOCUMENT_SETTINGS);
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
   const [selectedColumn, setSelectedColumn] = useState<SelectedColumnRef | null>(null);
   const [dirty, setDirty] = useState(false);
-  const historyRef = useRef<HistoryRef>({ stack: [[]], index: 0 });
-  const coalesceRef = useRef<{ moduleId: string | null; timestamp: number }>({ moduleId: null, timestamp: 0 });
-  // Synchronously-authoritative mirror of `modules`, updated by every
-  // mutator the instant it computes a new array — never via a functional
-  // setState updater. Two reasons: (1) React 18 StrictMode intentionally
-  // double-invokes updater functions in dev to catch impurity, and
-  // generating a fresh module id inside one would create two different
-  // modules per call; (2) several mutators can legitimately run back to
-  // back inside one event handler/tick, and closing over the `modules`
-  // state variable there would read the same stale snapshot each time.
-  // Reading modulesRef.current instead sidesteps both.
+  const historyRef = useRef<HistoryRef>({ stack: [{ modules: [], documentSettings: EMPTY_DOCUMENT_SETTINGS }], index: 0 });
+  const coalesceRef = useRef<{ key: string | null; timestamp: number }>({ key: null, timestamp: 0 });
+  // Synchronously-authoritative mirrors of `modules`/`documentSettings`,
+  // updated by every mutator the instant it computes a new value — never
+  // via a functional setState updater. Two reasons: (1) React 18
+  // StrictMode intentionally double-invokes updater functions in dev to
+  // catch impurity, and generating a fresh module id inside one would
+  // create two different modules per call; (2) several mutators can
+  // legitimately run back to back inside one event handler/tick, and
+  // closing over the state variable there would read the same stale
+  // snapshot each time. Reading these refs instead sidesteps both.
   const modulesRef = useRef<EmailModule[]>([]);
+  const documentSettingsRef = useRef<EmailDocumentSettingsSnapshot>(EMPTY_DOCUMENT_SETTINGS);
 
-  // The history stack snapshots the WHOLE top-level `modules` tree on
-  // every commit — including any nested columns/modules inside layout
-  // modules. Because of that, every nested (Feature 05) mutator below
-  // needs zero special-case undo/redo plumbing: it just computes a new
-  // top-level array (via layoutModel.ts's immutable tree helpers) and
-  // calls this same `commit`, exactly like a top-level mutator would.
-  const commit = useCallback((next: EmailModule[], coalesceModuleId?: string) => {
+  // The ONE history commit function — every mutator below (module tree
+  // AND document settings) funnels through this. Each entry snapshots
+  // BOTH halves together, so a module edit carries the current document
+  // settings forward unchanged, and a document-settings edit carries the
+  // current module tree forward unchanged — undo/redo always restores a
+  // complete, consistent document state, never one half stale.
+  const commitEntry = useCallback((next: HistoryEntry, coalesceKey?: string) => {
     const history = historyRef.current;
     const now = Date.now();
     const atTip = history.index === history.stack.length - 1;
     const canCoalesce = Boolean(
-      coalesceModuleId
+      coalesceKey
       && atTip
-      && coalesceRef.current.moduleId === coalesceModuleId
+      && coalesceRef.current.key === coalesceKey
       && now - coalesceRef.current.timestamp < COALESCE_WINDOW_MS,
     );
 
@@ -124,17 +192,72 @@ export function useEmailBuilderState(): UseEmailBuilderState {
       history.stack = truncated;
       history.index = history.stack.length - 1;
     }
-    coalesceRef.current = { moduleId: coalesceModuleId ?? null, timestamp: now };
-    modulesRef.current = next;
-    setModules(next);
+    coalesceRef.current = { key: coalesceKey ?? null, timestamp: now };
+    modulesRef.current = next.modules;
+    documentSettingsRef.current = next.documentSettings;
+    setModules(next.modules);
+    setDocumentSettings(next.documentSettings);
     setDirty(true);
   }, []);
 
-  const loadModules = useCallback((initial: EmailModule[]) => {
-    historyRef.current = { stack: [initial], index: 0 };
-    coalesceRef.current = { moduleId: null, timestamp: 0 };
-    modulesRef.current = initial;
-    setModules(initial);
+  // The history stack snapshots the WHOLE top-level `modules` tree on
+  // every commit — including any nested columns/modules inside layout
+  // modules. Because of that, every nested (Feature 05) mutator below
+  // needs zero special-case undo/redo plumbing: it just computes a new
+  // top-level array (via layoutModel.ts's immutable tree helpers) and
+  // calls this same `commit`, exactly like a top-level mutator would.
+  const commit = useCallback((next: EmailModule[], coalesceModuleId?: string) => {
+    commitEntry({ modules: next, documentSettings: documentSettingsRef.current }, coalesceModuleId);
+  }, [commitEntry]);
+
+  // Item 1 — the SAME history commit function document settings share
+  // with module edits. Never coalesced (undefined coalesce key): each
+  // Apply/AI-proposal-Apply is always its own undo step, regardless of
+  // how quickly two saves happen back to back.
+  const updateDocumentSettings = useCallback((patch: Partial<EmailDocumentSettingsSnapshot>) => {
+    commitEntry({ modules: modulesRef.current, documentSettings: { ...documentSettingsRef.current, ...patch } });
+  }, [commitEntry]);
+
+  // Sub-phase 4, item 4 — same recursive one-level-of-column-nesting walk
+  // applyGlobalStyle already uses, so a repair targeting a module nested
+  // inside a layout column is patched correctly without any special-case
+  // path lookup.
+  const applyRepairPatch = useCallback((
+    modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
+    documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
+  ) => {
+    let nextModules = modulesRef.current;
+    if (modulePatches.length > 0) {
+      const patchByModuleId = new Map(modulePatches.map((entry) => [entry.moduleId, entry.propPatch]));
+      const applyToList = (list: EmailModule[]): EmailModule[] => list.map((module) => {
+        let updated = module;
+        const patch = patchByModuleId.get(module.id);
+        if (patch) {
+          updated = { ...updated, props: { ...updated.props, ...patch } };
+        }
+        if (updated.columns) {
+          updated = {
+            ...updated,
+            columns: updated.columns.map((column) => ({ ...column, modules: applyToList(column.modules) })),
+          };
+        }
+        return updated;
+      });
+      nextModules = applyToList(nextModules);
+    }
+    const nextDocumentSettings = documentPatch
+      ? { ...documentSettingsRef.current, ...documentPatch }
+      : documentSettingsRef.current;
+    commitEntry({ modules: nextModules, documentSettings: nextDocumentSettings });
+  }, [commitEntry]);
+
+  const loadModules = useCallback((initialModules: EmailModule[], initialSettings: EmailDocumentSettingsSnapshot = EMPTY_DOCUMENT_SETTINGS) => {
+    historyRef.current = { stack: [{ modules: initialModules, documentSettings: initialSettings }], index: 0 };
+    coalesceRef.current = { key: null, timestamp: 0 };
+    modulesRef.current = initialModules;
+    documentSettingsRef.current = initialSettings;
+    setModules(initialModules);
+    setDocumentSettings(initialSettings);
     setSelectedModuleId(null);
     setSelectedColumn(null);
     setDirty(false);
@@ -156,6 +279,53 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     commit(reindex(positioned));
     setSelectedModuleId(newModule.id);
     setSelectedColumn(null);
+  }, [commit]);
+
+  const addModuleWithProps = useCallback((type: EmailModuleType, patch: Record<string, unknown>) => {
+    const current = modulesRef.current;
+    const created = createModule(type, current.length);
+    const withProps = Object.keys(patch).length ? { ...created, props: { ...created.props, ...patch } } : created;
+    commit([...current, withProps]);
+    setSelectedModuleId(withProps.id);
+    setSelectedColumn(null);
+    return withProps.id;
+  }, [commit]);
+
+  const addModulesWithProps = useCallback((entries: { type: EmailModuleType; patch: Record<string, unknown> }[]) => {
+    const current = modulesRef.current;
+    const appended: EmailModule[] = [];
+    let runningLength = current.length;
+    for (const entry of entries) {
+      const created = createModule(entry.type, runningLength);
+      const withProps = Object.keys(entry.patch).length
+        ? { ...created, props: { ...created.props, ...entry.patch } }
+        : created;
+      appended.push(withProps);
+      runningLength += 1;
+    }
+    commit(reindex([...current, ...appended]));
+    const ids = appended.map((module) => module.id);
+    setSelectedModuleId(ids[ids.length - 1] ?? null);
+    setSelectedColumn(null);
+    return ids;
+  }, [commit]);
+
+  const applyGlobalStyle = useCallback((moduleType: EmailModuleType, patch: Record<string, unknown>) => {
+    const current = modulesRef.current;
+    const applyToList = (list: EmailModule[]): EmailModule[] => list.map((module) => {
+      let updated = module;
+      if (updated.type === moduleType) {
+        updated = { ...updated, props: { ...updated.props, ...patch } };
+      }
+      if (updated.columns) {
+        updated = {
+          ...updated,
+          columns: updated.columns.map((column) => ({ ...column, modules: applyToList(column.modules) })),
+        };
+      }
+      return updated;
+    });
+    commit(applyToList(current));
   }, [commit]);
 
   const addSavedModule = useCallback((saved: SavedEmailModule) => {
@@ -310,8 +480,11 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     const history = historyRef.current;
     if (history.index <= 0) return;
     history.index -= 1;
-    modulesRef.current = history.stack[history.index];
-    setModules(modulesRef.current);
+    const entry = history.stack[history.index];
+    modulesRef.current = entry.modules;
+    documentSettingsRef.current = entry.documentSettings;
+    setModules(entry.modules);
+    setDocumentSettings(entry.documentSettings);
     setDirty(true);
   }, []);
 
@@ -319,8 +492,11 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     const history = historyRef.current;
     if (history.index >= history.stack.length - 1) return;
     history.index += 1;
-    modulesRef.current = history.stack[history.index];
-    setModules(modulesRef.current);
+    const entry = history.stack[history.index];
+    modulesRef.current = entry.modules;
+    documentSettingsRef.current = entry.documentSettings;
+    setModules(entry.modules);
+    setDocumentSettings(entry.documentSettings);
     setDirty(true);
   }, []);
 
@@ -337,12 +513,18 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     selectedModuleId,
     selectedModule,
     selectedColumn,
+    documentSettings,
     dirty,
     canUndo: history.index > 0,
     canRedo: history.index < history.stack.length - 1,
     loadModules,
+    updateDocumentSettings,
+    applyRepairPatch,
     addModule,
     insertModuleAt,
+    addModuleWithProps,
+    addModulesWithProps,
+    applyGlobalStyle,
     addSavedModule,
     insertSavedModuleAt,
     selectModule,

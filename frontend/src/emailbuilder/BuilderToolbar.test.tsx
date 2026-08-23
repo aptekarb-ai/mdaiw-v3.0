@@ -9,6 +9,7 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
   const onViewModeChange = vi.fn();
   const onOpenPlatformDialog = vi.fn();
   const onOpenExportDialog = vi.fn();
+  const onOpenDocumentSettingsDialog = vi.fn();
   render(
     <MemoryRouter>
       <BuilderToolbar
@@ -28,11 +29,14 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
         onEditorModeChange={onEditorModeChange}
         onOpenPlatformDialog={onOpenPlatformDialog}
         onOpenExportDialog={onOpenExportDialog}
+        onOpenDocumentSettingsDialog={onOpenDocumentSettingsDialog}
         {...overrides}
       />
     </MemoryRouter>,
   );
-  return { onEditorModeChange, onViewModeChange, onOpenPlatformDialog, onOpenExportDialog };
+  return {
+    onEditorModeChange, onViewModeChange, onOpenPlatformDialog, onOpenExportDialog, onOpenDocumentSettingsDialog,
+  };
 }
 
 describe('BuilderToolbar — Visual/Code toggle', () => {
@@ -82,6 +86,15 @@ describe('BuilderToolbar — Platform Environment entry point (Feature 10)', () 
   });
 });
 
+describe('BuilderToolbar — Document Settings entry point (Email Document Standards)', () => {
+  it('clicking the Document Settings chip calls onOpenDocumentSettingsDialog', async () => {
+    const user = userEvent.setup();
+    const { onOpenDocumentSettingsDialog } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    expect(onOpenDocumentSettingsDialog).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('BuilderToolbar — Preview Studio entry point (Feature 11)', () => {
   it('clicking Preview calls onEditorModeChange("preview")', async () => {
     const user = userEvent.setup();
@@ -126,6 +139,27 @@ describe('BuilderToolbar — Validation Center entry point (Feature 12)', () => 
   it('no disabled "Coming soon" Validate placeholder remains — the real toggle replaced it', () => {
     renderToolbar();
     expect(screen.queryByTitle('Coming soon')).not.toBeInTheDocument();
+  });
+});
+
+describe('BuilderToolbar — AI Engineer entry point (Feature 14)', () => {
+  it('clicking AI Engineer calls onEditorModeChange("ai")', async () => {
+    const user = userEvent.setup();
+    const { onEditorModeChange } = renderToolbar();
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    expect(onEditorModeChange).toHaveBeenCalledWith('ai');
+  });
+
+  it('reflects editorMode="ai" as active', () => {
+    renderToolbar({ editorMode: 'ai' });
+    expect(screen.getByRole('button', { name: 'AI Engineer' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('Desktop/Mobile device buttons are disabled in AI Engineer mode', () => {
+    renderToolbar({ editorMode: 'ai' });
+    expect(screen.getByRole('button', { name: 'Desktop' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
   });
 });
 

@@ -1,10 +1,27 @@
 import type { EmailDocumentContent } from './edm';
-import { renderModuleWithOuterStructure } from './registryCore';
-import { renderResponsiveStyles } from './responsiveStyles';
+import {
+  renderModuleWithOuterStructure, resolveModuleDefinition, resolveNestedModuleParentPlaceholder,
+  wrapModuleComment,
+} from './registryCore';
+import { renderEmailHead } from './emailHead';
 
 export interface RenderableEmail {
   width: number;
   content: EmailDocumentContent;
+  // Email Document Standards Sub-phase 1 — optional so every EXISTING
+  // caller/test (CodeEditorPanel, PreviewStudioPanel, ExportDeployDialog,
+  // htmlRenderer.test.ts) keeps compiling unchanged; '' matches today's
+  // always-empty-title baseline exactly, so omitting these is a
+  // zero-behavior-change default, not a silent feature loss.
+  title?: string;
+  faviconUrl?: string;
+  // Sub-phase 2 — same zero-behavior-change-when-omitted convention as
+  // title/faviconUrl above (see emailHead.ts's EmailHeadOptions docstring
+  // for why resetCssEnabled defaults false HERE despite defaulting true
+  // at the EmailDocument model layer).
+  resetCssEnabled?: boolean;
+  customCssEnabled?: boolean;
+  customCss?: string;
 }
 
 // The first email renderer layer: Email Document Model -> email-safe HTML
@@ -22,8 +39,23 @@ export interface RenderableEmail {
 // exact same function).
 export function renderEmailBody(document: RenderableEmail): string {
   const modules = [...document.content.modules].sort((a, b) => a.order - b.order);
+  // Sub-phase 3, items 7/8 — every top-level module gets a deterministic
+  // `MODULE-N: LABEL` comment, N assigned strictly from this sorted
+  // render-order position (never from module.type, never persisted —
+  // recomputed fresh on every render, so duplicate/delete/reorder always
+  // renumbers correctly for free). A layout module's own nested-module
+  // comments come back from renderModuleWithOuterStructure still
+  // carrying the MODULE-__PARENT__.N placeholder (layoutCatalog.tsx has
+  // no way to know its own top-level number) — resolved to the real
+  // MODULE-N here, the one place that DOES know it.
   const rows = modules
-    .map((module) => `<tr><td>${renderModuleWithOuterStructure(module)}</td></tr>`)
+    .map((module, index) => {
+      const number = String(index + 1);
+      const definition = resolveModuleDefinition(module.type);
+      const rendered = resolveNestedModuleParentPlaceholder(renderModuleWithOuterStructure(module), number);
+      const commented = wrapModuleComment(rendered, `${number}: ${(definition?.label ?? module.type).toUpperCase()}`);
+      return `<tr><td>${commented}</td></tr>`;
+    })
     .join('');
 
   // Hybrid/fluid width strategy (04_Email_HTML_Rules.md: "explicit widths,
@@ -54,21 +86,24 @@ export function renderEmailBody(document: RenderableEmail): string {
 
 export function renderEmailDocument(document: RenderableEmail): string {
   const body = renderEmailBody(document);
-  // Feature 07 — the ONE controlled responsive <style> block for the
-  // whole document (instruction 45), generated purely from the EDM by
-  // responsiveStyles.ts's centralized generator — never arbitrary user
-  // CSS (instruction 49), and '' (nothing emitted) when the document has
-  // no responsive overrides at all.
-  const responsiveStyles = renderResponsiveStyles(document.content);
+  const head = renderEmailHead({
+    title: document.title ?? '',
+    faviconUrl: document.faviconUrl ?? '',
+    content: document.content,
+    resetCssEnabled: document.resetCssEnabled,
+    customCssEnabled: document.customCssEnabled,
+    customCss: document.customCss,
+  });
   return (
     '<!doctype html>\n'
-    + '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+    // xmlns:v/xmlns:o (VML/Office) — Email Document Standards Sub-phase 1.
+    // The canonical XHTML namespace is UNCHANGED (still http://, never
+    // https://). Namespaces only — actual VML markup generation (ghost
+    // tables, VML buttons/backgrounds) is a later Feature 14 Repair
+    // Engine phase, not this slice.
+    + '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">\n'
     + '<head>\n'
-    + '<meta charset="utf-8" />\n'
-    + '<meta name="viewport" content="width=device-width, initial-scale=1.0" />\n'
-    + '<meta http-equiv="X-UA-Compatible" content="IE=edge" />\n'
-    + '<title></title>\n'
-    + responsiveStyles
+    + head
     + '</head>\n'
     // No margin/padding reset on <body> — background-color matches the
     // outer wrapper table exactly, so any client-default body margin is

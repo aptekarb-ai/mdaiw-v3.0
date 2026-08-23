@@ -1,0 +1,2046 @@
+{
+  "version": 1,
+  "generatedFrom": "frontend/src/emailbuilder/moduleRegistry.tsx",
+  "moduleCount": 53,
+  "modules": [
+    {
+      "type": "button",
+      "label": "Button",
+      "category": "cta",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "text",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "href",
+          "label": "Link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "fontSize",
+          "label": "Font size (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 8,
+          "max": 72
+        },
+        {
+          "key": "borderRadius",
+          "label": "Corner radius (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 0,
+          "max": 50
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-article-teaser",
+      "label": "Article Teaser",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "eyebrow",
+          "label": "Eyebrow label",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Teaser text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "image.src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "image.alt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Link URL",
+          "valueType": "url",
+          "group": "content"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-feature-list",
+      "label": "Feature List",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-heading-text",
+      "label": "Heading + Text",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-heading-text-cta",
+      "label": "Heading + Text + CTA",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-icon-text-rows",
+      "label": "Icon + Text Rows",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "content-image-left",
+      "label": "Image Left + Content",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "image.src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "image.alt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-image-right",
+      "label": "Image Right + Content",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "image.src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "image.alt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-image-top",
+      "label": "Image Top + Content",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "image.src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "image.alt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "content-quote",
+      "label": "Quote / Testimonial",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "quoteText",
+          "label": "Quote",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "authorName",
+          "label": "Author name",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "authorRole",
+          "label": "Author role",
+          "valueType": "text",
+          "group": "content"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "cta-banner",
+      "label": "CTA Banner",
+      "category": "cta",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "cta-centered",
+      "label": "Centered CTA",
+      "category": "cta",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "cta-dual",
+      "label": "Dual CTA",
+      "category": "cta",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "secondaryCtaText",
+          "label": "Secondary button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "secondaryCtaHref",
+          "label": "Secondary button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "cta-text-cta",
+      "label": "Text + CTA",
+      "category": "cta",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "heading",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "divider",
+      "label": "Divider",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "color",
+          "label": "Color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "thickness",
+          "label": "Thickness (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 1,
+          "max": 12
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "footer-address-contact",
+      "label": "Address / Contact Footer",
+      "category": "footer",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "companyName",
+          "label": "Company name",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "legalText",
+          "label": "Legal / copyright text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "address",
+          "label": "Mailing address",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeText",
+          "label": "Unsubscribe link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeHref",
+          "label": "Unsubscribe link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "preferenceText",
+          "label": "Preference center link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "preferenceHref",
+          "label": "Preference center link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "footer-preference-unsubscribe",
+      "label": "Preference / Unsubscribe Footer",
+      "category": "footer",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "companyName",
+          "label": "Company name",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "legalText",
+          "label": "Legal / copyright text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeText",
+          "label": "Unsubscribe link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeHref",
+          "label": "Unsubscribe link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "preferenceText",
+          "label": "Preference center link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "preferenceHref",
+          "label": "Preference center link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "footer-simple-legal",
+      "label": "Simple Legal Footer",
+      "category": "footer",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "companyName",
+          "label": "Company name",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "legalText",
+          "label": "Legal / copyright text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeText",
+          "label": "Unsubscribe link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeHref",
+          "label": "Unsubscribe link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "preferenceText",
+          "label": "Preference center link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "preferenceHref",
+          "label": "Preference center link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "footer-social-legal",
+      "label": "Social + Legal Footer",
+      "category": "footer",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "companyName",
+          "label": "Company name",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "legalText",
+          "label": "Legal / copyright text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeText",
+          "label": "Unsubscribe link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "unsubscribeHref",
+          "label": "Unsubscribe link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "preferenceText",
+          "label": "Preference center link text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "preferenceHref",
+          "label": "Preference center link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "header-compact",
+      "label": "Compact Header",
+      "category": "header",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "logoSrc",
+          "label": "Logo image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "logoAlt",
+          "label": "Logo alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoHref",
+          "label": "Logo link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "logoWidth",
+          "label": "Logo width (px)",
+          "valueType": "number",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "header-logo-center",
+      "label": "Logo Centered",
+      "category": "header",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "logoSrc",
+          "label": "Logo image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "logoAlt",
+          "label": "Logo alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoHref",
+          "label": "Logo link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "logoWidth",
+          "label": "Logo width (px)",
+          "valueType": "number",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "header-logo-cta",
+      "label": "Logo + CTA",
+      "category": "header",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "logoSrc",
+          "label": "Logo image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "logoAlt",
+          "label": "Logo alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoHref",
+          "label": "Logo link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "logoWidth",
+          "label": "Logo width (px)",
+          "valueType": "number",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "header-logo-left",
+      "label": "Logo Left",
+      "category": "header",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "logoSrc",
+          "label": "Logo image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "logoAlt",
+          "label": "Logo alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoHref",
+          "label": "Logo link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "logoWidth",
+          "label": "Logo width (px)",
+          "valueType": "number",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "header-logo-nav",
+      "label": "Logo + Navigation",
+      "category": "header",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "logoSrc",
+          "label": "Logo image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "logoAlt",
+          "label": "Logo alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoHref",
+          "label": "Logo link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "logoWidth",
+          "label": "Logo width (px)",
+          "valueType": "number",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "header-preheader-logo",
+      "label": "Preheader + Logo",
+      "category": "header",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "logoSrc",
+          "label": "Logo image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "logoAlt",
+          "label": "Logo alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoHref",
+          "label": "Logo link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "preheaderText",
+          "label": "Preheader text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "logoWidth",
+          "label": "Logo width (px)",
+          "valueType": "number",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "hero-background-image",
+      "label": "Background Image Hero",
+      "category": "hero",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "headline",
+          "label": "Headline",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "subtext",
+          "label": "Subtext",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "imageSrc",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "imageAlt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "hero-centered-promo",
+      "label": "Centered Promotional Hero",
+      "category": "hero",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "headline",
+          "label": "Headline",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "subtext",
+          "label": "Subtext",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "hero-image-cta",
+      "label": "Image + Headline + CTA",
+      "category": "hero",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "headline",
+          "label": "Headline",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "subtext",
+          "label": "Subtext",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "imageSrc",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "imageAlt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "hero-image-left",
+      "label": "Image Left Hero",
+      "category": "hero",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "headline",
+          "label": "Headline",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "subtext",
+          "label": "Subtext",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "imageSrc",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "imageAlt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "hero-image-right",
+      "label": "Image Right Hero",
+      "category": "hero",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "headline",
+          "label": "Headline",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "subtext",
+          "label": "Subtext",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "imageSrc",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "imageAlt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "hero-text-only",
+      "label": "Text-Only Hero",
+      "category": "hero",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "headline",
+          "label": "Headline",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "subtext",
+          "label": "Subtext",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "textColor",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "image",
+      "label": "Image",
+      "category": "images",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "alt",
+          "label": "Alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "href",
+          "label": "Link URL",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "image-text",
+      "label": "Image + Text",
+      "category": "images",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "image.src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "image.alt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text.text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text.ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text.ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "text.align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "text.color",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "text.fontSize",
+          "label": "Font size (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 8,
+          "max": 72
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-1col",
+      "label": "1 Column",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 1,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-2col-30-70",
+      "label": "2 Columns 30/70",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 2,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-2col-40-60",
+      "label": "2 Columns 40/60",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 2,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-2col-50-50",
+      "label": "2 Columns 50/50",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 2,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-2col-60-40",
+      "label": "2 Columns 60/40",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 2,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-2col-70-30",
+      "label": "2 Columns 70/30",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 2,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-3col",
+      "label": "3 Columns",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 3,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-4col",
+      "label": "4 Columns",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 4,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-5col",
+      "label": "5 Columns",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 5,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "layout-6col",
+      "label": "6 Columns",
+      "category": "layout",
+      "isLayout": true,
+      "columnCount": 6,
+      "editableFields": [],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "product-grid",
+      "label": "Product Grid",
+      "category": "products",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "textAlign",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "product-image-price-cta",
+      "label": "Product Image + Price + CTA",
+      "category": "products",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "textAlign",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "product-single",
+      "label": "Single Product",
+      "category": "products",
+      "isLayout": false,
+      "columnCount": 1,
+      "editableFields": [
+        {
+          "key": "textAlign",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "product-three-cards",
+      "label": "3 Product Cards",
+      "category": "products",
+      "isLayout": false,
+      "columnCount": 3,
+      "editableFields": [
+        {
+          "key": "textAlign",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "product-two-cards",
+      "label": "2 Product Cards",
+      "category": "products",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "textAlign",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "ctaBackgroundColor",
+          "label": "Button background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "ctaTextColor",
+          "label": "Button text color",
+          "valueType": "color",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "social-follow-us",
+      "label": "Follow Us Block",
+      "category": "social",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "headingText",
+          "label": "Heading",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "social-icon-row",
+      "label": "Social Icon Row",
+      "category": "social",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        }
+      ],
+      "hasRepeatableField": true
+    },
+    {
+      "type": "spacer",
+      "label": "Spacer",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "height",
+          "label": "Height (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 4,
+          "max": 200
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "text",
+      "label": "Text",
+      "category": "content",
+      "isLayout": false,
+      "columnCount": null,
+      "editableFields": [
+        {
+          "key": "text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "align",
+          "label": "Alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "color",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "backgroundColor",
+          "label": "Background color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "fontSize",
+          "label": "Font size (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 8,
+          "max": 72
+        }
+      ],
+      "hasRepeatableField": false
+    },
+    {
+      "type": "text-image",
+      "label": "Text + Image",
+      "category": "images",
+      "isLayout": false,
+      "columnCount": 2,
+      "editableFields": [
+        {
+          "key": "image.src",
+          "label": "Image URL",
+          "valueType": "image_asset",
+          "group": "content"
+        },
+        {
+          "key": "image.alt",
+          "label": "Image alt text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text.text",
+          "label": "Text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text.ctaText",
+          "label": "Button text",
+          "valueType": "text",
+          "group": "content"
+        },
+        {
+          "key": "text.ctaHref",
+          "label": "Button link",
+          "valueType": "url",
+          "group": "content"
+        },
+        {
+          "key": "text.align",
+          "label": "Text alignment",
+          "valueType": "align",
+          "group": "style"
+        },
+        {
+          "key": "text.color",
+          "label": "Text color",
+          "valueType": "color",
+          "group": "style"
+        },
+        {
+          "key": "text.fontSize",
+          "label": "Font size (px)",
+          "valueType": "number",
+          "group": "style",
+          "min": 8,
+          "max": 72
+        }
+      ],
+      "hasRepeatableField": false
+    }
+  ]
+}

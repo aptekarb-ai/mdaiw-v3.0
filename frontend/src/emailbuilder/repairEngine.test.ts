@@ -1,0 +1,125 @@
+import { describe, expect, it } from 'vitest';
+import { affectedClientLabel, buildRepairCandidates, toApplyRepairPatchArgs } from './repairEngine';
+import { validateEmail } from './emailValidation';
+import { renderEmailDocument } from './htmlRenderer';
+import { createModule } from './moduleFactory';
+import { EMPTY_DOCUMENT_SETTINGS } from './useEmailBuilderState';
+import type { EmailDocumentContent, EmailModule, TextModuleProps } from './edm';
+
+function contentWith(modules: EmailModule[]): EmailDocumentContent {
+  return { version: 1, modules };
+}
+
+describe('affectedClientLabel', () => {
+  it('labels outlook-classic: issues as Classic Outlook', () => {
+    expect(affectedClientLabel('outlook-classic:missing-office-dpi')).toBe('Classic Outlook');
+  });
+
+  it('labels outlook-new: issues as New Outlook (web engine)', () => {
+    expect(affectedClientLabel('outlook-new:vml-not-processed')).toBe('New Outlook (web engine)');
+  });
+
+  it('labels every other issue id as All email clients', () => {
+    expect(affectedClientLabel('document:reset-css-disabled')).toBe('All email clients');
+    expect(affectedClientLabel('accessibility:contrast:abc')).toBe('All email clients');
+  });
+});
+
+describe('buildRepairCandidates', () => {
+  it('produces zero candidates for a clean, fully-configured document', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const settings = { ...EMPTY_DOCUMENT_SETTINGS, email_subject: 'A subject' };
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: settings.email_subject, faviconUrl: settings.favicon_url,
+      resetCssEnabled: settings.reset_css_enabled, customCssEnabled: settings.custom_css_enabled,
+      customCss: settings.custom_css,
+    });
+    expect(buildRepairCandidates(report, content.modules, settings)).toHaveLength(0);
+  });
+
+  it('builds a document-scope candidate for Reset CSS disabled, with the real current/proposed values', () => {
+    const content = contentWith([]);
+    const settings = { ...EMPTY_DOCUMENT_SETTINGS, email_subject: 'x', email_title: 'x', reset_css_enabled: false };
+    const html = renderEmailDocument({ width: 700, content, title: settings.email_title, resetCssEnabled: false });
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: settings.email_subject, faviconUrl: settings.favicon_url,
+      resetCssEnabled: false, customCssEnabled: settings.custom_css_enabled, customCss: settings.custom_css,
+    });
+    const candidates = buildRepairCandidates(report, content.modules, settings);
+    const candidate = candidates.find((c) => c.issueId === 'document:reset-css-disabled');
+    expect(candidate).toBeDefined();
+    expect(candidate!.before).toBe('Disabled');
+    expect(candidate!.after).toBe('Enabled');
+    expect(candidate!.affectedClient).toBe('All email clients');
+    expect(candidate!.safeAutoFix).toBe(true);
+    expect(candidate!.confidence).toBe(1.0);
+    expect(candidate!.item).toEqual({
+      kind: 'document', issueId: 'document:reset-css-disabled', documentPatch: { reset_css_enabled: true },
+    });
+  });
+
+  it('builds a module-scope candidate for weak contrast, reading the real current color as "before"', () => {
+    const module = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    const badContrast: EmailModule<TextModuleProps> = { ...module, props: { ...module.props, color: '#cccccc', backgroundColor: '#ffffff' } };
+    const content = contentWith([badContrast]);
+    const settings = { ...EMPTY_DOCUMENT_SETTINGS, email_subject: 'x', email_title: 'x' };
+    const html = renderEmailDocument({ width: 700, content, title: settings.email_title });
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: settings.email_subject, faviconUrl: settings.favicon_url,
+      resetCssEnabled: settings.reset_css_enabled, customCssEnabled: settings.custom_css_enabled, customCss: settings.custom_css,
+    });
+    const candidates = buildRepairCandidates(report, content.modules, settings);
+    const candidate = candidates.find((c) => c.issueId === `accessibility:contrast:${badContrast.id}`);
+    expect(candidate).toBeDefined();
+    expect(candidate!.before).toBe('#cccccc');
+    expect(candidate!.after).toBe('#000000');
+    expect(candidate!.moduleId).toBe(badContrast.id);
+  });
+
+  it('never includes a manual or none-fixType issue as a candidate', () => {
+    const content = contentWith([]);
+    const settings = { ...EMPTY_DOCUMENT_SETTINGS, email_title: '', email_subject: '' };
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: settings.email_subject, faviconUrl: settings.favicon_url,
+      resetCssEnabled: settings.reset_css_enabled, customCssEnabled: settings.custom_css_enabled, customCss: settings.custom_css,
+    });
+    expect(report.issues.some((i) => i.id === 'document:missing-title')).toBe(true);
+    const candidates = buildRepairCandidates(report, content.modules, settings);
+    expect(candidates.some((c) => c.issueId === 'document:missing-title')).toBe(false);
+  });
+});
+
+describe('toApplyRepairPatchArgs', () => {
+  it('merges multiple document-scope candidates into ONE document patch', () => {
+    const candidates = [
+      {
+        issueId: 'a', title: '', detail: '', severity: 'warning' as const, category: 'document' as const,
+        affectedClient: 'All email clients', before: '', after: '', confidence: 1, safeAutoFix: true as const,
+        item: { kind: 'document' as const, issueId: 'a', documentPatch: { reset_css_enabled: true } },
+      },
+      {
+        issueId: 'b', title: '', detail: '', severity: 'error' as const, category: 'document' as const,
+        affectedClient: 'All email clients', before: '', after: '', confidence: 1, safeAutoFix: true as const,
+        item: { kind: 'document' as const, issueId: 'b', documentPatch: { custom_css_enabled: false } },
+      },
+    ];
+    const { modulePatches, documentPatch } = toApplyRepairPatchArgs(candidates);
+    expect(modulePatches).toHaveLength(0);
+    expect(documentPatch).toEqual({ reset_css_enabled: true, custom_css_enabled: false });
+  });
+
+  it('separates module-scope candidates into a list, with no document patch when none exist', () => {
+    const candidates = [
+      {
+        issueId: 'a', title: '', detail: '', severity: 'warning' as const, category: 'accessibility' as const,
+        affectedClient: 'All email clients', moduleId: 'm1', before: '', after: '', confidence: 1, safeAutoFix: true as const,
+        item: { kind: 'module' as const, issueId: 'a', moduleId: 'm1', propPatch: { color: '#000000' } },
+      },
+    ];
+    const { modulePatches, documentPatch } = toApplyRepairPatchArgs(candidates);
+    expect(modulePatches).toEqual([{ moduleId: 'm1', propPatch: { color: '#000000' } }]);
+    expect(documentPatch).toBeNull();
+  });
+});

@@ -408,3 +408,295 @@ describe('useEmailBuilderState — Feature 05 nested (column) operations', () =>
     expect(first.columns![0].modules[0].id).not.toBe(second.columns![0].modules[0].id);
   });
 });
+
+describe('useEmailBuilderState — Feature 14 AI Engineer mutators', () => {
+  it('addModuleWithProps appends a module with the given props in one history commit', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModuleWithProps('button', { text: 'Buy Now' }));
+
+    expect(result.current.modules).toHaveLength(1);
+    expect(result.current.modules[0].type).toBe('button');
+    expect((result.current.modules[0].props as { text: string }).text).toBe('Buy Now');
+    expect(result.current.canUndo).toBe(true);
+
+    act(() => result.current.undo());
+    expect(result.current.modules).toHaveLength(0);
+  });
+
+  it('addModulesWithProps inserts several modules as a single undo step', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModulesWithProps([
+      { type: 'text', patch: {} },
+      { type: 'button', patch: { text: 'Shop' } },
+    ]));
+
+    expect(result.current.modules).toHaveLength(2);
+    expect(result.current.modules.map((m) => m.type)).toEqual(['text', 'button']);
+    expect(result.current.selectedModuleId).toBe(result.current.modules[1].id);
+
+    act(() => result.current.undo());
+    expect(result.current.modules).toHaveLength(0);
+  });
+
+  it('applyGlobalStyle patches every top-level module of the given type, leaving others untouched', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => {
+      result.current.addModule('button');
+      result.current.addModule('text');
+      result.current.addModule('button');
+    });
+
+    act(() => result.current.applyGlobalStyle('button', { backgroundColor: '#76C043' }));
+
+    const [first, second, third] = result.current.modules;
+    expect((first.props as { backgroundColor?: string }).backgroundColor).toBe('#76C043');
+    expect((second.props as { backgroundColor?: string }).backgroundColor).not.toBe('#76C043');
+    expect((third.props as { backgroundColor?: string }).backgroundColor).toBe('#76C043');
+  });
+
+  it('applyGlobalStyle also reaches modules nested inside layout columns', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('layout-2col-50-50'));
+    const layout = result.current.modules[0];
+    act(() => result.current.insertNestedModule(layout.id, layout.columns![0].id, 'text'));
+
+    act(() => result.current.applyGlobalStyle('text', { color: '#0082AD' }));
+
+    const nested = result.current.modules[0].columns![0].modules[0];
+    expect((nested.props as { color?: string }).color).toBe('#0082AD');
+  });
+});
+
+// Email Document Standards Sub-phase 2 (closure) — item 1: document-level
+// settings (Reset CSS/Custom CSS/title/subject/favicon) join the SAME
+// undo/redo history as the module tree, via the one shared updateDocumentSettings
+// -> commitEntry path. No second, competing history system.
+describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phase 2 closure item 1)', () => {
+  it('starts with the Reset-CSS-enabled-by-default document settings and no history', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    expect(result.current.documentSettings).toEqual({
+      email_title: '', email_subject: '', favicon_url: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+    });
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it('CSS A -> Save CSS B -> Undo restores A -> Redo restores B', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.updateDocumentSettings({ custom_css: 'A' }));
+    act(() => result.current.updateDocumentSettings({ custom_css: 'B' }));
+    expect(result.current.documentSettings.custom_css).toBe('B');
+
+    act(() => result.current.undo());
+    expect(result.current.documentSettings.custom_css).toBe('A');
+
+    act(() => result.current.redo());
+    expect(result.current.documentSettings.custom_css).toBe('B');
+  });
+
+  it('Reset CSS enabled -> disable+save -> Undo restores enabled -> Redo restores disabled', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    expect(result.current.documentSettings.reset_css_enabled).toBe(true);
+
+    act(() => result.current.updateDocumentSettings({ reset_css_enabled: false }));
+    expect(result.current.documentSettings.reset_css_enabled).toBe(false);
+
+    act(() => result.current.undo());
+    expect(result.current.documentSettings.reset_css_enabled).toBe(true);
+
+    act(() => result.current.redo());
+    expect(result.current.documentSettings.reset_css_enabled).toBe(false);
+  });
+
+  it('Custom CSS enabled/disabled toggling participates in Undo/Redo', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    expect(result.current.documentSettings.custom_css_enabled).toBe(false);
+
+    act(() => result.current.updateDocumentSettings({ custom_css_enabled: true }));
+    expect(result.current.documentSettings.custom_css_enabled).toBe(true);
+
+    act(() => result.current.undo());
+    expect(result.current.documentSettings.custom_css_enabled).toBe(false);
+
+    act(() => result.current.redo());
+    expect(result.current.documentSettings.custom_css_enabled).toBe(true);
+  });
+
+  it('module edit -> CSS edit -> module edit: sequential Undo/Redo restores each step correctly, in order', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+
+    act(() => result.current.addModule('text'));
+    const textId = result.current.modules[0].id;
+    act(() => result.current.updateDocumentSettings({ custom_css_enabled: true, custom_css: '.a{color:red}' }));
+    act(() => result.current.addModule('button'));
+
+    expect(result.current.modules).toHaveLength(2);
+    expect(result.current.documentSettings.custom_css).toBe('.a{color:red}');
+
+    // Undo #1 -> removes the button, CSS edit still applied, text module still there.
+    act(() => result.current.undo());
+    expect(result.current.modules.map((m) => m.type)).toEqual(['text']);
+    expect(result.current.documentSettings.custom_css_enabled).toBe(true);
+    expect(result.current.documentSettings.custom_css).toBe('.a{color:red}');
+
+    // Undo #2 -> reverts the CSS edit, text module still there.
+    act(() => result.current.undo());
+    expect(result.current.modules.map((m) => m.type)).toEqual(['text']);
+    expect(result.current.documentSettings.custom_css_enabled).toBe(false);
+    expect(result.current.documentSettings.custom_css).toBe('');
+
+    // Undo #3 -> back to empty (before the text module was added).
+    act(() => result.current.undo());
+    expect(result.current.modules).toHaveLength(0);
+    expect(result.current.canUndo).toBe(false);
+
+    // Redo all three, in order.
+    act(() => result.current.redo());
+    expect(result.current.modules.map((m) => m.id)).toEqual([textId]);
+    expect(result.current.documentSettings.custom_css_enabled).toBe(false);
+
+    act(() => result.current.redo());
+    expect(result.current.documentSettings.custom_css_enabled).toBe(true);
+    expect(result.current.documentSettings.custom_css).toBe('.a{color:red}');
+    expect(result.current.modules).toHaveLength(1);
+
+    act(() => result.current.redo());
+    expect(result.current.modules).toHaveLength(2);
+    expect(result.current.canRedo).toBe(false);
+  });
+
+  it('an AI-Engineer-applied CSS change (same updateDocumentSettings call) undoes to the exact previous value and redoes to the AI value', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.updateDocumentSettings({ custom_css: 'user-typed' }));
+    // The AI Engineer panel calls this exact same function for its
+    // document-level proposals — there is no separate AI mutation path.
+    act(() => result.current.updateDocumentSettings({ custom_css: 'ai-proposed' }));
+
+    expect(result.current.documentSettings.custom_css).toBe('ai-proposed');
+    act(() => result.current.undo());
+    expect(result.current.documentSettings.custom_css).toBe('user-typed');
+    act(() => result.current.redo());
+    expect(result.current.documentSettings.custom_css).toBe('ai-proposed');
+  });
+
+  it('consecutive updateDocumentSettings calls never coalesce — each is its own undo step even back to back', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => {
+      result.current.updateDocumentSettings({ custom_css: 'A' });
+      result.current.updateDocumentSettings({ custom_css: 'B' });
+      result.current.updateDocumentSettings({ custom_css: 'C' });
+    });
+    expect(result.current.documentSettings.custom_css).toBe('C');
+    act(() => result.current.undo());
+    expect(result.current.documentSettings.custom_css).toBe('B');
+    act(() => result.current.undo());
+    expect(result.current.documentSettings.custom_css).toBe('A');
+  });
+
+  it('loadModules accepts an initial documentSettings snapshot and resets history to it', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.updateDocumentSettings({ custom_css: 'stale' }));
+
+    act(() => result.current.loadModules([], {
+      email_title: 'Loaded', email_subject: '', favicon_url: '',
+      reset_css_enabled: false, custom_css_enabled: true, custom_css: 'loaded-css',
+    }));
+
+    expect(result.current.documentSettings.email_title).toBe('Loaded');
+    expect(result.current.documentSettings.custom_css).toBe('loaded-css');
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it('updateDocumentSettings marks the state dirty, exactly like a module edit', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    expect(result.current.dirty).toBe(false);
+    act(() => result.current.updateDocumentSettings({ email_title: 'New Title' }));
+    expect(result.current.dirty).toBe(true);
+  });
+
+  // Sub-phase 4, item 4 — the Repair Engine's batched-commit mutator.
+  describe('applyRepairPatch', () => {
+    it('applies a module prop patch and a document patch in ONE history commit (one undo restores both)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      const moduleId = result.current.modules[0].id;
+      const historyDepthBefore = result.current.canUndo;
+      expect(historyDepthBefore).toBe(true); // addModule already committed once
+
+      act(() => result.current.applyRepairPatch(
+        [{ moduleId, propPatch: { color: '#000000' } }],
+        { reset_css_enabled: true },
+      ));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#000000');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(true);
+
+      act(() => result.current.undo());
+      // Undoing ONE step reverts BOTH the module patch and the document
+      // patch together — proves they were a single history entry, not two.
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).not.toBe('#000000');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(true); // was already true by default
+    });
+
+    it('applies only a document patch when modulePatches is empty', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.applyRepairPatch([], { custom_css_enabled: false }));
+      expect(result.current.documentSettings.custom_css_enabled).toBe(false);
+      expect(result.current.dirty).toBe(true);
+    });
+
+    it('applies only module patches when documentPatch is null', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      const moduleId = result.current.modules[0].id;
+      const settingsBefore = result.current.documentSettings;
+
+      act(() => result.current.applyRepairPatch([{ moduleId, propPatch: { color: '#111111' } }], null));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#111111');
+      expect(result.current.documentSettings).toEqual(settingsBefore);
+    });
+
+    it('patches a module nested inside a layout column (same recursive walk applyGlobalStyle uses)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      const columnId = result.current.modules[0].columns![0].id;
+      act(() => result.current.insertNestedModule(layoutId, columnId, 'text'));
+      const nestedId = result.current.modules[0].columns![0].modules[0].id;
+
+      act(() => result.current.applyRepairPatch([{ moduleId: nestedId, propPatch: { color: '#222222' } }], null));
+
+      const nestedProps = result.current.modules[0].columns![0].modules[0].props as unknown as TextModuleProps;
+      expect(nestedProps.color).toBe('#222222');
+    });
+
+    it('applies multiple module patches across different modules in one commit', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      act(() => result.current.addModule('text'));
+      const [firstId, secondId] = result.current.modules.map((m) => m.id);
+      const historyIndexBefore = result.current.canUndo;
+      expect(historyIndexBefore).toBe(true);
+
+      // #ff0000/#00ff00 deliberately avoid text's own default color
+      // (#333333) — reusing the default would make "reverted to default"
+      // indistinguishable from "reverted to the patched value" below.
+      act(() => result.current.applyRepairPatch(
+        [
+          { moduleId: firstId, propPatch: { color: '#ff0000' } },
+          { moduleId: secondId, propPatch: { color: '#00ff00' } },
+        ],
+        null,
+      ));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#ff0000');
+      expect((result.current.modules[1].props as unknown as TextModuleProps).color).toBe('#00ff00');
+
+      act(() => result.current.undo());
+      // One undo reverts BOTH module patches — proves single commit.
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).not.toBe('#ff0000');
+      expect((result.current.modules[1].props as unknown as TextModuleProps).color).not.toBe('#00ff00');
+    });
+  });
+});

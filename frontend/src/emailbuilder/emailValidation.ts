@@ -1,6 +1,8 @@
 import { computeCompatibilityChecks } from './htmlCompatibilityChecks';
 import { detectCompatibilityImpact } from './platformCompatibility';
 import { columnResponsiveClassName } from './responsiveStyles';
+import { validateCustomCss } from './emailCss';
+import { validateFaviconUrl } from './faviconValidation';
 import type { EmailColumn, EmailDocumentContent, EmailModule } from './edm';
 import type { EmailPlatform } from './types';
 
@@ -19,8 +21,19 @@ import type { EmailPlatform } from './types';
 
 export type ValidationSeverity = 'error' | 'warning';
 export type ValidationCategoryId =
-  | 'html' | 'outlook' | 'responsive' | 'accessibility' | 'links' | 'images' | 'dark-mode' | 'platform';
+  | 'document' | 'html' | 'outlook' | 'responsive' | 'accessibility' | 'links' | 'images' | 'dark-mode' | 'platform';
 export type IssueFixType = 'safe' | 'manual' | 'none';
+
+// Sub-phase 4, item 4 — a safe fix is either module-scoped (unchanged,
+// Feature 12's original shape: patches one module's props via the
+// existing onUpdateProps path) or document-scoped (new: patches
+// EmailDocumentSettingsSnapshot via the existing
+// builder.updateDocumentSettings path — see useEmailBuilderState.ts).
+// Never a third, parallel mutation system — both variants apply through
+// mutators that already exist and already participate in undo/redo.
+export type ValidationSafeFix =
+  | { moduleId: string; propPatch: Record<string, unknown> }
+  | { documentPatch: Record<string, unknown> };
 
 export interface ValidationIssue {
   id: string;
@@ -33,10 +46,8 @@ export interface ValidationIssue {
   // (patches this module's props directly).
   moduleId?: string;
   fixType: IssueFixType;
-  // Only present when fixType === 'safe'. `propPatch` is applied via the
-  // existing onUpdateProps(moduleId, patch) path PropertiesPanel already
-  // uses — never a new mutation pathway.
-  safeFix?: { moduleId: string; propPatch: Record<string, unknown> };
+  // Only present when fixType === 'safe'.
+  safeFix?: ValidationSafeFix;
 }
 
 export type CategoryStatus = 'good' | 'needs-improvement' | 'needs-attention';
@@ -55,6 +66,7 @@ export interface ValidationReport {
 }
 
 const CATEGORY_LABELS: Record<ValidationCategoryId, string> = {
+  document: 'Document Settings',
   html: 'HTML',
   outlook: 'Outlook Compatibility',
   responsive: 'Responsive',
@@ -66,7 +78,7 @@ const CATEGORY_LABELS: Record<ValidationCategoryId, string> = {
 };
 
 const CATEGORY_ORDER: ValidationCategoryId[] = [
-  'html', 'outlook', 'responsive', 'accessibility', 'links', 'images', 'dark-mode', 'platform',
+  'document', 'html', 'outlook', 'responsive', 'accessibility', 'links', 'images', 'dark-mode', 'platform',
 ];
 
 // --- Module tree walk (one level of column nesting, same shape layoutModel.ts's own helpers assume) ---
@@ -352,6 +364,290 @@ function checkLinksAndImages(html: string): ValidationIssue[] {
   return issues;
 }
 
+// Sub-phase 3, item 12 — Outlook-specific checks, kept STRICTLY separate
+// from checkHtmlAndOutlookAndImages (Feature 09's generic
+// computeCompatibilityChecks re-labeling) since these are new,
+// Sub-phase-3-specific concerns: malformed MSO conditional comments,
+// VML-without-namespace, missing Office DPI config, and an unscoped
+// global Outlook row-collapse rule. Classic Outlook ('outlook-classic:'
+// id prefix) and New Outlook ('outlook-new:' id prefix) issues are NEVER
+// merged into one undifferentiated "Outlook" bucket — New Outlook's
+// web-rendering engine does not process MSO conditional comments or VML
+// at all, so a Classic-only problem is never attributed to it, and vice
+// versa (see emailClientCapabilities.ts's OutlookAffinity, which keeps
+// the same distinction for the AI Engineer / client-matrix layer).
+//
+// Item 12's "do not create false positives merely because an email does
+// not contain VML" — every check below only fires when the RELEVANT
+// construct (a conditional comment, a VML tag, an unscoped row-collapse
+// rule) is actually present in `html`; an email with none of these
+// produces zero issues, exactly like the "clean empty document" baseline
+// test already asserts (score 100, zero issues).
+function checkOutlookCompatibility(html: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  const openConditionalCount = (html.match(/<!--\[if\s/gi) ?? []).length;
+  const closeConditionalCount = (html.match(/<!\[endif\]-->/g) ?? []).length;
+  if (openConditionalCount !== closeConditionalCount) {
+    issues.push({
+      id: 'outlook-classic:malformed-conditional-comment',
+      category: 'outlook',
+      severity: 'error',
+      title: 'Malformed Outlook conditional comment',
+      detail: `Found ${openConditionalCount} opening MSO conditional comment(s) but ${closeConditionalCount} closing "<![endif]-->" — Classic Outlook (Word rendering engine) may render this incorrectly or leak the fallback content.`,
+      fixType: 'none',
+    });
+  }
+
+  const hasVmlTags = /<v:[a-zA-Z]/.test(html);
+  const htmlTagMatch = /<html\b[^>]*>/i.exec(html);
+  const hasVmlNamespace = htmlTagMatch ? /xmlns:v=/.test(htmlTagMatch[0]) : false;
+  if (hasVmlTags && !hasVmlNamespace) {
+    issues.push({
+      id: 'outlook-classic:missing-vml-namespace',
+      category: 'outlook',
+      severity: 'error',
+      title: 'VML markup without the required namespace',
+      detail: 'This document contains VML markup but <html> is missing xmlns:v="urn:schemas-microsoft-com:vml" — Classic Outlook will not render it correctly.',
+      fixType: 'none',
+    });
+  }
+
+  // Office DPI/PNG config is only meaningful for a document that claims
+  // ANY Outlook support at all (i.e. emits at least one MSO conditional
+  // comment) — a document with zero MSO content has nothing to check
+  // here (never a false positive on a document that legitimately has no
+  // Outlook-targeted content).
+  if (openConditionalCount > 0 && !/<o:PixelsPerInch>96<\/o:PixelsPerInch>/.test(html)) {
+    issues.push({
+      id: 'outlook-classic:missing-office-dpi',
+      category: 'outlook',
+      severity: 'error',
+      title: 'Missing Office 96-DPI configuration',
+      detail: 'This document targets Outlook but is missing <o:PixelsPerInch>96</o:PixelsPerInch> — images may be scaled incorrectly in Classic Outlook.',
+      fixType: 'none',
+    });
+  }
+
+  // Item 2 regression guard — the renderer's OWN spacer treatment is
+  // always scoped to the .mso-spacer class (never a bare `tr` selector),
+  // so this can only ever fire from Custom CSS introducing an unscoped
+  // rule; still checked directly against the FULL rendered html (not
+  // re-implemented as a Custom-CSS-only scan) so it also catches any
+  // future renderer regression, not just a Custom CSS mistake.
+  if (/(^|[^.\w-])tr\s*\{[^}]*(?:font-size\s*:\s*0|line-height\s*:\s*0)/i.test(html)) {
+    issues.push({
+      id: 'outlook-classic:unsafe-global-row-collapse',
+      category: 'outlook',
+      severity: 'warning',
+      title: 'Unscoped Outlook row-collapse rule',
+      detail: 'A CSS rule zeroes out font-size/line-height on every <tr>, not just spacer rows — this can collapse real content rows in Classic Outlook. Scope it to a specific class instead.',
+      // Sub-phase 4, item 5 — deterministic repair where safe. The
+      // renderer's OWN spacer CSS is always scoped to .mso-spacer (see
+      // outlookCompatibility.ts), so this pattern can only realistically
+      // come from Custom CSS; cannot safely rewrite arbitrary CSS text to
+      // re-scope just the offending rule, so the safe remedy disables
+      // Custom CSS entirely — same remedy shape as document:custom-css-
+      // security, a DIFFERENT check (this one is a structural/compat
+      // risk, not a security violation, so it is never redundant with it).
+      fixType: 'safe',
+      safeFix: { documentPatch: { custom_css_enabled: false } },
+    });
+  }
+
+  return issues;
+}
+
+function checkNewOutlookCompatibility(html: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (/<v:[a-zA-Z]/.test(html)) {
+    issues.push({
+      id: 'outlook-new:vml-not-processed',
+      category: 'outlook',
+      severity: 'warning',
+      title: 'VML is not processed by New Outlook',
+      detail: 'New Outlook uses a Chromium-based web-rendering engine, not the Word engine — it ignores VML and MSO conditional comments entirely. Content relying only on VML needs a real HTML fallback for New Outlook to show anything at all.',
+      fixType: 'none',
+    });
+  }
+  return issues;
+}
+
+// Sub-phase 4, item 1 — document-level standards (title/subject/favicon/
+// Reset CSS/Custom CSS/head metadata/module comments), sourced from the
+// SAME two representations every other check already trusts: the real
+// rendered HTML (for anything the renderer actually emits) and the live
+// EmailDocumentSettingsSnapshot (for the two fields — email_subject and
+// the raw favicon_url — that either never render as markup or can be
+// silently dropped from the rendered output by the renderer's own
+// sanitizeUrl gate, so `html` alone cannot always tell the true stored
+// state). Optional: every existing 3-argument validateEmail() call site
+// (and every existing test) keeps behaving byte-identically — omitting
+// this produces zero 'document' issues, the same "zero-behavior-change
+// default" convention emailHead.ts's own optional fields already use.
+export interface DocumentValidationSettings {
+  emailSubject: string;
+  faviconUrl: string;
+  resetCssEnabled: boolean;
+  customCssEnabled: boolean;
+  customCss: string;
+}
+
+// Regression guard only (same posture as Sub-phase 3's Outlook checks) —
+// renderEmailHead() emits every one of these unconditionally today, so
+// this can never fire against this app's own renderer output; it exists
+// to catch a future renderer regression, not a document a real user could
+// produce, and is intentionally reported as ONE consolidated issue naming
+// the missing tags rather than one row per tag (10 near-duplicate rows
+// would not be "detecting a real issue," it would be noise).
+const REQUIRED_HEAD_META: { pattern: RegExp; label: string }[] = [
+  { pattern: /<meta charset="utf-8"\s*\/?>/i, label: 'charset' },
+  { pattern: /<meta name="viewport"/i, label: 'viewport' },
+  { pattern: /<meta name="robots"/i, label: 'robots' },
+  { pattern: /<meta http-equiv="X-UA-Compatible"/i, label: 'X-UA-Compatible (Classic-Outlook-hidden)' },
+  { pattern: /<meta name="apple-mobile-web-app-capable"/i, label: 'apple-mobile-web-app-capable' },
+  { pattern: /<meta[^>]+apple-touch-fullscreen/i, label: 'apple-touch-fullscreen' },
+  { pattern: /<meta name="apple-mobile-web-app-status-bar-style"/i, label: 'apple-mobile-web-app-status-bar-style' },
+  { pattern: /<meta name="format-detection" content="address=no"/i, label: 'format-detection (address)' },
+  { pattern: /<meta name="format-detection" content="date=no"/i, label: 'format-detection (date)' },
+  { pattern: /<meta name="format-detection" content="email=no"/i, label: 'format-detection (email)' },
+  { pattern: /<meta name="format-detection" content="telephone=no"/i, label: 'format-detection (telephone)' },
+  { pattern: /<meta name="x-apple-disable-message-reformatting"/i, label: 'x-apple-disable-message-reformatting' },
+];
+
+function checkDocumentStandards(html: string, documentSettings?: DocumentValidationSettings): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  // --- Regression guards (fire only on a hand-broken/malformed document,
+  // never on this app's own renderer output — see REQUIRED_HEAD_META's
+  // docstring above and Sub-phase 3's identical precedent). ---
+
+  const htmlTagMatch = /<html\b[^>]*>/i.exec(html);
+  const htmlTag = htmlTagMatch ? htmlTagMatch[0] : '';
+  const missingNamespaces = ['xmlns="http://www.w3.org/1999/xhtml"', 'xmlns:v=', 'xmlns:o=']
+    .filter((token) => !htmlTag.includes(token));
+  if (missingNamespaces.length > 0) {
+    issues.push({
+      id: 'document:missing-namespace',
+      category: 'document',
+      severity: 'error',
+      title: 'Missing canonical <html> namespace',
+      detail: `The <html> element is missing: ${missingNamespaces.join(', ')} — required for XHTML/VML/Office compatibility.`,
+      fixType: 'none',
+    });
+  }
+
+  const missingMeta = REQUIRED_HEAD_META.filter(({ pattern }) => !pattern.test(html)).map(({ label }) => label);
+  if (missingMeta.length > 0) {
+    issues.push({
+      id: 'document:missing-meta-baseline',
+      category: 'document',
+      severity: 'error',
+      title: 'Missing required email meta/header baseline',
+      detail: `This document is missing: ${missingMeta.join(', ')}.`,
+      fixType: 'none',
+    });
+  }
+
+  for (const [tagPattern, label] of [
+    [/<title>/gi, '<title>'], [/<meta charset="utf-8"/gi, 'charset meta'], [/<link rel="icon"/gi, 'favicon link'],
+  ] as [RegExp, string][]) {
+    const count = (html.match(tagPattern) ?? []).length;
+    if (count > 1) {
+      issues.push({
+        id: `document:duplicate-head-declaration:${label}`,
+        category: 'document',
+        severity: 'error',
+        title: 'Duplicate head declaration',
+        detail: `Found ${count} occurrences of ${label} in <head> — only one is expected.`,
+        fixType: 'none',
+      });
+    }
+  }
+
+  // --- Real, reachable document-settings checks — gated on the caller
+  // having actually opted in by passing documentSettings (backward
+  // compatible: every existing 3-argument call/test keeps its exact
+  // zero-document-issue baseline, since these are the only checks that
+  // could otherwise fire on a normal document that simply hasn't set a
+  // title/subject/favicon yet). ---
+
+  if (!documentSettings) return issues;
+
+  const titleMatch = /<title>([\s\S]*?)<\/title>/i.exec(html);
+  if (titleMatch && titleMatch[1].trim() === '') {
+    issues.push({
+      id: 'document:missing-title',
+      category: 'document',
+      severity: 'warning',
+      title: 'Email title is empty',
+      detail: 'The document <title> is empty. Set an email title in Document Settings so browser tabs and some clients show a meaningful name.',
+      fixType: 'none',
+    });
+  }
+
+  if (documentSettings.emailSubject.trim() === '') {
+    issues.push({
+      id: 'document:missing-subject',
+      category: 'document',
+      severity: 'warning',
+      title: 'Email subject is empty',
+      detail: 'No subject is set for this email. The subject is send/document metadata (never rendered into the HTML) but is normally required before sending.',
+      fixType: 'none',
+    });
+  }
+
+  if (documentSettings.faviconUrl) {
+    const faviconError = validateFaviconUrl(documentSettings.faviconUrl);
+    if (faviconError) {
+      issues.push({
+        id: 'document:invalid-favicon',
+        category: 'document',
+        severity: 'warning',
+        title: 'Favicon URL is invalid',
+        detail: `${faviconError} The favicon is silently omitted from the rendered document until this is fixed.`,
+        fixType: 'safe',
+        safeFix: { documentPatch: { favicon_url: '' } },
+      });
+    }
+  }
+
+  if (!documentSettings.resetCssEnabled) {
+    issues.push({
+      id: 'document:reset-css-disabled',
+      category: 'document',
+      severity: 'warning',
+      title: 'Email Reset CSS is disabled',
+      detail: 'Reset CSS is the cross-client compatibility baseline (margin/padding/line-height resets). Leaving it disabled makes rendering differences across clients more likely.',
+      fixType: 'safe',
+      safeFix: { documentPatch: { reset_css_enabled: true } },
+    });
+  }
+
+  if (documentSettings.customCssEnabled && documentSettings.customCss.trim() !== '') {
+    // Defense-in-depth re-scan of whatever is CURRENTLY stored, using the
+    // exact same security validator DocumentSettingsDialog/AI Engineer
+    // already gate Apply/Save on (item 7) — reachable if a value ever
+    // arrived through a path other than those gates (a legacy document, a
+    // direct API write). Cannot safely rewrite arbitrary CSS text, so the
+    // only safe deterministic remedy offered is disabling it, not editing it.
+    const result = validateCustomCss(documentSettings.customCss);
+    if (!result.valid) {
+      issues.push({
+        id: 'document:custom-css-security',
+        category: 'document',
+        severity: 'error',
+        title: 'Custom CSS failed a security check',
+        detail: result.errors[0] ?? 'Custom CSS did not pass validation.',
+        fixType: 'safe',
+        safeFix: { documentPatch: { custom_css_enabled: false } },
+      });
+    }
+  }
+
+  return issues;
+}
+
 function checkPlatform(html: string, platform: EmailPlatform): ValidationIssue[] {
   const impacts = detectCompatibilityImpact(html, platform);
   return impacts.map((impact) => ({
@@ -376,9 +672,17 @@ function computeScore(issues: ValidationIssue[]): number {
   return Math.max(0, Math.min(100, 100 - penalty));
 }
 
-export function validateEmail(html: string, content: EmailDocumentContent, platform: EmailPlatform): ValidationReport {
+export function validateEmail(
+  html: string,
+  content: EmailDocumentContent,
+  platform: EmailPlatform,
+  documentSettings?: DocumentValidationSettings,
+): ValidationReport {
   const issues: ValidationIssue[] = [
+    ...checkDocumentStandards(html, documentSettings),
     ...checkHtmlAndOutlookAndImages(html),
+    ...checkOutlookCompatibility(html),
+    ...checkNewOutlookCompatibility(html),
     ...checkResponsive(html, content),
     ...checkAccessibilityAndDarkMode(html, content),
     ...checkLinksAndImages(html),

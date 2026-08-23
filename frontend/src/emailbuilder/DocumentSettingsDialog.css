@@ -1,0 +1,227 @@
+.document-settings-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 45, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: var(--space-4);
+}
+
+.document-settings-dialog {
+  width: min(640px, 100%);
+  max-height: min(820px, 90vh);
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.document-settings-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.document-settings-dialog__header h2 {
+  margin: 0;
+  color: var(--color-primary-dark);
+  font-size: 20px;
+}
+
+.document-settings-dialog__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.document-settings-dialog__close:hover {
+  background: var(--color-background-light);
+}
+
+.document-settings-dialog__close .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-text-muted);
+}
+
+.document-settings-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+.document-settings-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.document-settings-dialog__field > label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.document-settings-dialog__field input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  color: var(--color-text-dark);
+}
+
+.document-settings-dialog__field input[type='text']:focus-visible {
+  outline: none;
+  border-color: var(--color-primary-blue);
+}
+
+.document-settings-dialog__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-subtle);
+}
+
+.document-settings-dialog__hint code {
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+}
+
+.document-settings-dialog__favicon-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.document-settings-dialog__favicon-preview {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  object-fit: contain;
+}
+
+.document-settings-dialog__browse-button {
+  flex-shrink: 0;
+  height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary-blue);
+  cursor: pointer;
+}
+
+.document-settings-dialog__browse-button:hover {
+  border-color: var(--color-primary-blue);
+}
+
+.document-settings-dialog__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  cursor: pointer;
+}
+
+.document-settings-dialog__checkbox-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary-blue);
+}
+
+.document-settings-dialog__css-editor {
+  height: 240px;
+  margin-top: var(--space-2);
+}
+
+.document-settings-dialog__css-errors,
+.document-settings-dialog__css-warnings {
+  margin-top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.document-settings-dialog__css-errors p,
+.document-settings-dialog__css-warnings p {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 12px;
+}
+
+.document-settings-dialog__css-errors p {
+  color: var(--color-error);
+}
+
+.document-settings-dialog__css-warnings p {
+  color: var(--color-warning);
+}
+
+.document-settings-dialog__css-errors .mdaiw-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--color-error);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.document-settings-dialog__css-warnings .mdaiw-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--color-warning);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.document-settings-dialog__error {
+  margin: 0;
+  padding: var(--space-3) var(--space-5) 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 13px;
+  color: var(--color-error);
+  flex-shrink: 0;
+}
+
+.document-settings-dialog__error .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: var(--color-error);
+}
+
+.document-settings-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}

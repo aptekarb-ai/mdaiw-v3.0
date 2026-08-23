@@ -14,7 +14,7 @@ const PLATFORM_LABELS: Record<EmailPlatform, string> = {
   other: 'Other',
 };
 
-export type EditorMode = 'visual' | 'code' | 'preview' | 'validate';
+export type EditorMode = 'visual' | 'code' | 'preview' | 'validate' | 'ai';
 
 interface BuilderToolbarProps {
   name: string;
@@ -33,6 +33,7 @@ interface BuilderToolbarProps {
   onEditorModeChange: (mode: EditorMode) => void;
   onOpenPlatformDialog: () => void;
   onOpenExportDialog: () => void;
+  onOpenDocumentSettingsDialog: () => void;
 }
 
 function statusLabel(saveStatus: SaveStatus, dirty: boolean): string {
@@ -49,6 +50,7 @@ function Separator() {
 export function BuilderToolbar({
   name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode, editorMode,
   onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onOpenPlatformDialog, onOpenExportDialog,
+  onOpenDocumentSettingsDialog,
 }: BuilderToolbarProps) {
   const navigate = useNavigate();
 
@@ -78,6 +80,15 @@ export function BuilderToolbar({
             {PLATFORM_LABELS[platform]}
           </button>
           <span className="builder-toolbar__chip">{width}px</span>
+          <button
+            type="button"
+            className="builder-toolbar__chip builder-toolbar__chip--button"
+            onClick={onOpenDocumentSettingsDialog}
+            title="Email title, subject, and favicon"
+          >
+            <span className="mdaiw-icon mdaiw-icon--edit" aria-hidden="true" />
+            Document Settings
+          </button>
         </div>
       </div>
 
@@ -125,6 +136,15 @@ export function BuilderToolbar({
             onClick={() => onEditorModeChange('validate')}
           >
             Validate
+          </button>
+          <button
+            type="button"
+            aria-pressed={editorMode === 'ai'}
+            className={editorMode === 'ai' ? 'builder-toolbar__view-btn builder-toolbar__view-btn--active' : 'builder-toolbar__view-btn'}
+            onClick={() => onEditorModeChange('ai')}
+          >
+            <span className="mdaiw-icon mdaiw-icon--ai-assistants" aria-hidden="true" />
+            AI Engineer
           </button>
         </div>
 

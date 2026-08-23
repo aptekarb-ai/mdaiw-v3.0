@@ -9,8 +9,19 @@ interface ValidationCenterPanelProps {
   width: number;
   content: EmailDocumentContent;
   platform: EmailPlatform;
+  emailTitle?: string;
+  emailSubject?: string;
+  faviconUrl?: string;
+  resetCssEnabled?: boolean;
+  customCssEnabled?: boolean;
+  customCss?: string;
   onNavigateToModule: (moduleId: string) => void;
   onApplySafeFix: (moduleId: string, propPatch: Record<string, unknown>) => void;
+  // Sub-phase 4, item 1/4 — document-scope safe fixes (e.g. re-enable
+  // Reset CSS, clear an invalid favicon) apply through the SAME
+  // builder.updateDocumentSettings path DocumentSettingsDialog and the AI
+  // Engineer already use — never a new mutation pathway.
+  onApplyDocumentFix: (patch: Record<string, unknown>) => void;
 }
 
 const SCORE_CIRCUMFERENCE = 2 * Math.PI * 52;
@@ -46,7 +57,8 @@ const STATUS_LABEL: Record<'good' | 'needs-improvement' | 'needs-attention', str
 // project has consistently avoided; every issue shown here traces to a
 // real, reproducible check.
 export function ValidationCenterPanel({
-  width, content, platform, onNavigateToModule, onApplySafeFix,
+  width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+  onNavigateToModule, onApplySafeFix, onApplyDocumentFix,
 }: ValidationCenterPanelProps) {
   const [applyingFixId, setApplyingFixId] = useState<string | null>(null);
   const [applyingAll, setApplyingAll] = useState(false);
@@ -58,11 +70,11 @@ export function ValidationCenterPanel({
   // the shared renderer Code Editor/Preview Studio also depend on.
   const rawHtml = useMemo(() => {
     try {
-      return renderEmailDocument({ width, content });
+      return renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss });
     } catch {
       return null;
     }
-  }, [width, content]);
+  }, [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
 
   // Re-evaluated on every relevant change automatically (rawHtml/platform
   // are already reactive); revalidateNonce exists only so the explicit
@@ -71,12 +83,18 @@ export function ValidationCenterPanel({
   const report = useMemo(() => {
     if (rawHtml === null) return null;
     try {
-      return validateEmail(rawHtml, content, platform);
+      return validateEmail(rawHtml, content, platform, {
+        emailSubject: emailSubject ?? '',
+        faviconUrl: faviconUrl ?? '',
+        resetCssEnabled: resetCssEnabled ?? true,
+        customCssEnabled: customCssEnabled ?? false,
+        customCss: customCss ?? '',
+      });
     } catch {
       return null;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- revalidateNonce intentionally forces recompute on manual Revalidate
-  }, [rawHtml, content, platform, revalidateNonce]);
+  }, [rawHtml, content, platform, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss, revalidateNonce]);
 
   // Auto-revalidate whenever the document changes while this tab is open —
   // same convention as Preview Studio's Email Clients auto-run-on-change.
@@ -86,10 +104,18 @@ export function ValidationCenterPanel({
 
   const safeIssues = report?.issues.filter((issue) => issue.fixType === 'safe') ?? [];
 
+  function applySafeFix(safeFix: NonNullable<ValidationIssue['safeFix']>) {
+    if ('documentPatch' in safeFix) {
+      onApplyDocumentFix(safeFix.documentPatch);
+    } else {
+      onApplySafeFix(safeFix.moduleId, safeFix.propPatch);
+    }
+  }
+
   function handleFixOne(issue: ValidationIssue) {
     if (issue.fixType === 'safe' && issue.safeFix) {
       setApplyingFixId(issue.id);
-      onApplySafeFix(issue.safeFix.moduleId, issue.safeFix.propPatch);
+      applySafeFix(issue.safeFix);
       setTimeout(() => setApplyingFixId(null), 300);
     } else if (issue.fixType === 'manual' && issue.moduleId) {
       onNavigateToModule(issue.moduleId);
@@ -99,7 +125,7 @@ export function ValidationCenterPanel({
   async function handleFixAllSafe() {
     setApplyingAll(true);
     for (const issue of safeIssues) {
-      if (issue.safeFix) onApplySafeFix(issue.safeFix.moduleId, issue.safeFix.propPatch);
+      if (issue.safeFix) applySafeFix(issue.safeFix);
     }
     setTimeout(() => setApplyingAll(false), 300);
   }

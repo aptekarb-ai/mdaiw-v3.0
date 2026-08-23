@@ -3,11 +3,18 @@ import { renderEmailDocument } from './htmlRenderer';
 import { buildExportSummary, buildHandoffManifest, extractImageAssetUrls, sanitizeExportFileName } from './exportDeploy';
 import { PLATFORM_OPTIONS } from './platformOptions';
 import type { EmailDocumentContent } from './edm';
+import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
 import type { EmailDocument, EmailPlatform } from './types';
 import './ExportDeployDialog.css';
 
 interface ExportDeployDialogProps {
   document: EmailDocument;
+  // Sub-phase 2 closure — the LIVE, undo/redo-participating title/
+  // favicon/Reset-CSS/Custom-CSS (builder.documentSettings), NOT the
+  // possibly-stale `document.email_title`/etc. from the last server
+  // fetch — same "live builder state wins" relationship `content` below
+  // already has with the stale `document.content`.
+  documentSettings: EmailDocumentSettingsSnapshot;
   content: EmailDocumentContent;
   onSaveAsTemplate: (templateName: string) => Promise<EmailDocument>;
   onClose: () => void;
@@ -34,7 +41,7 @@ function downloadTextFile(text: string, filename: string, mimeType: string): voi
 // download HTML/assets, save as template, create deployment handoff (a
 // downloadable JSON manifest alongside the HTML). Same accessible-modal
 // shape (focus trap, Escape, backdrop click) as PlatformEnvironmentDialog.
-export function ExportDeployDialog({ document, content, onSaveAsTemplate, onClose }: ExportDeployDialogProps) {
+export function ExportDeployDialog({ document, documentSettings, content, onSaveAsTemplate, onClose }: ExportDeployDialogProps) {
   const [exportPlatform, setExportPlatform] = useState<EmailPlatform>(document.platform);
   const [acknowledgeUnsafe, setAcknowledgeUnsafe] = useState(false);
   const [copyState, setCopyState] = useState<ActionState>('idle');
@@ -84,8 +91,12 @@ export function ExportDeployDialog({ document, content, onSaveAsTemplate, onClos
   }, [onClose]);
 
   const rawHtml = useMemo(
-    () => renderEmailDocument({ width: document.width, content }),
-    [document.width, content],
+    () => renderEmailDocument({
+      width: document.width, content, title: documentSettings.email_title, faviconUrl: documentSettings.favicon_url,
+      resetCssEnabled: documentSettings.reset_css_enabled, customCssEnabled: documentSettings.custom_css_enabled,
+      customCss: documentSettings.custom_css,
+    }),
+    [document.width, documentSettings, content],
   );
 
   const summary = useMemo(

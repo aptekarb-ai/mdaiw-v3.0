@@ -9,5 +9,6 @@ router.register('saved-modules', views.SavedEmailModuleViewSet, basename='saved-
 router.register('assets', views.EmailAssetViewSet, basename='email-asset')
 
 urlpatterns = [
+    path('ai-command/', views.EmailAICommandView.as_view(), name='email-ai-command'),
     path('', include(router.urls)),
 ]

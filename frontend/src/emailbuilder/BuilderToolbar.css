@@ -155,6 +155,15 @@
   color: var(--color-text-subtle);
   font-size: 12px;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.builder-toolbar__view-btn .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
 }
 
 .builder-toolbar__view-btn--active {

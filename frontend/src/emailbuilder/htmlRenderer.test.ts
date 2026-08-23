@@ -282,6 +282,24 @@ describe('renderEmailDocument', () => {
     expect(html).not.toContain('<script');
   });
 
+  // Email Document Standards Sub-phase 1.
+  it('declares the XHTML, VML, and Office XML namespaces on <html>', () => {
+    const html = renderEmailDocument(withModules([]));
+    expect(html).toContain('<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">');
+  });
+
+  it('threads the optional title/faviconUrl through to the <head>', () => {
+    const html = renderEmailDocument({ ...withModules([]), title: 'August Newsletter', faviconUrl: 'https://cdn.example.com/fav.png' });
+    expect(html).toContain('<title>August Newsletter</title>');
+    expect(html).toContain('<link rel="icon" type="image/png" href="https://cdn.example.com/fav.png" />');
+  });
+
+  it('omitting title/faviconUrl produces an empty <title> and no favicon link — unchanged from the pre-Sub-phase-1 baseline', () => {
+    const html = renderEmailDocument(withModules([]));
+    expect(html).toContain('<title></title>');
+    expect(html).not.toContain('rel="icon"');
+  });
+
   it('the fluid-width outer table fix still passes every compatibility check (Outlook Safe included)', () => {
     const modules = [
       createModule('layout-2col-50-50', 0),
@@ -432,5 +450,161 @@ describe('Feature 05 — nested layout rendering', () => {
     layout.columns![0].modules.push(text as unknown as EmailModule);
     const html = renderEmailBody(withModules([layout]));
     expect(html).not.toContain('<script>alert(1)</script>');
+  });
+});
+
+// Email Document Standards Sub-phase 3, items 7/8 — deterministic module
+// HTML comments.
+describe('renderEmailBody — module HTML comments (Sub-phase 3, item 7)', () => {
+  it('wraps a single top-level module in MODULE-1: <REAL REGISTRY LABEL> comments', () => {
+    const button = createModule('button', 0);
+    const html = renderEmailBody(withModules([button]));
+    const label = getModuleDefinition('button').label.toUpperCase();
+    expect(html).toContain(`<!--===== MODULE-1: ${label} - START =====-->`);
+    expect(html).toContain(`<!--===== MODULE-1: ${label} - ENDS =====-->`);
+  });
+
+  it('numbers modules from RENDER order (module.order), not array order and not module type', () => {
+    // Array order: button then text. Render (sorted) order: text (order 0)
+    // then button (order 1) — MODULE-1 must be the text module.
+    const button = createModule('button', 1);
+    const text = createModule('text', 0);
+    const html = renderEmailBody(withModules([button, text]));
+    const textStart = html.indexOf(`MODULE-1: ${getModuleDefinition('text').label.toUpperCase()}`);
+    const buttonStart = html.indexOf(`MODULE-2: ${getModuleDefinition('button').label.toUpperCase()}`);
+    expect(textStart).toBeGreaterThan(-1);
+    expect(buttonStart).toBeGreaterThan(-1);
+    expect(textStart).toBeLessThan(buttonStart);
+  });
+
+  it('never hard-codes a label independently of the registry — matches getModuleDefinition(type).label exactly', () => {
+    const types = ['text', 'button', 'image', 'divider', 'spacer', 'header-logo-nav', 'footer-social-legal'] as const;
+    const html = renderEmailBody(withModules(types.map((type, i) => createModule(type, i))));
+    types.forEach((type, i) => {
+      const label = getModuleDefinition(type).label.toUpperCase();
+      expect(html, type).toContain(`MODULE-${i + 1}: ${label}`);
+    });
+  });
+
+  it('numbering recomputes on every render — never persisted/stale (delete/reorder proof)', () => {
+    const a = createModule('text', 0);
+    const b = createModule('button', 1);
+    const c = createModule('image', 2);
+    const initial = renderEmailBody(withModules([a, b, c]));
+    expect(initial).toContain(`MODULE-1: ${getModuleDefinition('text').label.toUpperCase()}`);
+    expect(initial).toContain(`MODULE-2: ${getModuleDefinition('button').label.toUpperCase()}`);
+    expect(initial).toContain(`MODULE-3: ${getModuleDefinition('image').label.toUpperCase()}`);
+
+    // Delete the middle module (b) and re-render — c must renumber to 2.
+    const afterDelete = renderEmailBody(withModules([a, { ...c, order: 1 }]));
+    expect(afterDelete).toContain(`MODULE-1: ${getModuleDefinition('text').label.toUpperCase()}`);
+    expect(afterDelete).toContain(`MODULE-2: ${getModuleDefinition('image').label.toUpperCase()}`);
+    expect(afterDelete).not.toContain('MODULE-3:');
+
+    // Reorder (c first, then a) and re-render — numbers follow the new order.
+    const reordered = renderEmailBody(withModules([{ ...c, order: 0 }, { ...a, order: 1 }]));
+    expect(reordered).toContain(`MODULE-1: ${getModuleDefinition('image').label.toUpperCase()}`);
+    expect(reordered).toContain(`MODULE-2: ${getModuleDefinition('text').label.toUpperCase()}`);
+  });
+
+  it('a duplicated module gets its own distinct number, not a repeated one', () => {
+    const original = createModule('text', 0);
+    const duplicate = { ...original, id: `${original.id}-copy`, order: 1 };
+    const html = renderEmailBody(withModules([original, duplicate]));
+    // 2 each — START and ENDS both carry the number/label.
+    expect((html.match(/MODULE-1:/g) ?? []).length).toBe(2);
+    expect((html.match(/MODULE-2:/g) ?? []).length).toBe(2);
+    expect((html.match(/MODULE-3:/g) ?? []).length).toBe(0);
+  });
+});
+
+describe('renderEmailBody — nested module HTML comments (Sub-phase 3, item 8)', () => {
+  it('a nested module gets MODULE-<parent>.1 — the parent number correctly resolved, never the __PARENT__ placeholder', () => {
+    const layout = createModule('layout-2col-50-50', 1); // will be MODULE-2
+    const filler = createModule('text', 0); // MODULE-1
+    const text = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    text.props = { ...text.props, text: 'Nested content' };
+    layout.columns![0].modules.push(text as unknown as EmailModule);
+
+    const html = renderEmailBody(withModules([filler, layout]));
+    expect(html).toContain(`MODULE-2.1: ${getModuleDefinition('text').label.toUpperCase()}`);
+    expect(html).not.toContain('__PARENT__');
+  });
+
+  it('multiple nested modules in ONE column are numbered .1, .2 in order', () => {
+    const layout = createModule('layout-1col', 0);
+    const first = createModule('text', 0);
+    const second = createModule('button', 1);
+    layout.columns![0].modules.push(first, second);
+
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toContain(`MODULE-1.1: ${getModuleDefinition('text').label.toUpperCase()}`);
+    expect(html).toContain(`MODULE-1.2: ${getModuleDefinition('button').label.toUpperCase()}`);
+  });
+
+  it('nested numbering runs as ONE continuous counter across columns — column 2 continues, does not restart at .1', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    const colOneModule = createModule('text', 0);
+    const colTwoModule = createModule('button', 0);
+    layout.columns![0].modules.push(colOneModule);
+    layout.columns![1].modules.push(colTwoModule);
+
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toContain(`MODULE-1.1: ${getModuleDefinition('text').label.toUpperCase()}`);
+    expect(html).toContain(`MODULE-1.2: ${getModuleDefinition('button').label.toUpperCase()}`);
+    expect(html).not.toContain('MODULE-1.1: ' + getModuleDefinition('button').label.toUpperCase());
+  });
+
+  it('nested comment numbering also recomputes fresh — no persisted/stale nested numbers', () => {
+    const layout = createModule('layout-1col', 0);
+    const only = createModule('text', 0);
+    layout.columns![0].modules.push(only);
+    const before = renderEmailBody(withModules([layout]));
+    expect(before).toContain('MODULE-1.1:');
+
+    const withExtra = createModule('button', 0);
+    layout.columns![0].modules.unshift(withExtra);
+    const after = renderEmailBody(withModules([layout]));
+    expect(after).toContain(`MODULE-1.1: ${getModuleDefinition('button').label.toUpperCase()}`);
+    expect(after).toContain(`MODULE-1.2: ${getModuleDefinition('text').label.toUpperCase()}`);
+  });
+
+  it('a layout module with NO nested modules never leaks a __PARENT__ placeholder', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).not.toContain('__PARENT__');
+  });
+});
+
+describe('renderEmailBody — one-level-nesting architectural guarantee (Sub-phase 3, item 8)', () => {
+  it('a Layout module type cannot itself be inserted as a NESTED module — proves numbering never needs a third level', async () => {
+    const { isLayoutModuleType } = await import('./layoutModel');
+    // LayoutCanvasModule.tsx gates nested drops with `!isLayoutModuleType(type)`
+    // — every layout type must report true here, which is the actual
+    // runtime guarantee that prevents a layout from ever being nested
+    // inside another layout's column (see layoutModel.ts).
+    const layoutTypes = ['layout-1col', 'layout-2col-50-50', 'layout-2col-40-60', 'layout-3col', 'layout-4col', 'layout-5col', 'layout-6col'];
+    for (const type of layoutTypes) {
+      expect(isLayoutModuleType(type as never), type).toBe(true);
+    }
+  });
+
+  it('EmailColumn.modules is typed as EmailModule[], never as a column-bearing type recursively — one level only', () => {
+    // Structural proof at the data layer: flattenModules-style consumers
+    // (emailValidation.ts, this renderer) only ever descend ONE level
+    // (module.columns[].modules), never module.columns[].modules[].columns.
+    // If a THIRD level existed, a Layout nested inside a Layout would need
+    // to render with a `.1.1`-style label — this renderer has no code path
+    // for that at all (layoutCatalog.tsx's nested loop calls
+    // renderModuleWithOuterStructure, not itself, on each nested module).
+    const layout = createModule('layout-1col', 0);
+    const innerLayout = createModule('layout-1col', 0);
+    layout.columns![0].modules.push(innerLayout);
+    const html = renderEmailBody(withModules([layout]));
+    // Even if a caller forces this into the tree (bypassing the UI gate),
+    // the inner layout still renders as a flat MODULE-1.1 — never .1.1 —
+    // proving the renderer itself has no third-level numbering logic.
+    expect(html).toContain(`MODULE-1.1: ${getModuleDefinition('layout-1col').label.toUpperCase()}`);
+    expect(html).not.toMatch(/MODULE-1\.1\.\d/);
   });
 });
