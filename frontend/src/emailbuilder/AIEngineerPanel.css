@@ -191,6 +191,57 @@
   color: var(--color-warning);
 }
 
+/* Sub-phase 4, item 4 — the Repair Engine's multi-issue proposal card. */
+.ai-engineer-panel__repair-list {
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__repair-item {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+}
+
+.ai-engineer-panel__repair-item-title {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-dark);
+}
+
+.ai-engineer-panel__repair-item-detail {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__repair-item-meta {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-1) var(--space-3);
+  font-size: 11px;
+}
+
+.ai-engineer-panel__repair-item-meta dt {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-subtle);
+}
+
+.ai-engineer-panel__repair-item-meta dd {
+  margin: 0;
+  color: var(--color-text-dark);
+  word-break: break-word;
+}
+
 .ai-engineer-panel__strong-confirm {
   display: flex;
   align-items: flex-start;

@@ -1325,6 +1325,71 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     expect(textarea.value).toContain('ai-proposed');
   });
 
+  it('Sub-phase 4: AI Engineer title/subject/favicon actions apply through the same local-commit path, and persist through Save', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ email_title: 'Old Title' }));
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will set the email title to "New Title".',
+      action: { type: 'SET_EMAIL_TITLE', title: 'New Title' },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ email_title: 'New Title' }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    const input = await screen.findByPlaceholderText(/Type your command/);
+    await user.type(input, 'set the title to New Title');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Set the email title to "New Title"');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+    // Local commit only — no network call for Apply itself.
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Save', hidden: true }));
+    await waitFor(() => {
+      expect(client.updateEmailDocument).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ email_title: 'New Title' }),
+      );
+    });
+  });
+
+  it('Sub-phase 4: AI Engineer "repair all safe issues" proposes and applies a document-level repair, and Undo reverts it', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({
+      email_title: 'August Newsletter', email_subject: 'x', reset_css_enabled: false,
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'AI Engineer' }));
+    const input = await screen.findByPlaceholderText(/Type your command/);
+    await user.type(input, 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+    // Entirely client-side — never reaches the backend NL router.
+    expect(client.requestAICommand).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText('Repaired 1 issue.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Validate' }));
+    expect(await screen.findByText('100')).toBeInTheDocument();
+    expect(screen.getByText('Issues Found (0)')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await user.click(screen.getByRole('button', { name: 'Validate' }));
+    await user.click(screen.getByRole('button', { name: 'Revalidate' }));
+    expect(screen.queryByText('100')).not.toBeInTheDocument();
+    expect(screen.getByText('Email Reset CSS is disabled')).toBeInTheDocument();
+  });
+
   it('Cancel on the Document Settings dialog creates no history entry', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
@@ -1704,7 +1769,13 @@ describe('EmailBuilderWorkspacePage — Feature 12 Validation Center', () => {
   });
 
   it('a clean empty document shows a perfect score and no issues', async () => {
-    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [] } }));
+    // Sub-phase 4 — a title/subject are required for a "clean" document
+    // now that Validation Center checks for them (see
+    // emailValidation.ts's checkDocumentStandards); an empty title/
+    // subject is itself a real, intended new warning, not noise.
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({
+      content: { version: 1, modules: [] }, email_title: 'August Newsletter', email_subject: 'August updates',
+    }));
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('August Newsletter');

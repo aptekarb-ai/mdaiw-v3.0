@@ -94,6 +94,17 @@ class ActionType:
     SET_CUSTOM_CSS = 'SET_CUSTOM_CSS'
     CLEAR_CUSTOM_CSS = 'CLEAR_CUSTOM_CSS'
 
+    # Sub-phase 4, item 3 — pulled forward the remaining document-level
+    # settings (title/subject/favicon) onto the SAME proposal-before-apply
+    # contract as the CSS actions above. No new mutation system: the
+    # frontend applies every one of these through
+    # builder.updateDocumentSettings, exactly like DocumentSettingsDialog's
+    # own Apply button.
+    SET_EMAIL_TITLE = 'SET_EMAIL_TITLE'
+    SET_EMAIL_SUBJECT = 'SET_EMAIL_SUBJECT'
+    SET_FAVICON = 'SET_FAVICON'
+    CLEAR_FAVICON = 'CLEAR_FAVICON'
+
     # Reserved for later Feature 14 V2 phases (Phase C's Repair Engine /
     # Phase D's composition work) — named NOW so the wire contract never
     # needs a breaking rename later, but NOT implemented in Phase A.
@@ -112,17 +123,22 @@ class ActionType:
         INSERT_NESTED_MODULE, UPDATE_MODULE_SETTINGS, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
+        SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
     })
 
     IMPLEMENTED = frozenset({
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
+        SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
     })
 
     # Document-level actions never carry a `moduleId`/`module_type` —
     # views.py's resolve_asset_references and the frontend's EDM-mutation
     # dispatch both need to tell these apart from module-scope actions.
-    DOCUMENT_SCOPE = frozenset({SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS})
+    DOCUMENT_SCOPE = frozenset({
+        SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
+        SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
+    })
 
 
 class EmailCommandProviderUnavailable(Exception):
@@ -323,6 +339,26 @@ def validate_action(action):
     if action_type == ActionType.CLEAR_CUSTOM_CSS:
         return {'type': action_type}
 
+    if action_type in (ActionType.SET_EMAIL_TITLE, ActionType.SET_EMAIL_SUBJECT):
+        value = _clean_text_value(action.get('value'))
+        if value is None:
+            return None
+        key = 'title' if action_type == ActionType.SET_EMAIL_TITLE else 'subject'
+        return {'type': action_type, key: value}
+
+    if action_type == ActionType.SET_FAVICON:
+        # Same http(s)-only allow-list every other URL in this module
+        # already goes through — see _clean_url_value's docstring. An
+        # empty result is rejected here (use CLEAR_FAVICON to remove it
+        # explicitly, never an implicit empty SET).
+        url = _clean_url_value(action.get('url'))
+        if not url:
+            return None
+        return {'type': action_type, 'url': url}
+
+    if action_type == ActionType.CLEAR_FAVICON:
+        return {'type': action_type}
+
     return None
 
 
@@ -494,6 +530,34 @@ _SET_CUSTOM_CSS_PATTERN = re.compile(
     r'\b(?:set|add|replace|update)\b[^:]*\bcustom\s*css\b\s*(?:to|with)?\s*:?\s*(.+)$', re.IGNORECASE | re.DOTALL,
 )
 
+# Sub-phase 4, item 3 — title/subject/favicon commands. Checked as their
+# own phrases (mentioning "title"/"subject"/"favicon") so they never
+# collide with the CSS/insert/delete vocabulary above or below — same
+# "checked before the generic patterns" posture the CSS block already
+# established. The captured value comes from the ORIGINAL (not lowercased)
+# message, same reasoning as _SET_CUSTOM_CSS_PATTERN: a title/subject
+# should keep the casing the user actually typed.
+_EMAIL_TITLE_PATTERN = re.compile(r'\b(?:title)\b')
+_SET_EMAIL_TITLE_PATTERN = re.compile(
+    r'\b(?:set|change|update)\b[^:]*\btitle\b\s*(?:to|as)?\s*:?\s*(.+)$', re.IGNORECASE | re.DOTALL,
+)
+_EMAIL_SUBJECT_PATTERN = re.compile(r'\bsubject\b')
+_SET_EMAIL_SUBJECT_PATTERN = re.compile(
+    r'\b(?:set|change|update)\b[^:]*\bsubject\b\s*(?:to|as)?\s*:?\s*(.+)$', re.IGNORECASE | re.DOTALL,
+)
+_FAVICON_PATTERN = re.compile(r'\bfavicon\b', re.IGNORECASE)
+_CLEAR_FAVICON_PATTERN = re.compile(r'\b(clear|remove|delete)\b.*\bfavicon\b', re.IGNORECASE)
+# Captures everything after the word "favicon" itself, then a SEPARATE
+# strip removes an optional leading "url"/"to"/"as"/":" filler sequence in
+# any order/combination ("favicon url to:", "favicon to", "favicon:") —
+# simpler and less failure-prone than trying to encode both the filler
+# and the value capture in one regex (an earlier version of this pattern
+# used [^:]* on both sides of an optional filler group and silently
+# failed to capture a real URL because the two greedy segments fought
+# over the same input).
+_SET_FAVICON_PATTERN = re.compile(r'\bfavicon\b\s*(.*)$', re.IGNORECASE | re.DOTALL)
+_FAVICON_VALUE_PREFIX_PATTERN = re.compile(r'^(?:url\s+)?(?:to|as)?\s*:?\s*', re.IGNORECASE)
+
 # Sub-phase 3, item 13 — deterministic, zero-OpenAI-token "explain X"
 # intent, sourced entirely from knowledge/rules.py's 9 Outlook/MSO
 # explainer entries. Never mutates the document (action is always NONE) —
@@ -515,13 +579,22 @@ _EXPLAIN_TOPICS = (
     (re.compile(r'\bspacer\b', re.IGNORECASE), 'spacer-row-safe-scoping'),
     (re.compile(r'\bfont\s*fallback\b', re.IGNORECASE), 'outlook-font-fallback-mso-only'),
     (re.compile(r'\bconditional\s*comment\b|mso\s*condition', re.IGNORECASE), 'conditional-comment-scope'),
+    # Sub-phase 4, item 6 — document-standards explainer rules.
+    (re.compile(r'\btitle\b.*\b(name|subject)\b|\b(name|subject)\b.*\btitle\b', re.IGNORECASE), 'email-title-vs-document-name'),
+    (re.compile(r'\bsubject\b', re.IGNORECASE), 'email-subject-is-send-metadata'),
+    (re.compile(r'\btitle\b', re.IGNORECASE), 'email-title-vs-document-name'),
+    (re.compile(r'\bfavicon\b', re.IGNORECASE), 'favicon-url-requirements'),
+    (re.compile(r'\breset\s*css\b', re.IGNORECASE), 'reset-css-purpose'),
+    (re.compile(r'\bmeta\s*(?:data)?\s*baseline\b|\brequired\s*meta\b|\bformat[\s-]*detection\b', re.IGNORECASE), 'required-email-meta-baseline'),
     (re.compile(r'\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
 )
 
 _EXPLAIN_CLARIFY_REPLY = (
     'I can explain: the Word rendering engine vs New Outlook, the 96-DPI Office setting, AllowPNG, '
     'the VML namespace, why VML needs an HTML fallback, why a global row-collapse rule is risky, safe '
-    'spacer-row scoping, Outlook font fallback, and MSO conditional-comment scope. Which one?'
+    'spacer-row scoping, Outlook font fallback, MSO conditional-comment scope, the email title vs the '
+    'document name, why the subject is send metadata, favicon URL requirements, Reset CSS, and the '
+    'required email meta baseline. Which one?'
 )
 
 
@@ -662,6 +735,55 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
             return CommandResult(
                 reply='Tell me what to set your Custom CSS to, e.g. "set custom css to: .my-class { color: red; }".',
                 action={'type': ActionType.NONE}, confidence=0.3,
+            )
+
+        # Sub-phase 4, item 3 — title/subject/favicon. Checked before the
+        # generic insert/delete patterns below for the same reason the CSS
+        # block above is: "set the title to My Email" must never be misread
+        # as a module command.
+        if _EMAIL_TITLE_PATTERN.search(lowered):
+            set_match = _SET_EMAIL_TITLE_PATTERN.search(text)
+            value = _clean_text_value(set_match.group(1)) if set_match else None
+            if value is None:
+                return CommandResult(
+                    reply='Tell me the new email title, e.g. "set the title to Summer Sale".',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=f'I will set the email title to "{value}".',
+                action={'type': ActionType.SET_EMAIL_TITLE, 'value': value}, confidence=0.85,
+            )
+
+        if _EMAIL_SUBJECT_PATTERN.search(lowered):
+            set_match = _SET_EMAIL_SUBJECT_PATTERN.search(text)
+            value = _clean_text_value(set_match.group(1)) if set_match else None
+            if value is None:
+                return CommandResult(
+                    reply='Tell me the new email subject, e.g. "set the subject to Summer Sale is here".',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=f'I will set the email subject to "{value}".',
+                action={'type': ActionType.SET_EMAIL_SUBJECT, 'value': value}, confidence=0.85,
+            )
+
+        if _FAVICON_PATTERN.search(lowered):
+            if _CLEAR_FAVICON_PATTERN.search(lowered):
+                return CommandResult(
+                    reply='This will remove the favicon. Please confirm.',
+                    action={'type': ActionType.CLEAR_FAVICON}, confidence=0.9,
+                )
+            set_match = _SET_FAVICON_PATTERN.search(text)
+            raw_value = _FAVICON_VALUE_PREFIX_PATTERN.sub('', set_match.group(1), count=1) if set_match else ''
+            url = _clean_url_value(raw_value)
+            if not url:
+                return CommandResult(
+                    reply='Tell me the favicon URL to use, e.g. "set favicon url to https://example.com/favicon.png".',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=f'I will set the favicon to {url}.',
+                action={'type': ActionType.SET_FAVICON, 'url': url}, confidence=0.85,
             )
 
         # Insert — checked before delete/duplicate so "add a button" never

@@ -613,4 +613,90 @@ describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phas
     act(() => result.current.updateDocumentSettings({ email_title: 'New Title' }));
     expect(result.current.dirty).toBe(true);
   });
+
+  // Sub-phase 4, item 4 — the Repair Engine's batched-commit mutator.
+  describe('applyRepairPatch', () => {
+    it('applies a module prop patch and a document patch in ONE history commit (one undo restores both)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      const moduleId = result.current.modules[0].id;
+      const historyDepthBefore = result.current.canUndo;
+      expect(historyDepthBefore).toBe(true); // addModule already committed once
+
+      act(() => result.current.applyRepairPatch(
+        [{ moduleId, propPatch: { color: '#000000' } }],
+        { reset_css_enabled: true },
+      ));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#000000');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(true);
+
+      act(() => result.current.undo());
+      // Undoing ONE step reverts BOTH the module patch and the document
+      // patch together — proves they were a single history entry, not two.
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).not.toBe('#000000');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(true); // was already true by default
+    });
+
+    it('applies only a document patch when modulePatches is empty', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.applyRepairPatch([], { custom_css_enabled: false }));
+      expect(result.current.documentSettings.custom_css_enabled).toBe(false);
+      expect(result.current.dirty).toBe(true);
+    });
+
+    it('applies only module patches when documentPatch is null', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      const moduleId = result.current.modules[0].id;
+      const settingsBefore = result.current.documentSettings;
+
+      act(() => result.current.applyRepairPatch([{ moduleId, propPatch: { color: '#111111' } }], null));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#111111');
+      expect(result.current.documentSettings).toEqual(settingsBefore);
+    });
+
+    it('patches a module nested inside a layout column (same recursive walk applyGlobalStyle uses)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      const columnId = result.current.modules[0].columns![0].id;
+      act(() => result.current.insertNestedModule(layoutId, columnId, 'text'));
+      const nestedId = result.current.modules[0].columns![0].modules[0].id;
+
+      act(() => result.current.applyRepairPatch([{ moduleId: nestedId, propPatch: { color: '#222222' } }], null));
+
+      const nestedProps = result.current.modules[0].columns![0].modules[0].props as unknown as TextModuleProps;
+      expect(nestedProps.color).toBe('#222222');
+    });
+
+    it('applies multiple module patches across different modules in one commit', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      act(() => result.current.addModule('text'));
+      const [firstId, secondId] = result.current.modules.map((m) => m.id);
+      const historyIndexBefore = result.current.canUndo;
+      expect(historyIndexBefore).toBe(true);
+
+      // #ff0000/#00ff00 deliberately avoid text's own default color
+      // (#333333) — reusing the default would make "reverted to default"
+      // indistinguishable from "reverted to the patched value" below.
+      act(() => result.current.applyRepairPatch(
+        [
+          { moduleId: firstId, propPatch: { color: '#ff0000' } },
+          { moduleId: secondId, propPatch: { color: '#00ff00' } },
+        ],
+        null,
+      ));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#ff0000');
+      expect((result.current.modules[1].props as unknown as TextModuleProps).color).toBe('#00ff00');
+
+      act(() => result.current.undo());
+      // One undo reverts BOTH module patches — proves single commit.
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).not.toBe('#ff0000');
+      expect((result.current.modules[1].props as unknown as TextModuleProps).color).not.toBe('#00ff00');
+    });
+  });
 });

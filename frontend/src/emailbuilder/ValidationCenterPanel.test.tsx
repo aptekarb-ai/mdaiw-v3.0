@@ -17,17 +17,26 @@ function content(modules: EmailModule[] = []): EmailDocumentContent {
 function renderPanel(overrides: Partial<Parameters<typeof ValidationCenterPanel>[0]> = {}) {
   const onNavigateToModule = vi.fn();
   const onApplySafeFix = vi.fn();
+  const onApplyDocumentFix = vi.fn();
   render(
     <ValidationCenterPanel
       width={700}
       content={content()}
       platform="generic"
+      // Sub-phase 4 — a real title/subject/resetCssEnabled=true baseline,
+      // so the "clean document" tests below keep their exact 100/0-issues
+      // semantics; individual tests override these to exercise the new
+      // 'document' category checks specifically.
+      emailTitle="Test Email"
+      emailSubject="Test subject"
+      resetCssEnabled
       onNavigateToModule={onNavigateToModule}
       onApplySafeFix={onApplySafeFix}
+      onApplyDocumentFix={onApplyDocumentFix}
       {...overrides}
     />,
   );
-  return { onNavigateToModule, onApplySafeFix };
+  return { onNavigateToModule, onApplySafeFix, onApplyDocumentFix };
 }
 
 describe('ValidationCenterPanel', () => {
@@ -41,7 +50,7 @@ describe('ValidationCenterPanel', () => {
   it('every category shows Good for a clean document', () => {
     renderPanel();
     const statuses = screen.getAllByText('Good');
-    expect(statuses.length).toBe(8); // html, outlook, responsive, accessibility, links, images, dark-mode, platform
+    expect(statuses.length).toBe(9); // document, html, outlook, responsive, accessibility, links, images, dark-mode, platform
   });
 
   it('lists a real issue with its category, severity, and score below 100 for an unsafe document', () => {
@@ -85,6 +94,24 @@ describe('ValidationCenterPanel', () => {
     expect(onApplySafeFix).toHaveBeenCalledWith(badContrast.id, { color: '#000000' });
   });
 
+  it('Sub-phase 4: a document-scope safe fix (Reset CSS disabled) shows a Fix button that calls onApplyDocumentFix, not onApplySafeFix', async () => {
+    const user = userEvent.setup();
+    const { onApplyDocumentFix, onApplySafeFix } = renderPanel({ resetCssEnabled: false });
+
+    const card = screen.getByText('Email Reset CSS is disabled').closest('li')!;
+    await user.click(within(card).getByRole('button', { name: 'Fix' }));
+
+    expect(onApplyDocumentFix).toHaveBeenCalledWith({ reset_css_enabled: true });
+    expect(onApplySafeFix).not.toHaveBeenCalled();
+  });
+
+  it('Sub-phase 4: an empty title/subject is flagged with no Fix button (fixType "none")', () => {
+    renderPanel({ emailTitle: '', emailSubject: '' });
+    expect(screen.getByText('Email title is empty')).toBeInTheDocument();
+    const card = screen.getByText('Email subject is empty').closest('li')!;
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+  });
+
   it('AI-Assisted Fix is present but disabled (coming soon) — no fabricated AI call', () => {
     renderPanel();
     expect(screen.getByRole('button', { name: /AI-Assisted Fix/ })).toBeDisabled();
@@ -116,8 +143,12 @@ describe('ValidationCenterPanel', () => {
         width={700}
         content={content()}
         platform="generic"
+        emailTitle="Test Email"
+        emailSubject="Test subject"
+        resetCssEnabled
         onNavigateToModule={vi.fn()}
         onApplySafeFix={vi.fn()}
+        onApplyDocumentFix={vi.fn()}
       />,
     );
     expect(screen.getByText('100')).toBeInTheDocument();
@@ -128,8 +159,12 @@ describe('ValidationCenterPanel', () => {
         width={700}
         content={content([image])}
         platform="generic"
+        emailTitle="Test Email"
+        emailSubject="Test subject"
+        resetCssEnabled
         onNavigateToModule={vi.fn()}
         onApplySafeFix={vi.fn()}
+        onApplyDocumentFix={vi.fn()}
       />,
     );
     await waitFor(() => {

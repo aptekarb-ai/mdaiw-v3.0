@@ -14,7 +14,7 @@ import { CodeEditorPanel } from '../emailbuilder/CodeEditorPanel';
 import { PreviewStudioPanel } from '../emailbuilder/PreviewStudioPanel';
 import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
 import { AIEngineerPanel } from '../emailbuilder/AIEngineerPanel';
-import type { AICommandAction } from '../emailbuilder/aiCommand';
+import type { AICommandAction, RepairActionItem } from '../emailbuilder/aiCommand';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { DocumentSettingsDialog, type DocumentSettingsInput } from '../emailbuilder/DocumentSettingsDialog';
 import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
@@ -159,10 +159,42 @@ export function EmailBuilderWorkspacePage() {
       case 'CLEAR_CUSTOM_CSS':
         input = { custom_css: '' };
         break;
+      // Sub-phase 4, item 3 — same local-commit path, no network.
+      case 'SET_EMAIL_TITLE':
+        input = { email_title: action.title };
+        break;
+      case 'SET_EMAIL_SUBJECT':
+        input = { email_subject: action.subject };
+        break;
+      case 'SET_FAVICON':
+        input = { favicon_url: action.url };
+        break;
+      case 'CLEAR_FAVICON':
+        input = { favicon_url: '' };
+        break;
       default:
         return false;
     }
     builder.updateDocumentSettings(input);
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, []);
+
+  // Sub-phase 4, item 4 — the Repair Engine's batched Apply: every item
+  // (module- or document-scoped) commits through builder.applyRepairPatch
+  // in ONE call/history step — see repairEngine.ts's
+  // toApplyRepairPatchArgs for how the items are split. A local commit
+  // cannot fail, so this always returns true (kept boolean/sync for
+  // symmetry with handleApplyAiAction).
+  const handleApplyRepairAction = useCallback((items: RepairActionItem[]): boolean => {
+    const modulePatches = items
+      .filter((item): item is Extract<RepairActionItem, { kind: 'module' }> => item.kind === 'module')
+      .map((item) => ({ moduleId: item.moduleId, propPatch: item.propPatch }));
+    const documentItems = items.filter((item): item is Extract<RepairActionItem, { kind: 'document' }> => item.kind === 'document');
+    const documentPatch = documentItems.length > 0
+      ? documentItems.reduce((acc, item) => ({ ...acc, ...item.documentPatch }), {} as Record<string, unknown>)
+      : null;
+    builder.applyRepairPatch(modulePatches, documentPatch);
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
   }, []);
@@ -452,6 +484,7 @@ export function EmailBuilderWorkspacePage() {
             content={{ version: 1, modules: builder.modules }}
             platform={document.platform}
             emailTitle={builder.documentSettings.email_title}
+            emailSubject={builder.documentSettings.email_subject}
             faviconUrl={builder.documentSettings.favicon_url}
             resetCssEnabled={builder.documentSettings.reset_css_enabled}
             customCssEnabled={builder.documentSettings.custom_css_enabled}
@@ -461,17 +494,23 @@ export function EmailBuilderWorkspacePage() {
               builder.selectModule(moduleId);
             }}
             onApplySafeFix={handleUpdateProps}
+            onApplyDocumentFix={builder.updateDocumentSettings}
           />
         ) : editorMode === 'ai' ? (
           <AIEngineerPanel
             platform={document.platform}
             width={document.width}
             selectedModule={builder.selectedModule}
+            content={{ version: 1, modules: builder.modules }}
+            emailTitle={builder.documentSettings.email_title}
+            emailSubject={builder.documentSettings.email_subject}
+            faviconUrl={builder.documentSettings.favicon_url}
             resetCssEnabled={builder.documentSettings.reset_css_enabled}
             customCssEnabled={builder.documentSettings.custom_css_enabled}
             customCss={builder.documentSettings.custom_css}
             onApplyAction={handleApplyAiAction}
             onApplyDocumentSettingAction={handleApplyDocumentSettingAiAction}
+            onApplyRepairAction={handleApplyRepairAction}
           />
         ) : (
         <>

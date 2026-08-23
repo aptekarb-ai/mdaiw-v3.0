@@ -42,20 +42,26 @@ function response(overrides: Partial<AICommandResponse> = {}): AICommandResponse
 function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> = {}) {
   const onApplyAction = vi.fn().mockReturnValue(true);
   const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
+  const onApplyRepairAction = vi.fn().mockReturnValue(true);
   render(
     <AIEngineerPanel
       platform="generic"
       width={700}
       selectedModule={null}
+      content={{ version: 1, modules: [] }}
+      emailTitle="Test Email"
+      emailSubject="Test subject"
+      faviconUrl=""
       resetCssEnabled
       customCssEnabled={false}
       customCss=""
       onApplyAction={onApplyAction}
       onApplyDocumentSettingAction={onApplyDocumentSettingAction}
+      onApplyRepairAction={onApplyRepairAction}
       {...overrides}
     />,
   );
-  return { onApplyAction, onApplyDocumentSettingAction };
+  return { onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction };
 }
 
 afterEach(() => {
@@ -404,5 +410,168 @@ describe('AIEngineerPanel — Sub-phase 2 document-level CSS actions (item F)', 
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(await screen.findByText(/Could not apply — saving to the server failed/)).toBeInTheDocument();
+  });
+});
+
+describe('AIEngineerPanel — Sub-phase 4, item 3: title/subject/favicon actions', () => {
+  it('a SET_EMAIL_TITLE proposal shows the current/proposed title and routes Apply through onApplyDocumentSettingAction', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'I will set the email title to "Summer Sale".',
+      action: { type: 'SET_EMAIL_TITLE', title: 'Summer Sale' },
+      requires_confirmation: true,
+    }));
+    const { onApplyAction, onApplyDocumentSettingAction } = renderPanel({ emailTitle: 'Old Title' });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'set the title to Summer Sale');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Set the email title to "Summer Sale"');
+
+    expect(screen.getByText('Old Title')).toBeInTheDocument();
+    expect(screen.getByText('Summer Sale')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyDocumentSettingAction).toHaveBeenCalledWith({ type: 'SET_EMAIL_TITLE', title: 'Summer Sale' });
+    expect(onApplyAction).not.toHaveBeenCalled();
+  });
+
+  it('a SET_FAVICON proposal shows the current/proposed URL', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'SET_FAVICON', url: 'https://example.com/favicon.png' },
+      requires_confirmation: true,
+    }));
+    renderPanel({ faviconUrl: '' });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'set favicon url to https://example.com/favicon.png');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('(empty)')).toBeInTheDocument();
+    expect(screen.getByText('https://example.com/favicon.png')).toBeInTheDocument();
+  });
+
+  it('a CLEAR_FAVICON proposal Applies through onApplyDocumentSettingAction', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      action: { type: 'CLEAR_FAVICON' },
+      requires_confirmation: true,
+    }));
+    const { onApplyDocumentSettingAction } = renderPanel({ faviconUrl: 'https://example.com/favicon.png' });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'remove the favicon');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Remove the favicon');
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyDocumentSettingAction).toHaveBeenCalledWith({ type: 'CLEAR_FAVICON' });
+  });
+});
+
+describe('AIEngineerPanel — Sub-phase 4, item 2/4: document diagnose/repair intents (client-side, zero network)', () => {
+  it('"validate the complete email" is answered locally — requestAICommand is never called', async () => {
+    mockSpeech();
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'validate the complete email');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Email Health Score: 100\/100/)).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('"check this email for classic outlook issues" reports honestly when nothing is wrong', async () => {
+    mockSpeech();
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'check this email for classic outlook issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/No Classic Outlook compatibility problems/)).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('a diagnostic reply with no repair candidates records as "Reported" in history, not "Needs clarification"', async () => {
+    mockSpeech();
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'validate the complete email');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Email Health Score/);
+
+    await user.click(screen.getByRole('tab', { name: 'History (1)' }));
+    expect(screen.getByText('Reported')).toBeInTheDocument();
+  });
+
+  it('"repair all safe issues" proposes a repair card (Reset CSS disabled) without calling requestAICommand', async () => {
+    mockSpeech();
+    renderPanel({ resetCssEnabled: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Repair 1 issue')).toBeInTheDocument();
+    expect(screen.getByText('Email Reset CSS is disabled')).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('Cancel on a repair proposal never applies anything', async () => {
+    mockSpeech();
+    const { onApplyRepairAction } = renderPanel({ resetCssEnabled: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onApplyRepairAction).not.toHaveBeenCalled();
+    expect(await screen.findByText('Cancelled. Nothing was changed.')).toBeInTheDocument();
+  });
+
+  it('Apply on a repair proposal calls onApplyRepairAction with the deterministic repair item', async () => {
+    mockSpeech();
+    const { onApplyRepairAction } = renderPanel({ resetCssEnabled: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyRepairAction).toHaveBeenCalledWith([
+      { kind: 'document', issueId: 'document:reset-css-disabled', documentPatch: { reset_css_enabled: true } },
+    ]);
+    expect(await screen.findByText('Repaired 1 issue.')).toBeInTheDocument();
+  });
+
+  it('a repair-keyword request with no matching issue never fabricates a proposal', async () => {
+    mockSpeech();
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix the dpi issue');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/could not find a matching problem/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
+  });
+
+  it('the composer stays disabled while a repair proposal is pending', async () => {
+    mockSpeech();
+    renderPanel({ resetCssEnabled: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    expect(screen.getByPlaceholderText(/Type your command/)).toBeDisabled();
   });
 });

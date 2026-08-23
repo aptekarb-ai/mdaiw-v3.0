@@ -96,6 +96,15 @@ export interface UseEmailBuilderState {
   // fields, matching every other builder mutator's "one function, every
   // caller" shape.
   updateDocumentSettings: (patch: Partial<EmailDocumentSettingsSnapshot>) => void;
+  // Sub-phase 4, item 4 — the Repair Engine's "Apply" for a (possibly
+  // multi-issue) proposal: every module prop patch AND the document
+  // patch land in ONE history commit, so a batch of several repaired
+  // issues undoes/redoes as a single step, exactly like any other single
+  // Apply — never one history entry per issue.
+  applyRepairPatch: (
+    modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
+    documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
+  ) => void;
   addModule: (type: EmailModuleType) => void;
   insertModuleAt: (type: EmailModuleType, index: number) => void;
   // Feature 14 — AI Engineer. Same top-level append as addModule, but the
@@ -207,6 +216,39 @@ export function useEmailBuilderState(): UseEmailBuilderState {
   // how quickly two saves happen back to back.
   const updateDocumentSettings = useCallback((patch: Partial<EmailDocumentSettingsSnapshot>) => {
     commitEntry({ modules: modulesRef.current, documentSettings: { ...documentSettingsRef.current, ...patch } });
+  }, [commitEntry]);
+
+  // Sub-phase 4, item 4 — same recursive one-level-of-column-nesting walk
+  // applyGlobalStyle already uses, so a repair targeting a module nested
+  // inside a layout column is patched correctly without any special-case
+  // path lookup.
+  const applyRepairPatch = useCallback((
+    modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
+    documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
+  ) => {
+    let nextModules = modulesRef.current;
+    if (modulePatches.length > 0) {
+      const patchByModuleId = new Map(modulePatches.map((entry) => [entry.moduleId, entry.propPatch]));
+      const applyToList = (list: EmailModule[]): EmailModule[] => list.map((module) => {
+        let updated = module;
+        const patch = patchByModuleId.get(module.id);
+        if (patch) {
+          updated = { ...updated, props: { ...updated.props, ...patch } };
+        }
+        if (updated.columns) {
+          updated = {
+            ...updated,
+            columns: updated.columns.map((column) => ({ ...column, modules: applyToList(column.modules) })),
+          };
+        }
+        return updated;
+      });
+      nextModules = applyToList(nextModules);
+    }
+    const nextDocumentSettings = documentPatch
+      ? { ...documentSettingsRef.current, ...documentPatch }
+      : documentSettingsRef.current;
+    commitEntry({ modules: nextModules, documentSettings: nextDocumentSettings });
   }, [commitEntry]);
 
   const loadModules = useCallback((initialModules: EmailModule[], initialSettings: EmailDocumentSettingsSnapshot = EMPTY_DOCUMENT_SETTINGS) => {
@@ -477,6 +519,7 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     canRedo: history.index < history.stack.length - 1,
     loadModules,
     updateDocumentSettings,
+    applyRepairPatch,
     addModule,
     insertModuleAt,
     addModuleWithProps,

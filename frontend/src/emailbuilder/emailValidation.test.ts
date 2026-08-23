@@ -266,6 +266,16 @@ describe('validateEmail', () => {
     expect(report.issues.some((i) => i.id === 'outlook-classic:unsafe-global-row-collapse')).toBe(true);
   });
 
+  it('Sub-phase 4: the unsafe global row-collapse rule has a safe fix that disables Custom CSS', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><head><style>tr{font-size:0;line-height:0;}</style></head><body></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === 'outlook-classic:unsafe-global-row-collapse');
+    expect(issue).toBeDefined();
+    expect(issue!.fixType).toBe('safe');
+    expect(issue!.safeFix).toEqual({ documentPatch: { custom_css_enabled: false } });
+  });
+
   it('Sub-phase 3: does not flag the scoped .mso-spacer rule the renderer itself emits', () => {
     const content = contentWith([]);
     const html = '<!doctype html><html><head><style>.mso-spacer{font-size:0;line-height:0;}</style></head><body></body></html>';
@@ -289,5 +299,167 @@ describe('validateEmail', () => {
     const html = renderEmailDocument({ width: 700, content });
     const report = validateEmail(html, content, 'generic');
     expect(report.issues.some((i) => i.id === 'outlook-new:vml-not-processed')).toBe(false);
+  });
+});
+
+// Sub-phase 4, item 1 — document-level standards checks. The 4th
+// (documentSettings) argument is optional and additive: every check
+// above in this file calls validateEmail with 3 args and must keep
+// scoring 100/0-issues on a clean document — proven directly below.
+describe('validateEmail — document-level standards (Sub-phase 4)', () => {
+  function fullSettings(overrides: Partial<{
+    emailSubject: string; faviconUrl: string; resetCssEnabled: boolean; customCssEnabled: boolean; customCss: string;
+  }> = {}) {
+    return {
+      emailSubject: 'A real subject line',
+      faviconUrl: '',
+      resetCssEnabled: true,
+      customCssEnabled: false,
+      customCss: '',
+      ...overrides,
+    };
+  }
+
+  it('omitting documentSettings (3-arg call) never produces a document-category issue, even with an empty title', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.filter((i) => i.category === 'document')).toHaveLength(0);
+  });
+
+  it('a fully-configured document (title + full settings) produces zero document issues', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const report = validateEmail(html, content, 'generic', fullSettings());
+    expect(report.issues.filter((i) => i.category === 'document')).toHaveLength(0);
+  });
+
+  it('flags an empty email title only when documentSettings is passed', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic', fullSettings());
+    expect(report.issues.some((i) => i.id === 'document:missing-title')).toBe(true);
+  });
+
+  it('flags an empty email subject', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const report = validateEmail(html, content, 'generic', fullSettings({ emailSubject: '' }));
+    const issue = report.issues.find((i) => i.id === 'document:missing-subject');
+    expect(issue).toBeDefined();
+    expect(issue!.fixType).toBe('none');
+  });
+
+  it('flags an invalid favicon URL with a safe fix that clears it', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const report = validateEmail(html, content, 'generic', fullSettings({ faviconUrl: 'javascript:alert(1)' }));
+    const issue = report.issues.find((i) => i.id === 'document:invalid-favicon');
+    expect(issue).toBeDefined();
+    expect(issue!.fixType).toBe('safe');
+    expect(issue!.safeFix).toEqual({ documentPatch: { favicon_url: '' } });
+  });
+
+  it('does not flag a valid https favicon URL', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email', faviconUrl: 'https://example.com/favicon.png' });
+    const report = validateEmail(html, content, 'generic', fullSettings({ faviconUrl: 'https://example.com/favicon.png' }));
+    expect(report.issues.some((i) => i.id === 'document:invalid-favicon')).toBe(false);
+  });
+
+  it('flags Reset CSS disabled with a safe fix that re-enables it', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email', resetCssEnabled: false });
+    const report = validateEmail(html, content, 'generic', fullSettings({ resetCssEnabled: false }));
+    const issue = report.issues.find((i) => i.id === 'document:reset-css-disabled');
+    expect(issue).toBeDefined();
+    expect(issue!.fixType).toBe('safe');
+    expect(issue!.safeFix).toEqual({ documentPatch: { reset_css_enabled: true } });
+  });
+
+  it('does not flag Reset CSS when it is enabled', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email', resetCssEnabled: true });
+    const report = validateEmail(html, content, 'generic', fullSettings({ resetCssEnabled: true }));
+    expect(report.issues.some((i) => i.id === 'document:reset-css-disabled')).toBe(false);
+  });
+
+  it('flags unsafe stored Custom CSS with a safe fix that disables it (cannot safely rewrite arbitrary CSS text)', () => {
+    const content = contentWith([]);
+    const unsafeCss = '.x{background:url(javascript:alert(1))}';
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const report = validateEmail(html, content, 'generic', fullSettings({ customCssEnabled: true, customCss: unsafeCss }));
+    const issue = report.issues.find((i) => i.id === 'document:custom-css-security');
+    expect(issue).toBeDefined();
+    expect(issue!.severity).toBe('error');
+    expect(issue!.fixType).toBe('safe');
+    expect(issue!.safeFix).toEqual({ documentPatch: { custom_css_enabled: false } });
+  });
+
+  it('does not flag safe stored Custom CSS', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const report = validateEmail(html, content, 'generic', fullSettings({ customCssEnabled: true, customCss: '.x{color:red}' }));
+    expect(report.issues.some((i) => i.id === 'document:custom-css-security')).toBe(false);
+  });
+
+  it('does not flag custom-css-security when Custom CSS is disabled, even if the stored text is unsafe', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content, title: 'My Email' });
+    const report = validateEmail(html, content, 'generic', fullSettings({ customCssEnabled: false, customCss: '.x{background:url(javascript:alert(1))}' }));
+    expect(report.issues.some((i) => i.id === 'document:custom-css-security')).toBe(false);
+  });
+
+  it('regression guard: flags a missing canonical namespace on a hand-built document', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><head><title>x</title></head><body></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'document:missing-namespace')).toBe(true);
+  });
+
+  it('does not flag namespaces on a real generated document', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'document:missing-namespace')).toBe(false);
+  });
+
+  it('regression guard: flags a missing required meta baseline on a hand-built document', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><title>x</title></head><body></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === 'document:missing-meta-baseline');
+    expect(issue).toBeDefined();
+    expect(issue!.detail).toContain('charset');
+  });
+
+  it('does not flag the meta baseline on a real generated document', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'document:missing-meta-baseline')).toBe(false);
+  });
+
+  it('regression guard: flags a duplicated <title> declaration', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><title>a</title><title>b</title></head><body></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'document:duplicate-head-declaration:<title>')).toBe(true);
+  });
+
+  it('does not flag duplicate declarations on a real generated document', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('document:duplicate-head-declaration'))).toBe(false);
+  });
+
+  it('"document" category appears in the report even with zero issues (categories are always enumerated)', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    const category = report.categories.find((c) => c.id === 'document');
+    expect(category).toBeDefined();
+    expect(category!.status).toBe('good');
   });
 });

@@ -1,13 +1,19 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { requestAICommand } from '../api/client';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import {
   describeAction, DOCUMENT_SCOPE_ACTION_TYPES,
   type AIActionHistoryEntry, type AICommandAction, type AICommandProviderId, type AICommandSelectedModuleContext,
+  type RepairActionItem,
 } from './aiCommand';
 import { detectCustomCssWarnings } from './emailCss';
-import type { EmailModule } from './edm';
+import { renderEmailDocument } from './htmlRenderer';
+import { validateEmail } from './emailValidation';
+import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
+import type { RepairCandidate } from './repairEngine';
+import type { EmailDocumentContent, EmailModule } from './edm';
 import type { EmailPlatform } from './types';
+import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
 import './AIEngineerPanel.css';
 
 interface ChatMessage {
@@ -31,6 +37,17 @@ interface AIEngineerPanelProps {
   platform: EmailPlatform;
   width: number;
   selectedModule: EmailModule | null;
+  // Sub-phase 4, item 2 — full module tree + document settings, so this
+  // panel can compute the SAME ValidationReport Validation Center shows
+  // (validateEmail on the real rendered HTML — item 7: one canonical rule
+  // set, never a second opinion) for the diagnose/explain/repair intents
+  // below. `content` was not previously threaded here because Phase A/
+  // Sub-phase 2/3's AI actions never needed the full document, only the
+  // selected module and document CSS state.
+  content: EmailDocumentContent;
+  emailTitle: string;
+  emailSubject: string;
+  faviconUrl: string;
   // Sub-phase 2, item F — current document CSS state, read-only here,
   // used only to render the proposal's "current" side of the diff view.
   resetCssEnabled: boolean;
@@ -42,11 +59,18 @@ interface AIEngineerPanelProps {
   // selection changed after the proposal was made — so the panel can
   // report an honest outcome instead of claiming success.
   onApplyAction: (action: AICommandAction, capturedSelectedModuleId: string | null) => boolean;
-  // Document-level (Reset/Custom CSS) actions PATCH the EmailDocument
-  // through the API — genuinely async, unlike onApplyAction above, which
-  // only ever mutates local, already-loaded EDM state synchronously.
-  // Rejects on a failed PATCH so the panel can report a real failure.
+  // Document-level (Reset/Custom CSS/title/subject/favicon) actions PATCH
+  // the EmailDocument through the API — genuinely async, unlike
+  // onApplyAction above, which only ever mutates local, already-loaded
+  // EDM state synchronously. Rejects on a failed PATCH so the panel can
+  // report a real failure.
   onApplyDocumentSettingAction: (action: AICommandAction) => Promise<boolean>;
+  // Sub-phase 4, item 4 — the Repair Engine's batched Apply: every item
+  // (module-scope or document-scope) commits through
+  // builder.applyRepairPatch in ONE history step. Never fails (a local
+  // commit cannot fail), kept synchronous/boolean for symmetry with
+  // onApplyAction.
+  onApplyRepairAction: (items: RepairActionItem[]) => boolean;
 }
 
 let nextId = 0;
@@ -63,13 +87,43 @@ interface CssProposalDetails {
 }
 
 // Item F's proposal card fields (current/proposed/affected clients/
-// warnings) for the 4 document-level CSS action types — built entirely
-// from data already in this component (current document state via
-// props, the proposed value from the action itself), no extra request.
+// warnings), extended in Sub-phase 4 to cover title/subject/favicon too —
+// built entirely from data already in this component (current document
+// state via props, the proposed value from the action itself), no extra
+// request.
 function cssProposalDetails(
   action: AICommandAction, resetCssEnabled: boolean, customCssEnabled: boolean, customCss: string,
+  emailTitle: string, emailSubject: string, faviconUrl: string,
 ): CssProposalDetails | null {
   switch (action.type) {
+    case 'SET_EMAIL_TITLE':
+      return {
+        current: emailTitle.trim() || '(empty)',
+        proposed: action.title,
+        affectedClients: 'Browser tabs and clients that display the document <title>.',
+        warnings: [],
+      };
+    case 'SET_EMAIL_SUBJECT':
+      return {
+        current: emailSubject.trim() || '(empty)',
+        proposed: action.subject,
+        affectedClients: 'Send/document metadata — never rendered into the email HTML.',
+        warnings: [],
+      };
+    case 'SET_FAVICON':
+      return {
+        current: faviconUrl.trim() || '(empty)',
+        proposed: action.url,
+        affectedClients: 'Clients/browser tabs that display a favicon link.',
+        warnings: [],
+      };
+    case 'CLEAR_FAVICON':
+      return {
+        current: faviconUrl.trim() || '(empty)',
+        proposed: '(empty)',
+        affectedClients: 'N/A — removes the favicon entirely.',
+        warnings: [],
+      };
     case 'SET_RESET_CSS_ENABLED':
       return {
         current: resetCssEnabled ? 'Enabled' : 'Disabled',
@@ -108,11 +162,19 @@ const HISTORY_STATUS_LABEL: Record<AIActionHistoryEntry['status'], string> = {
   cancelled: 'Cancelled',
   clarification: 'Needs clarification',
   failed: 'Failed',
+  reported: 'Reported',
 };
 
+interface PendingRepairProposal {
+  messageId: string;
+  command: string;
+  candidates: RepairCandidate[];
+}
+
 export function AIEngineerPanel({
-  platform, width, selectedModule, resetCssEnabled, customCssEnabled, customCss,
-  onApplyAction, onApplyDocumentSettingAction,
+  platform, width, selectedModule, content, emailTitle, emailSubject, faviconUrl,
+  resetCssEnabled, customCssEnabled, customCss,
+  onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction,
 }: AIEngineerPanelProps) {
   const [subView, setSubView] = useState<'chat' | 'history'>('chat');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -120,6 +182,12 @@ export function AIEngineerPanel({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<PendingProposal | null>(null);
+  // Sub-phase 4, item 4 — a SEPARATE pending state from the backend-
+  // routed `pending` above: a repair proposal is a LIST of items (each
+  // possibly module- or document-scoped), never a single AICommandAction,
+  // so it renders and applies differently (see the repair proposal card
+  // below and handleApplyRepair).
+  const [pendingRepair, setPendingRepair] = useState<PendingRepairProposal | null>(null);
   const [resolving, setResolving] = useState(false);
   // Item F — "require stronger confirmation than a trivial property
   // change" for a substantial Custom CSS replacement: Apply stays
@@ -130,16 +198,71 @@ export function AIEngineerPanel({
 
   const speech = useSpeechRecognition();
 
+  // Sub-phase 4, item 2/7 — the SAME validateEmail() call Validation
+  // Center makes, over the SAME rendered HTML — one canonical report, so
+  // an AI Engineer diagnosis can never disagree with what Validation
+  // Center itself shows. Recomputes whenever the document actually
+  // changes, exactly like ValidationCenterPanel's own useMemo.
+  const documentSettings: EmailDocumentSettingsSnapshot = useMemo(() => ({
+    email_title: emailTitle, email_subject: emailSubject, favicon_url: faviconUrl,
+    reset_css_enabled: resetCssEnabled, custom_css_enabled: customCssEnabled, custom_css: customCss,
+  }), [emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+
+  const validationReport = useMemo(() => {
+    try {
+      const html = renderEmailDocument({
+        width, content, title: emailTitle, faviconUrl,
+        resetCssEnabled, customCssEnabled, customCss,
+      });
+      return validateEmail(html, content, platform, {
+        emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+      });
+    } catch {
+      return null;
+    }
+  }, [width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+
   function appendMessage(role: ChatMessage['role'], text: string) {
     setMessages((current) => [...current, { id: newId('msg'), role, text }]);
   }
 
   async function handleSend() {
     const message = draft.trim();
-    if (!message || sending || pending) return;
+    if (!message || sending || pending || pendingRepair) return;
 
     appendMessage('user', message);
     setDraft('');
+
+    // Sub-phase 4, item 2/4 — document-level diagnose/explain/repair
+    // intents are recognized and answered ENTIRELY LOCALLY, before ever
+    // reaching the backend: only this component has a live
+    // ValidationReport, and routing these through the network would mean
+    // either duplicating validation rules server-side (item 7 forbids a
+    // second rule set) or sending the whole rendered HTML over the wire
+    // for no benefit. An unmatched message falls through unchanged to the
+    // normal backend-routed command flow below — module/CSS/title/
+    // subject/favicon commands are entirely unaffected by this addition.
+    const intentMatch = matchDocumentIntent(message);
+    if (intentMatch && validationReport) {
+      const result = resolveDocumentIntent(intentMatch, validationReport, content.modules, documentSettings);
+      appendMessage('assistant', result.reply);
+      if (result.repairCandidates && result.repairCandidates.length > 0) {
+        setPendingRepair({ messageId: newId('repair'), command: message, candidates: result.repairCandidates });
+      } else {
+        setHistory((current) => [...current, {
+          id: newId('hist'),
+          command: message,
+          interpretation: result.reply,
+          action: { type: 'NONE' },
+          status: 'reported',
+          summary: result.reply,
+          provider: 'deterministic',
+          requiresConfirmation: false,
+        }]);
+      }
+      return;
+    }
+
     setSending(true);
 
     // Feature 14 V2 — every registered module type is now a potential AI
@@ -255,6 +378,52 @@ export function AIEngineerPanel({
     setStrongConfirmChecked(false);
   }
 
+  // Sub-phase 4, item 4 — Apply for a repair proposal: every candidate's
+  // item (module- or document-scoped) is handed to
+  // onApplyRepairAction/builder.applyRepairPatch in ONE call, so the
+  // whole batch commits as a single undo step, then Validation Center's
+  // own useMemo automatically recomputes on the next render (this
+  // component's own `validationReport` recomputes too — no manual
+  // "revalidate" call needed).
+  function handleApplyRepair() {
+    if (!pendingRepair || resolving) return;
+    setResolving(true);
+    const items = pendingRepair.candidates.map((candidate) => candidate.item);
+    const applied = onApplyRepairAction(items);
+    const summary = applied
+      ? `Repaired ${items.length} issue${items.length === 1 ? '' : 's'}.`
+      : 'Could not apply the repair. Please try again.';
+    appendMessage('assistant', summary);
+    setHistory((current) => [...current, {
+      id: newId('hist'),
+      command: pendingRepair.command,
+      interpretation: summary,
+      action: { type: 'REPAIR_ISSUES', items },
+      status: applied ? 'applied' : 'failed',
+      summary,
+      provider: 'deterministic',
+      requiresConfirmation: true,
+    }]);
+    setPendingRepair(null);
+    setResolving(false);
+  }
+
+  function handleCancelRepair() {
+    if (!pendingRepair) return;
+    appendMessage('assistant', 'Cancelled. Nothing was changed.');
+    setHistory((current) => [...current, {
+      id: newId('hist'),
+      command: pendingRepair.command,
+      interpretation: 'Repair proposal cancelled.',
+      action: { type: 'REPAIR_ISSUES', items: pendingRepair.candidates.map((c) => c.item) },
+      status: 'cancelled',
+      summary: 'Cancelled.',
+      provider: 'deterministic',
+      requiresConfirmation: true,
+    }]);
+    setPendingRepair(null);
+  }
+
   function handleMicClick() {
     if (speech.status === 'listening') {
       speech.stop();
@@ -296,13 +465,15 @@ export function AIEngineerPanel({
       {subView === 'chat' ? (
         <div className="ai-engineer-panel__chat">
           <div className="ai-engineer-panel__messages" ref={listRef} role="log" aria-live="polite">
-            {messages.length === 0 && !pending && (
+            {messages.length === 0 && !pending && !pendingRepair && (
               <div className="ai-engineer-panel__empty" role="status">
                 <span className="mdaiw-icon mdaiw-icon--ai-assistants" aria-hidden="true" />
                 <p>
                   Ask the AI Engineer to add a module, change the selected module&apos;s color/text/size/
-                  alignment, delete or duplicate it, restyle every module of one type, or enable/disable Email
-                  Reset CSS and set/remove Custom CSS. Type a command or press the microphone.
+                  alignment, delete or duplicate it, restyle every module of one type, enable/disable Email
+                  Reset CSS and set/remove Custom CSS, change the title/subject/favicon, diagnose Outlook
+                  compatibility ("check this email for Classic Outlook issues"), or repair safe issues
+                  ("repair all safe issues"). Type a command or press the microphone.
                 </p>
               </div>
             )}
@@ -316,7 +487,9 @@ export function AIEngineerPanel({
             ))}
 
             {pending && (() => {
-              const cssDetails = cssProposalDetails(pending.action, resetCssEnabled, customCssEnabled, customCss);
+              const cssDetails = cssProposalDetails(
+                pending.action, resetCssEnabled, customCssEnabled, customCss, emailTitle, emailSubject, faviconUrl,
+              );
               const applyBlocked = resolving || (pending.requiresStrongConfirmation && !strongConfirmChecked);
               return (
                 <div
@@ -385,6 +558,62 @@ export function AIEngineerPanel({
                 </div>
               );
             })()}
+
+            {pendingRepair && (
+              <div className="ai-engineer-panel__proposal ai-engineer-panel__proposal--confirm" role="alert">
+                <p className="ai-engineer-panel__proposal-title">
+                  <span className="mdaiw-icon mdaiw-icon--warning" aria-hidden="true" />
+                  {pendingRepair.candidates.length === 1 ? 'Repair 1 issue' : `Repair ${pendingRepair.candidates.length} issues`}
+                </p>
+                <ul className="ai-engineer-panel__repair-list">
+                  {pendingRepair.candidates.map((candidate) => (
+                    <li key={candidate.issueId} className="ai-engineer-panel__repair-item">
+                      <p className="ai-engineer-panel__repair-item-title">{candidate.title}</p>
+                      <p className="ai-engineer-panel__repair-item-detail">{candidate.detail}</p>
+                      <dl className="ai-engineer-panel__repair-item-meta">
+                        <div>
+                          <dt>Affected</dt>
+                          <dd>{candidate.affectedClient}</dd>
+                        </div>
+                        <div>
+                          <dt>Severity</dt>
+                          <dd>{candidate.severity}</dd>
+                        </div>
+                        <div>
+                          <dt>Before</dt>
+                          <dd>{candidate.before}</dd>
+                        </div>
+                        <div>
+                          <dt>After</dt>
+                          <dd>{candidate.after}</dd>
+                        </div>
+                        <div>
+                          <dt>Confidence</dt>
+                          <dd>{Math.round(candidate.confidence * 100)}%</dd>
+                        </div>
+                        <div>
+                          <dt>Fix type</dt>
+                          <dd>Safe automatic fix</dd>
+                        </div>
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+                <div className="ai-engineer-panel__proposal-actions">
+                  <button type="button" className="button button--outline" onClick={handleCancelRepair} disabled={resolving}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    onClick={handleApplyRepair}
+                    disabled={resolving}
+                  >
+                    Apply
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="ai-engineer-panel__composer">
@@ -403,7 +632,7 @@ export function AIEngineerPanel({
                     void handleSend();
                   }
                 }}
-                disabled={sending || Boolean(pending)}
+                disabled={sending || Boolean(pending) || Boolean(pendingRepair)}
                 rows={2}
               />
               <button
@@ -414,7 +643,7 @@ export function AIEngineerPanel({
                     : 'ai-engineer-panel__mic-button'
                 }
                 onClick={handleMicClick}
-                disabled={micUnsupported || sending || Boolean(pending)}
+                disabled={micUnsupported || sending || Boolean(pending) || Boolean(pendingRepair)}
                 aria-label={speech.status === 'listening' ? 'Stop listening' : 'Talk to the AI Engineer'}
                 title={micUnsupported ? 'Voice input is not supported in this browser. You can continue using typed commands.' : undefined}
               >
@@ -427,7 +656,7 @@ export function AIEngineerPanel({
                 type="button"
                 className="button button--primary"
                 onClick={() => void handleSend()}
-                disabled={sending || Boolean(pending) || !draft.trim()}
+                disabled={sending || Boolean(pending) || Boolean(pendingRepair) || !draft.trim()}
               >
                 <span className="mdaiw-icon mdaiw-icon--send" aria-hidden="true" />
                 {sending ? 'Sending…' : 'Send'}

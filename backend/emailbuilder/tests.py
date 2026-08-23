@@ -1756,12 +1756,23 @@ class KnowledgeRuleTests(TestCase):
     by every real rule, and load_rules()/find_rule() behave as the
     deterministic explain intent (below) depends on."""
 
-    def test_load_rules_returns_nine_outlook_rules(self):
+    def test_load_rules_returns_nine_outlook_rules_and_five_document_rules(self):
         rules = load_rules()
-        self.assertEqual(len(rules), 9)
+        self.assertEqual(len(rules), 14)
         for rule in rules:
             self.assertIsInstance(rule, KnowledgeRule)
-            self.assertEqual(rule.category, 'outlook')
+        outlook_rules = [r for r in rules if r.category == 'outlook']
+        document_rules = [r for r in rules if r.category == 'document']
+        self.assertEqual(len(outlook_rules), 9)
+        self.assertEqual(len(document_rules), 5)
+
+    def test_row_collapse_rule_is_kept_in_sync_with_the_repair_engines_actual_safe_fix(self):
+        """Sub-phase 4, item 5/7 -- the Repair Engine's deterministic safe
+        fix for outlook-classic:unsafe-global-row-collapse disables Custom
+        CSS; this knowledge rule must say so, never disagree."""
+        rule = find_rule('global-row-collapse-danger')
+        self.assertTrue(rule.safe_auto_fix)
+        self.assertIn('disables Custom CSS', rule.suggested_fix)
 
     def test_every_rule_id_is_unique(self):
         rules = load_rules()
@@ -1862,6 +1873,43 @@ class EmailAiEngineerExplainIntentTests(TestCase):
         self.assertEqual(result.action, {'type': ActionType.NONE})
         self.assertIn('xmlns:v', result.reply)
 
+    # --- Sub-phase 4, item 6 -- document-standards explain topics ---
+
+    def test_explain_email_title(self):
+        result = self.provider.resolve('explain the email title', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('document name', result.reply)
+
+    def test_explain_email_subject(self):
+        result = self.provider.resolve('what is the subject for', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('send/document metadata', result.reply)
+
+    def test_explain_favicon(self):
+        result = self.provider.resolve('explain favicon requirements', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('http', result.reply.lower())
+
+    def test_explain_reset_css(self):
+        result = self.provider.resolve('explain reset css', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('compatibility baseline', result.reply)
+
+    def test_explain_required_meta_baseline(self):
+        result = self.provider.resolve('what is the required meta baseline', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('charset', result.reply)
+
+    def test_explain_title_never_collides_with_the_set_title_mutation_command(self):
+        """A pure "explain the title" question must never be misread as a
+        mutating SET_EMAIL_TITLE command."""
+        result = self.provider.resolve('explain the email title', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_title_command_still_works_after_the_explain_topics_were_added(self):
+        result = self.provider.resolve('set the title to Summer Sale', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_EMAIL_TITLE, 'value': 'Summer Sale'})
+
     def test_explain_unrecognized_topic_asks_which_one(self):
         result = self.provider.resolve('explain something totally unrelated to outlook', {})
         self.assertEqual(result.action, {'type': ActionType.NONE})
@@ -1880,6 +1928,69 @@ class EmailAiEngineerExplainIntentTests(TestCase):
         result = self.provider.resolve('explain the row collapse trick', {})
         self.assertNotIn('css', result.action)
         self.assertEqual(result.action, {'type': ActionType.NONE})
+
+
+class EmailAiEngineerDocumentSettingsCommandTests(TestCase):
+    """Sub-phase 4, item 3 -- title/subject/favicon deterministic commands,
+    pulled forward onto the SAME proposal-before-apply/DOCUMENT_SCOPE
+    contract the Reset/Custom CSS actions already established."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_set_title(self):
+        result = self.provider.resolve('set the title to Summer Sale', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_EMAIL_TITLE, 'title': 'Summer Sale'})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_change_title_phrasing(self):
+        result = self.provider.resolve('change the email title to My Newsletter', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_EMAIL_TITLE, 'title': 'My Newsletter'})
+
+    def test_ambiguous_title_command_asks_for_the_value(self):
+        result = self.provider.resolve('what about the title', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_subject(self):
+        result = self.provider.resolve('set the subject to Big News Today', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_EMAIL_SUBJECT, 'subject': 'Big News Today'})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_ambiguous_subject_command_asks_for_the_value(self):
+        result = self.provider.resolve('change the subject', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_favicon_url(self):
+        result = self.provider.resolve('set favicon url to https://example.com/favicon.png', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_set_favicon_without_the_word_url(self):
+        result = self.provider.resolve('set the favicon to https://example.com/favicon.png', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+
+    def test_set_favicon_rejects_an_unsafe_scheme(self):
+        result = self.provider.resolve('set favicon url to javascript:alert(1)', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_set_favicon_with_no_value_asks_for_one(self):
+        result = self.provider.resolve('set favicon url to', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_remove_favicon(self):
+        result = self.provider.resolve('remove the favicon', {})
+        validated = validate_action(result.action)
+        self.assertEqual(validated, {'type': ActionType.CLEAR_FAVICON})
+        self.assertTrue(requires_confirmation(validated))
+
+    def test_clear_favicon_phrasing(self):
+        result = self.provider.resolve('clear the favicon', {})
+        self.assertEqual(validate_action(result.action), {'type': ActionType.CLEAR_FAVICON})
 
 
 class ValidateActionTests(TestCase):
@@ -1989,6 +2100,47 @@ class ValidateActionTests(TestCase):
 
     def test_none_action_type_passthrough(self):
         self.assertEqual(validate_action({'type': ActionType.NONE}), {'type': ActionType.NONE})
+
+    # --- Sub-phase 4, item 3 -- title/subject/favicon action validation ---
+
+    def test_set_email_title_maps_value_to_title_key(self):
+        result = validate_action({'type': ActionType.SET_EMAIL_TITLE, 'value': ' My Email '})
+        self.assertEqual(result, {'type': ActionType.SET_EMAIL_TITLE, 'title': 'My Email'})
+
+    def test_set_email_title_rejects_empty_value(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_EMAIL_TITLE, 'value': '   '}))
+
+    def test_set_email_title_rejects_missing_value(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_EMAIL_TITLE}))
+
+    def test_set_email_subject_maps_value_to_subject_key(self):
+        result = validate_action({'type': ActionType.SET_EMAIL_SUBJECT, 'value': 'Big News'})
+        self.assertEqual(result, {'type': ActionType.SET_EMAIL_SUBJECT, 'subject': 'Big News'})
+
+    def test_set_favicon_accepts_a_safe_https_url(self):
+        result = validate_action({'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+        self.assertEqual(result, {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/favicon.png'})
+
+    def test_set_favicon_rejects_an_unsafe_scheme(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_FAVICON, 'url': 'javascript:alert(1)'}))
+
+    def test_set_favicon_rejects_a_non_http_scheme(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_FAVICON, 'url': 'ftp://example.com/x.png'}))
+
+    def test_set_favicon_rejects_empty_url(self):
+        self.assertIsNone(validate_action({'type': ActionType.SET_FAVICON, 'url': ''}))
+
+    def test_clear_favicon(self):
+        self.assertEqual(validate_action({'type': ActionType.CLEAR_FAVICON}), {'type': ActionType.CLEAR_FAVICON})
+
+    def test_new_document_actions_require_confirmation(self):
+        for action in [
+            {'type': ActionType.SET_EMAIL_TITLE, 'title': 'x'},
+            {'type': ActionType.SET_EMAIL_SUBJECT, 'subject': 'x'},
+            {'type': ActionType.SET_FAVICON, 'url': 'https://example.com/x.png'},
+            {'type': ActionType.CLEAR_FAVICON},
+        ]:
+            self.assertTrue(requires_confirmation(action))
 
 
 class EmailAICommandViewTests(TestCase):

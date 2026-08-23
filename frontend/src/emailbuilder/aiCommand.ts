@@ -39,10 +39,36 @@ export type AICommandAction =
   | { type: 'SET_RESET_CSS_ENABLED'; enabled: boolean }
   | { type: 'SET_CUSTOM_CSS_ENABLED'; enabled: boolean }
   | { type: 'SET_CUSTOM_CSS'; css: string }
-  | { type: 'CLEAR_CUSTOM_CSS' };
+  | { type: 'CLEAR_CUSTOM_CSS' }
+  // Sub-phase 4, item 3 — pulled forward title/subject/favicon onto the
+  // same proposal-before-apply, DOCUMENT_SCOPE contract as the CSS
+  // actions above. `title`/`subject`/`url` (not `value`) match exactly
+  // what backend/emailbuilder/ai_command.py's validate_action() returns
+  // after normalizing the raw provider output.
+  | { type: 'SET_EMAIL_TITLE'; title: string }
+  | { type: 'SET_EMAIL_SUBJECT'; subject: string }
+  | { type: 'SET_FAVICON'; url: string }
+  | { type: 'CLEAR_FAVICON' }
+  // Sub-phase 4, item 4 — a LOCAL-ONLY pseudo-action: never sent to or
+  // received from the backend (the repair-issue mapping only exists on
+  // the client, which is the only side that has a live ValidationReport
+  // to repair). AIEngineerPanel constructs this directly and applies it
+  // through the SAME per-item mutators every other action already uses —
+  // see repairEngine.ts.
+  | { type: 'REPAIR_ISSUES'; items: RepairActionItem[] };
+
+// One deterministic, already-validated repair step — either a module
+// prop patch (routed through the existing onApplyAction/onUpdateProps
+// path) or a document-settings patch (routed through
+// onApplyDocumentSettingAction/updateDocumentSettings), never a third
+// mutation path.
+export type RepairActionItem =
+  | { kind: 'module'; issueId: string; moduleId: string; propPatch: Record<string, unknown> }
+  | { kind: 'document'; issueId: string; documentPatch: Record<string, unknown> };
 
 export const DOCUMENT_SCOPE_ACTION_TYPES = new Set<AICommandAction['type']>([
   'SET_RESET_CSS_ENABLED', 'SET_CUSTOM_CSS_ENABLED', 'SET_CUSTOM_CSS', 'CLEAR_CUSTOM_CSS',
+  'SET_EMAIL_TITLE', 'SET_EMAIL_SUBJECT', 'SET_FAVICON', 'CLEAR_FAVICON',
 ]);
 
 export interface AICommandSelectedModuleContext {
@@ -80,7 +106,12 @@ export interface AICommandResponse {
 // presented as persisted; EmailBuilderWorkspacePage resets it whenever a
 // different email is loaded). Distinguishes the command, the
 // interpretation Yukti/the router gave, and the eventual outcome.
-export type AIActionHistoryStatus = 'applied' | 'cancelled' | 'clarification' | 'failed';
+// Sub-phase 4 — 'reported' is a distinct outcome from 'clarification':
+// the AI Engineer gave a real, complete analysis (e.g. "Found 2 issues:
+// ...") rather than asking the user a follow-up question. Both carry no
+// action, but conflating them would misrepresent a genuine diagnostic
+// answer as an unanswered clarifying question in the History tab.
+export type AIActionHistoryStatus = 'applied' | 'cancelled' | 'clarification' | 'failed' | 'reported';
 
 export interface AIActionHistoryEntry {
   id: string;
@@ -117,6 +148,18 @@ export function describeAction(action: AICommandAction): string {
       return 'Update Custom CSS';
     case 'CLEAR_CUSTOM_CSS':
       return 'Remove Custom CSS';
+    case 'SET_EMAIL_TITLE':
+      return `Set the email title to "${action.title}"`;
+    case 'SET_EMAIL_SUBJECT':
+      return `Set the email subject to "${action.subject}"`;
+    case 'SET_FAVICON':
+      return `Set the favicon to ${action.url}`;
+    case 'CLEAR_FAVICON':
+      return 'Remove the favicon';
+    case 'REPAIR_ISSUES':
+      return action.items.length === 1
+        ? 'Repair 1 issue'
+        : `Repair ${action.items.length} issues`;
     case 'NONE':
     default:
       return 'No change proposed';

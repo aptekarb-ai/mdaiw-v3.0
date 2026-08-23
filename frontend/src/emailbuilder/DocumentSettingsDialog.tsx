@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssetManagerDialog, type AssetSelection } from './AssetManagerDialog';
 import { CodeEditor, type CodeEditorMarker } from '../landingpages/CodeEditor';
 import { detectCustomCssWarnings, validateCustomCss } from './emailCss';
+import { validateFaviconUrl } from './faviconValidation';
 import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
 import './DocumentSettingsDialog.css';
 
@@ -17,26 +18,6 @@ interface DocumentSettingsDialogProps {
   documentName: string;
   onApply: (input: DocumentSettingsInput) => void;
   onClose: () => void;
-}
-
-// Mirrors backend/emailbuilder/serializers.py's validate_favicon_url
-// exactly (same schemes, same messages). Client-side only, for immediate
-// feedback — the backend re-validates and remains authoritative at the
-// final persistence boundary (the toolbar Save PATCH), same posture as
-// Custom CSS's security validator.
-const UNSAFE_FAVICON_URL_PREFIXES = ['javascript:', 'data:', 'vbscript:'];
-
-function validateFaviconUrl(value: string): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  const lowered = trimmed.toLowerCase();
-  for (const scheme of UNSAFE_FAVICON_URL_PREFIXES) {
-    if (lowered.startsWith(scheme)) return `Favicon URL must not use an unsafe scheme ("${scheme}").`;
-  }
-  if (!(lowered.startsWith('http://') || lowered.startsWith('https://'))) {
-    return 'Favicon URL must start with http:// or https://.';
-  }
-  return null;
 }
 
 // Email Document Standards Sub-phase 1+2 — Title/Subject/Favicon plus

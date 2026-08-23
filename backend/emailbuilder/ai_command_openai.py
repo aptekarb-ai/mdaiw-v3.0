@@ -42,10 +42,14 @@ _SYSTEM_PROMPT = (
     '{"assetId": <id>} form from the image the user already selected, never a bare URL '
     'string. You may only propose: inserting one or more modules of a type given in the '
     'allowed module types, updating an allowed property of the currently selected module, '
-    'deleting or duplicating the currently selected module, or applying a style change to '
-    'every module of one type. If the instruction is ambiguous, unsupported, or targets '
-    'something other than the current selection, return action type NONE and ask a brief '
-    'clarifying question in `reply`. Reply in the same language the user wrote in.'
+    'deleting or duplicating the currently selected module, applying a style change to '
+    'every module of one type, or a document-level change (enable/disable Email Reset CSS, '
+    'set/enable/disable/clear Custom CSS, set the email title, set the email subject, or '
+    'set/clear the favicon URL — action types SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, '
+    'SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS, SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, '
+    'CLEAR_FAVICON). If the instruction is ambiguous, unsupported, or targets something '
+    'other than the current selection, return action type NONE and ask a brief clarifying '
+    'question in `reply`. Reply in the same language the user wrote in.'
 )
 
 
@@ -84,11 +88,17 @@ def _action_schema():
                             'maxItems': MAX_GENERATED_MODULES,
                         },
                         'patch': {'type': ['object', 'null']},
-                        # Sub-phase 2 — document-level CSS actions only.
+                        # Sub-phase 2 — document-level CSS actions.
                         'enabled': {'type': ['boolean', 'null']},
                         'css': {'type': ['string', 'null']},
+                        # Sub-phase 4 — document-level title/subject/favicon.
+                        # `value` carries the title or subject text;
+                        # validate_action() maps it to the right key
+                        # ('title'/'subject') per action type.
+                        'value': {'type': ['string', 'null']},
+                        'url': {'type': ['string', 'null']},
                     },
-                    'required': ['type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css'],
+                    'required': ['type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url'],
                     'additionalProperties': False,
                 },
             },

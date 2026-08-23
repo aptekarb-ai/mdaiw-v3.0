@@ -17,11 +17,13 @@ independently-maintained ones.
 
 from dataclasses import dataclass
 
-# Mirrors frontend/src/emailbuilder/emailValidation.ts's 8 categories
-# exactly. Not extended here — a category outside this set is a rule-
-# authoring bug, not a new taxonomy branch.
+# Mirrors frontend/src/emailbuilder/emailValidation.ts's categories
+# exactly (9 as of Sub-phase 4's 'document' category — title/subject/
+# favicon/Reset CSS/Custom CSS/head-meta-baseline). Not extended here — a
+# category outside this set is a rule-authoring bug, not a new taxonomy
+# branch.
 KNOWLEDGE_RULE_CATEGORIES = frozenset({
-    'html', 'outlook', 'responsive', 'accessibility', 'links', 'images', 'dark-mode', 'platform',
+    'document', 'html', 'outlook', 'responsive', 'accessibility', 'links', 'images', 'dark-mode', 'platform',
 })
 
 SEVERITY_LEVELS = frozenset({'error', 'warning', 'info'})
@@ -204,8 +206,15 @@ _RULES = (
         severity='warning',
         affected_clients=('OUTLOOK_CLASSIC',),
         detection={'kind': 'reference'},
-        suggested_fix='Scope the font-size:0/line-height:0 rule to a dedicated class (e.g. .mso-spacer) applied only to intentional spacer rows, never to a bare tr selector.',
-        safe_auto_fix=False,
+        # Sub-phase 4, item 5 — the Repair Engine's deterministic safe fix
+        # for this exact finding (frontend/src/emailbuilder/
+        # emailValidation.ts's outlook-classic:unsafe-global-row-collapse)
+        # cannot safely rewrite arbitrary Custom CSS text to re-scope just
+        # the offending rule, so it disables Custom CSS entirely — kept in
+        # sync here so the knowledge explanation never disagrees with what
+        # the repair proposal actually offers (item 7).
+        suggested_fix='Scope the font-size:0/line-height:0 rule to a dedicated class (e.g. .mso-spacer) applied only to intentional spacer rows, never to a bare tr selector. The Repair Engine\'s automatic fix disables Custom CSS entirely, since it cannot safely rewrite the rule\'s scope for you.',
+        safe_auto_fix=True,
         references=(),
         confidence=1.0,
     ),
@@ -268,14 +277,118 @@ _RULES = (
         references=(),
         confidence=1.0,
     ),
+    # Sub-phase 4, item 6 — document-level standards rules, explaining the
+    # new checks frontend/src/emailbuilder/emailValidation.ts's
+    # checkDocumentStandards() added (title/subject/favicon/Reset CSS).
+    # Custom CSS security itself is already explained at the point of
+    # rejection (validate_custom_css_security's own message), so no
+    # separate rule duplicates that here — these five cover the concepts
+    # that check doesn't already explain inline.
+    KnowledgeRule(
+        id='email-title-vs-document-name',
+        category='document',
+        title='The email title is distinct from the draft/document name',
+        description=(
+            'The email title renders into the document\'s <title> element — it is what a browser tab or a '
+            'client that displays a document title shows, not send/marketing copy. It is a different field '
+            'from the builder\'s draft name (used only in the dashboard/workspace UI) and from the email '
+            'subject (send metadata, never rendered as markup). Leaving it empty is valid HTML but shows no '
+            'meaningful name where a title would normally appear.'
+        ),
+        severity='info',
+        affected_clients=('BOTH',),
+        detection={'kind': 'reference'},
+        suggested_fix='Set an email title in Document Settings.',
+        safe_auto_fix=False,
+        references=(),
+        confidence=1.0,
+    ),
+    KnowledgeRule(
+        id='email-subject-is-send-metadata',
+        category='document',
+        title='The email subject is send/document metadata — it is never rendered into the HTML',
+        description=(
+            'Unlike the title (which becomes the document <title>), the subject line has no corresponding '
+            'markup anywhere in the rendered email — it exists purely as metadata this builder stores '
+            'alongside the document, for use when the email is actually sent. An empty subject does not '
+            'change the rendered HTML at all, but is normally required before a real send.'
+        ),
+        severity='info',
+        affected_clients=('BOTH',),
+        detection={'kind': 'reference'},
+        suggested_fix='Set an email subject in Document Settings.',
+        safe_auto_fix=False,
+        references=(),
+        confidence=1.0,
+    ),
+    KnowledgeRule(
+        id='favicon-url-requirements',
+        category='document',
+        title='A favicon URL must be a safe http(s) URL, or it is silently omitted',
+        description=(
+            'The favicon link is rendered only when the configured URL passes the same http(s)-only, '
+            'unsafe-scheme-rejecting allow-list every other URL in this builder goes through (javascript:, '
+            'data:, and vbscript: are always rejected). An invalid or unsafe favicon URL does not break '
+            'rendering — the <link rel="icon"> tag is simply omitted — but it also means the favicon silently '
+            'never appears, which can look like a bug rather than a rejected value.'
+        ),
+        severity='info',
+        affected_clients=('BOTH',),
+        detection={'kind': 'reference'},
+        suggested_fix='Use a direct https:// (or http://) URL to an image file as the favicon.',
+        safe_auto_fix=True,
+        references=(),
+        confidence=1.0,
+    ),
+    KnowledgeRule(
+        id='reset-css-purpose',
+        category='document',
+        title='Email Reset CSS is the cross-client compatibility baseline',
+        description=(
+            'Email clients ship wildly inconsistent default styles for tables, images, paragraphs, and line '
+            'height — Reset CSS neutralizes those defaults (margin/padding resets, image display:block, '
+            'table spacing resets, and similar) so the same module renders consistently instead of inheriting '
+            'a different baseline in every client. Disabling it does not break anything by itself, but makes '
+            'client-to-client rendering differences more likely, especially for spacing and image display.'
+        ),
+        severity='info',
+        affected_clients=('BOTH',),
+        detection={'kind': 'reference'},
+        suggested_fix='Enable Email Reset CSS unless you have a specific reason to disable it.',
+        safe_auto_fix=True,
+        references=(),
+        confidence=1.0,
+    ),
+    KnowledgeRule(
+        id='required-email-meta-baseline',
+        category='document',
+        title='Why the generated <head> always includes charset/viewport/robots/Apple/format-detection metadata',
+        description=(
+            'Every generated document includes a fixed baseline of <head> declarations regardless of content: '
+            'a UTF-8 charset, a mobile-friendly viewport, "noindex, nofollow" robots metadata (marketing email '
+            'is not a page meant to be indexed), Apple mobile web-app metadata, format-detection meta tags '
+            'that stop iOS/Android from auto-linking addresses/dates/emails/phone numbers inside the email '
+            'body, and x-apple-disable-message-reformatting (stops Apple Mail\'s automatic font-size scaling '
+            'on some devices). These are emitted unconditionally by the renderer — they exist to prevent a '
+            'known category of client-specific surprise, not because any particular module needs them.'
+        ),
+        severity='info',
+        affected_clients=('BOTH',),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=1.0,
+    ),
 )
 
 _RULES_BY_ID = {rule.id: rule for rule in _RULES}
 
 
 def load_rules():
-    """Sub-phase 3 (item 13): returns the 9 Outlook/MSO explainer rules
-    defined above. Phase B's broader Can I Email / MJML-flavored-skill
+    """Sub-phase 3 (item 13) + Sub-phase 4 (item 6): returns the 9
+    Outlook/MSO explainer rules plus the 5 document-standards explainer
+    rules (14 total). Phase B's broader Can I Email / MJML-flavored-skill
     seeded rule set (docs/module-4/AI_ENGINEER_OPEN_SOURCE_AUDIT.md) is
     separate, still-unstarted future work — this function's growth is
     additive, never a replacement of these entries."""
