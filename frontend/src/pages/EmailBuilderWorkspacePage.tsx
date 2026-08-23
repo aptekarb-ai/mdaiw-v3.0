@@ -329,6 +329,26 @@ export function EmailBuilderWorkspacePage() {
         builder.addModulesWithProps(entries);
         return true;
       }
+      // Sub-phase 7 — the composition engine's one action type. Maps the
+      // backend's snake_case wire shape onto useEmailBuilderState.ts's
+      // camelCase ComposedModuleEntry — a pure adapter, no additional
+      // validation here (the backend's validate_action() already fully
+      // validated every module type/patch/child/repeatable-item). One
+      // call = one addComposedModules commit = one undo/redo step for the
+      // entire composition, never one per module.
+      case 'COMPOSE_EMAIL': {
+        const entries = action.items.map((item) => ({
+          type: item.module_type,
+          patch: item.patch,
+          children: item.children?.map((group) => ({
+            columnIndex: group.column_index,
+            modules: group.modules.map((child) => ({ type: child.module_type, patch: child.patch })),
+          })),
+          repeatableItems: item.repeatable_items,
+        }));
+        builder.addComposedModules(entries);
+        return true;
+      }
       case 'UPDATE_MODULE_PROPS': {
         if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
           return false;

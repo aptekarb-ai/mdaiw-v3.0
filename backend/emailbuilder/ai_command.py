@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 
 from . import module_capabilities
+from .composition import compose_from_brief
 from .custom_css_security import MAX_CUSTOM_CSS_LENGTH, validate_custom_css_security
 from .knowledge.rules import find_rule
 
@@ -172,12 +173,24 @@ class ActionType:
     # existing mutator" contract.
     UPDATE_REPEATABLE_FIELD = 'UPDATE_REPEATABLE_FIELD'
 
+    # Sub-phase 7 — the composition engine's one action type: an ORDERED
+    # list of composition items (see composition.py's CompositionItem),
+    # each an existing registered module type + validated patch, with
+    # optional one-level-nested children (layout columns) or seeded
+    # repeatable-field items. Never a second mutation system — the
+    # frontend applies this through ONE new batch mutator
+    # (useEmailBuilderState.ts's addComposedModules) built from the SAME
+    # createModule/createDefaultColumns/repeatableField primitives every
+    # other insert path already uses.
+    COMPOSE_EMAIL = 'COMPOSE_EMAIL'
+
     values = frozenset({
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE, NONE,
         INSERT_NESTED_MODULE, UPDATE_MODULE_SETTINGS, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
         SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
+        COMPOSE_EMAIL,
     })
 
     IMPLEMENTED = frozenset({
@@ -191,14 +204,17 @@ class ActionType:
         # updateModuleProps) — never a parallel mutation system.
         UPDATE_MODULE_SETTINGS, INSERT_NESTED_MODULE, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
+        COMPOSE_EMAIL,
     })
 
     # Sub-phase 6 — structural tree changes always require confirmation
     # (master prompt item 8: "Structural actions always require an
     # explicit proposal and confirmation"), same posture as
     # requires_confirmation()'s existing DELETE_MODULE/APPLY_GLOBAL_STYLE
-    # rules below.
-    STRUCTURAL = frozenset({RESTRUCTURE_LAYOUT})
+    # rules below. Sub-phase 7 — a full composition is the largest
+    # structural change this file can propose, so it always requires
+    # confirmation too (see requires_confirmation() below).
+    STRUCTURAL = frozenset({RESTRUCTURE_LAYOUT, COMPOSE_EMAIL})
 
     # Document-level actions never carry a `moduleId`/`module_type` —
     # views.py's resolve_asset_references and the frontend's EDM-mutation
@@ -338,6 +354,94 @@ def _validate_patch(module_type, patch):
         if validated is not None:
             safe[key] = validated
     return safe or None
+
+
+# Sub-phase 7 — composition plan bounds. Mirrors composition.py's own
+# MAX_COMPOSITION_ITEMS/MAX_COMPOSITION_CHILDREN_PER_COLUMN constants (not
+# imported from there — composition.py imports FROM this module for
+# _validate_patch/_validate_field_value, so importing the reverse
+# direction here would be circular; these two small integers are
+# duplicated rather than restructuring either module's import shape for
+# it — see composition.py's own module docstring on the deferred-import
+# pattern this pair already uses elsewhere).
+MAX_COMPOSITION_ITEMS = 14
+MAX_COMPOSITION_CHILDREN_PER_COLUMN = 6
+
+
+def _validate_composition_item(entry, allow_layout):
+    """One composition-plan node -> a safe, normalized node, or None.
+    Recurses exactly ONE level (children's own `allow_layout=False` mirrors
+    INSERT_NESTED_MODULE's "never nest a layout inside a layout column"
+    rule), and validates every patch/repeatable-item value through the
+    EXACT SAME manifest-driven gates every other action type uses
+    (_validate_patch/_validate_field_value) — a composition item can never
+    carry a value a hand-typed UPDATE_MODULE_PROPS action wouldn't also be
+    allowed to carry."""
+    if not isinstance(entry, dict):
+        return None
+    module_type = entry.get('module_type')
+    if module_type not in module_capabilities.get_all_module_types():
+        return None
+    capability = module_capabilities.get_module_capability(module_type) or {}
+    is_layout = bool(capability.get('isLayout'))
+    if is_layout and not allow_layout:
+        return None
+
+    patch = _validate_patch(module_type, entry.get('patch') or {}) or {}
+    result = {'module_type': module_type, 'patch': patch}
+
+    if is_layout:
+        raw_children = entry.get('children')
+        column_count = capability.get('columnCount') or 0
+        children = []
+        if isinstance(raw_children, list) and column_count:
+            seen_columns = set()
+            for group in raw_children[:column_count]:
+                if not isinstance(group, dict):
+                    continue
+                column_index = group.get('column_index')
+                if not isinstance(column_index, int) or isinstance(column_index, bool):
+                    continue
+                if not (0 <= column_index < column_count) or column_index in seen_columns:
+                    continue
+                raw_modules = group.get('modules')
+                if not isinstance(raw_modules, list):
+                    continue
+                safe_modules = []
+                for child_entry in raw_modules[:MAX_COMPOSITION_CHILDREN_PER_COLUMN]:
+                    validated_child = _validate_composition_item(child_entry, allow_layout=False)
+                    if validated_child is not None:
+                        safe_modules.append(validated_child)
+                if safe_modules:
+                    seen_columns.add(column_index)
+                    children.append({'column_index': column_index, 'modules': safe_modules})
+        if children:
+            result['children'] = children
+        return result
+
+    repeatable = module_capabilities.get_repeatable_field(module_type)
+    if repeatable:
+        raw_items = entry.get('repeatable_items')
+        if isinstance(raw_items, list) and raw_items:
+            fields_by_key = {field['key']: field for field in repeatable['itemSchema']}
+            max_items = repeatable.get('maxItems') or 20
+            safe_items = []
+            for raw_item in raw_items[:max_items]:
+                if not isinstance(raw_item, dict):
+                    continue
+                safe_item = {}
+                for key, value in raw_item.items():
+                    field = fields_by_key.get(key)
+                    if not field:
+                        continue
+                    validated = _validate_field_value(field, value)
+                    if validated is not None:
+                        safe_item[key] = validated
+                if safe_item:
+                    safe_items.append(safe_item)
+            if safe_items:
+                result['repeatable_items'] = safe_items
+    return result
 
 
 def validate_action(action):
@@ -507,6 +611,19 @@ def validate_action(action):
         result['toIndex'] = to_index
         return result
 
+    if action_type == ActionType.COMPOSE_EMAIL:
+        raw_items = action.get('items')
+        if not isinstance(raw_items, list) or not raw_items:
+            return None
+        safe_items = []
+        for entry in raw_items[:MAX_COMPOSITION_ITEMS]:
+            validated = _validate_composition_item(entry, allow_layout=True)
+            if validated is not None:
+                safe_items.append(validated)
+        if not safe_items:
+            return None
+        return {'type': ActionType.COMPOSE_EMAIL, 'items': safe_items}
+
     if action_type in (ActionType.SET_RESET_CSS_ENABLED, ActionType.SET_CUSTOM_CSS_ENABLED):
         enabled = action.get('enabled')
         if not isinstance(enabled, bool):
@@ -628,7 +745,51 @@ def resolve_asset_references(action, request):
             resolved_modules.append({'module_type': module_type, 'patch': resolved_patch})
         return {**action, 'modules': resolved_modules}
 
+    if action_type == ActionType.COMPOSE_EMAIL:
+        resolved_items = [_resolve_composition_item_assets(item, request) for item in action.get('items', [])]
+        return {**action, 'items': resolved_items}
+
     return action
+
+
+def _resolve_composition_item_assets(item, request):
+    """Recursive per-request asset resolution for one already-validated
+    composition item (see _validate_composition_item) — same ownership-
+    checked resolution as every other action type, just walked across the
+    item's own one level of nested children/repeatable items."""
+    module_type = item.get('module_type')
+    patch = item.get('patch') or {}
+    resolved_patch = _resolve_patch_assets(module_type, patch, request) if _patch_has_asset_marker(module_type, patch) else patch
+    result = {**item, 'patch': resolved_patch}
+
+    if 'children' in item:
+        result['children'] = [
+            {
+                'column_index': group['column_index'],
+                'modules': [_resolve_composition_item_assets(child, request) for child in group['modules']],
+            }
+            for group in item['children']
+        ]
+
+    if 'repeatable_items' in item:
+        repeatable = module_capabilities.get_repeatable_field(module_type)
+        fields_by_key = {field['key']: field for field in (repeatable['itemSchema'] if repeatable else [])}
+        resolved_items = []
+        for raw_item in item['repeatable_items']:
+            resolved_item = {}
+            for key, value in raw_item.items():
+                field = fields_by_key.get(key)
+                if field and field.get('valueType') == 'image_asset' and isinstance(value, dict):
+                    url = _resolve_asset_marker(value, request)
+                    if url is not None:
+                        resolved_item[key] = url
+                    continue
+                resolved_item[key] = value
+            if resolved_item:
+                resolved_items.append(resolved_item)
+        result['repeatable_items'] = resolved_items
+
+    return result
 
 
 def _resolve_patch_assets(module_type, patch, request):
@@ -1096,6 +1257,28 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
                     action={'type': ActionType.NONE}, confidence=1.0,
                 )
             return CommandResult(reply=_EXPLAIN_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+
+        # Sub-phase 7 — email COMPOSITION ("create a promotional email for
+        # a summer sale with ... "). Checked BEFORE every other pattern in
+        # this function, including the generic _INSERT_PATTERN below (which
+        # also matches "create"/"add"): compose_from_brief() itself only
+        # ever matches text that clearly says "...email..." AND uses a
+        # compose verb (create/build/generate/make/compose/draft), so a
+        # plain "create a button" (no "email") safely falls through
+        # unaffected to the ordinary insert-module handling further down.
+        composition = compose_from_brief(text)
+        if composition is not None:
+            item_count = len(composition['items'])
+            top_level_types = ', '.join(item['module_type'] for item in composition['items'])
+            return CommandResult(
+                reply=(
+                    f"I will compose a {composition['pattern_label']} email with {item_count} section"
+                    f"{'s' if item_count != 1 else ''}: {top_level_types}. Review the proposal and Apply "
+                    'to insert it, or Cancel to change nothing.'
+                ),
+                action={'type': ActionType.COMPOSE_EMAIL, 'items': composition['items']},
+                confidence=0.8,
+            )
 
         # Sub-phase 6 closure — repeatable-field ADD ("add a navigation
         # link called Pricing with URL https://..."). Checked BEFORE

@@ -78,3 +78,31 @@ describe('describeAction — Sub-phase 6 action types', () => {
     expect(reorder).toContain('Reorder');
   });
 });
+
+// Sub-phase 7 — describeAction() for COMPOSE_EMAIL.
+describe('describeAction — Sub-phase 7 COMPOSE_EMAIL', () => {
+  it('names the section count, singular for one item', () => {
+    const description = describeAction({
+      type: 'COMPOSE_EMAIL', items: [{ module_type: 'button', patch: {} }],
+    });
+    expect(description).toBe('Compose a full email with 1 section');
+  });
+
+  it('names the section count, plural, and counts only TOP-LEVEL items (not nested children)', () => {
+    const description = describeAction({
+      type: 'COMPOSE_EMAIL',
+      items: [
+        { module_type: 'header-logo-center', patch: {} },
+        {
+          module_type: 'layout-2col-50-50', patch: {},
+          children: [
+            { column_index: 0, modules: [{ module_type: 'text', patch: {} }] },
+            { column_index: 1, modules: [{ module_type: 'text', patch: {} }] },
+          ],
+        },
+        { module_type: 'footer-simple-legal', patch: {} },
+      ],
+    });
+    expect(description).toBe('Compose a full email with 3 sections');
+  });
+});

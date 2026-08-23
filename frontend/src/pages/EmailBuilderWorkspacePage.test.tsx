@@ -2021,6 +2021,101 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     expect(await screen.findByText('Add your heading or paragraph text here.', { selector: 'p' })).toBeInTheDocument();
   });
 
+  // Sub-phase 7 — composition (COMPOSE_EMAIL) end-to-end through the real
+  // AI Engineer UI: proposal-before-apply, one undo/redo step for the
+  // WHOLE composition, and genuine layout/nested/repeatable coverage.
+  it('a composition proposal shows the ordered section list, and Apply inserts every module as one undo step', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will compose a Promotional / Campaign email with 3 sections: header-logo-center, layout-2col-50-50, footer-simple-legal. Review the proposal and Apply to insert it, or Cancel to change nothing.',
+      action: {
+        type: 'COMPOSE_EMAIL',
+        items: [
+          { module_type: 'header-logo-center', patch: {} },
+          {
+            module_type: 'layout-2col-50-50', patch: {},
+            children: [
+              { column_index: 0, modules: [{ module_type: 'text', patch: { text: 'Left column' } }] },
+              { column_index: 1, modules: [{ module_type: 'text', patch: { text: 'Right column' } }] },
+            ],
+          },
+          {
+            module_type: 'social-icon-row', patch: {},
+            repeatable_items: [{ label: 'Facebook', href: 'https://facebook.com/example' }],
+          },
+          { module_type: 'footer-simple-legal', patch: {} },
+        ],
+      },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      confidence: 0.8,
+      provider: 'deterministic',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const input = await openAiEngineer(user);
+
+    await user.type(input, 'create a promotional email with a header, two content columns, social links and a footer');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Compose a full email with 4 sections')).toBeInTheDocument();
+    // The ordered per-section preview list, including nested/list-item counts.
+    expect(screen.getByText(/1\. header-logo-center/)).toBeInTheDocument();
+    expect(screen.getByText(/2\. layout-2col-50-50 — 2 nested modules/)).toBeInTheDocument();
+    expect(screen.getByText(/3\. social-icon-row — 1 list item/)).toBeInTheDocument();
+    expect(screen.getByText(/4\. footer-simple-legal/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getByText('Left column')).toBeInTheDocument();
+    expect(screen.getByText('Right column')).toBeInTheDocument();
+    expect(screen.getByText('Facebook')).toBeInTheDocument();
+
+    // One Undo removes the ENTIRE composition (all 4 top-level modules),
+    // never just the last-inserted one.
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(screen.queryByText('Left column')).not.toBeInTheDocument();
+    expect(screen.queryByText('Facebook')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(await screen.findByText('Left column')).toBeInTheDocument();
+    expect(screen.getByText('Facebook')).toBeInTheDocument();
+  });
+
+  it('Cancel on a composition proposal leaves the canvas completely unchanged', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will compose a Welcome / Onboarding email with 2 sections: hero-text-only, footer-simple-legal.',
+      action: {
+        type: 'COMPOSE_EMAIL',
+        items: [
+          { module_type: 'hero-text-only', patch: { headline: 'Welcome aboard!' } },
+          { module_type: 'footer-simple-legal', patch: {} },
+        ],
+      },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      confidence: 0.8,
+      provider: 'deterministic',
+    });
+    const user = userEvent.setup();
+    renderPage();
+    const input = await openAiEngineer(user);
+
+    await user.type(input, 'make a welcome email');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Compose a full email with 2 sections');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.queryByText('Welcome aboard!')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+  });
+
   it('an ambiguous/unsupported command shows the clarifying reply without a proposal card', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     vi.mocked(client.requestAICommand).mockResolvedValue({

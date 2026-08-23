@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { ColumnContainerSettings, EmailModule, EmailModuleSettings, EmailModuleType } from './edm';
 import { cloneModuleWithNewId, createModule, createModuleFromSaved } from './moduleFactory';
+import { getModuleDefinition } from './moduleRegistry';
 import {
   duplicateNestedModule as duplicateNestedModuleInTree,
   findModuleById,
@@ -64,6 +65,28 @@ interface SelectedColumnRef {
   columnId: string;
 }
 
+// Sub-phase 7 — one node in a composition plan, structurally identical
+// (camelCase) to aiCommand.ts's AIComposeItem — kept as its OWN local
+// type rather than importing AIComposeItem here, so this state hook
+// never depends on the AI-specific wire-format module; the adapter that
+// maps snake_case action.items -> this shape lives in
+// EmailBuilderWorkspacePage.tsx's handleApplyAiAction (COMPOSE_EMAIL
+// case), the SAME "backend/AI concern stays out of the state hook"
+// boundary applyGlobalStyle/addModulesWithProps already keep.
+export interface ComposedModuleEntry {
+  type: EmailModuleType;
+  patch: Record<string, unknown>;
+  // One group per column index — only meaningful when `type` is a layout
+  // module type. Each child is flat (never itself nested further), same
+  // one-level-of-nesting constraint INSERT_NESTED_MODULE already enforces.
+  children?: { columnIndex: number; modules: { type: EmailModuleType; patch: Record<string, unknown> }[] }[];
+  // Seeds a module's own repeatableField (e.g. social-icon-row's platform
+  // links) — only meaningful when `type` actually has one; silently
+  // ignored (not applied) otherwise, exactly like every other composition
+  // capability that only applies where the module registry supports it.
+  repeatableItems?: Record<string, unknown>[];
+}
+
 function reindex(modules: EmailModule[]): EmailModule[] {
   return modules.map((module, index) => ({ ...module, order: index }));
 }
@@ -114,6 +137,12 @@ export interface UseEmailBuilderState {
   // "add a green button" is one undo step, not two.
   addModuleWithProps: (type: EmailModuleType, patch: Record<string, unknown>) => string;
   addModulesWithProps: (entries: { type: EmailModuleType; patch: Record<string, unknown> }[]) => string[];
+  // Sub-phase 7 — the AI Engineer's COMPOSE_EMAIL action: an ordered list
+  // of top-level modules, each possibly a layout module with nested
+  // per-column children and/or a module with seeded repeatable-field
+  // items, appended in ONE history commit — so Applying an entire
+  // composition is one undo/redo step, never one per module.
+  addComposedModules: (entries: ComposedModuleEntry[]) => string[];
   // Feature 14 — GLOBAL_STYLE action: applies one prop patch to every
   // module of `moduleType` anywhere in the tree (top-level AND nested
   // inside layout columns — "every button in the email", not just the
@@ -323,6 +352,60 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setSelectedColumn(null);
     return ids;
   }, [commit]);
+
+  // Sub-phase 7 — builds one top-level module (optionally with nested
+  // column children and/or seeded repeatable items) from a composition
+  // entry, reusing the EXACT SAME createModule/createDefaultColumns/
+  // repeatableField primitives every other insert path already uses —
+  // never a second module-construction system.
+  const buildComposedModule = useCallback((entry: ComposedModuleEntry, order: number): EmailModule => {
+    const created = createModule(entry.type, order);
+    let module = Object.keys(entry.patch).length ? { ...created, props: { ...created.props, ...entry.patch } } : created;
+
+    if (entry.children && entry.children.length > 0 && module.columns) {
+      const columns = module.columns.map((column, columnIndex) => {
+        const group = entry.children!.find((g) => g.columnIndex === columnIndex);
+        if (!group) return column;
+        const nestedModules = group.modules.map((child, childIndex) => {
+          const createdChild = createModule(child.type, childIndex);
+          return Object.keys(child.patch).length
+            ? { ...createdChild, props: { ...createdChild.props, ...child.patch } }
+            : createdChild;
+        });
+        return { ...column, modules: nestedModules };
+      });
+      module = { ...module, columns };
+    }
+
+    if (entry.repeatableItems && entry.repeatableItems.length > 0) {
+      const definition = getModuleDefinition(entry.type);
+      const repeatable = definition.repeatableField;
+      if (repeatable) {
+        const bounded = entry.repeatableItems.slice(0, repeatable.maxItems ?? 20);
+        const items = bounded.map((item) => ({ ...repeatable.createItem(), ...item }));
+        if (items.length >= (repeatable.minItems ?? 0)) {
+          module = { ...module, props: { ...module.props, [repeatable.path]: items } };
+        }
+      }
+    }
+
+    return module;
+  }, []);
+
+  const addComposedModules = useCallback((entries: ComposedModuleEntry[]) => {
+    const current = modulesRef.current;
+    const built: EmailModule[] = [];
+    let runningLength = current.length;
+    for (const entry of entries) {
+      built.push(buildComposedModule(entry, runningLength));
+      runningLength += 1;
+    }
+    commit(reindex([...current, ...built]));
+    const ids = built.map((module) => module.id);
+    setSelectedModuleId(ids[ids.length - 1] ?? null);
+    setSelectedColumn(null);
+    return ids;
+  }, [commit, buildComposedModule]);
 
   const applyGlobalStyle = useCallback((moduleType: EmailModuleType, patch: Record<string, unknown>) => {
     const current = modulesRef.current;
@@ -550,6 +633,7 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     insertModuleAt,
     addModuleWithProps,
     addModulesWithProps,
+    addComposedModules,
     applyGlobalStyle,
     addSavedModule,
     insertSavedModuleAt,

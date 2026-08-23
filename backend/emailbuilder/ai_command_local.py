@@ -36,6 +36,8 @@ from .ai_command import (
     CommandResult,
     EmailCommandProvider,
     EmailCommandProviderUnavailable,
+    MAX_COMPOSITION_CHILDREN_PER_COLUMN,
+    MAX_COMPOSITION_ITEMS,
     MAX_GENERATED_MODULES,
 )
 from . import module_capabilities
@@ -50,13 +52,22 @@ _SYSTEM_PROMPT = (
     'string. You may only propose: inserting one or more modules of a type given in the '
     'allowed module types, updating an allowed property of the currently selected module, '
     'deleting or duplicating the currently selected module, applying a style change to '
-    'every module of one type, or a document-level change (enable/disable Email Reset CSS, '
+    'every module of one type, a document-level change (enable/disable Email Reset CSS, '
     'set/enable/disable/clear Custom CSS, set the email title, set the email subject, or '
     'set/clear the favicon URL — action types SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, '
     'SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS, SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, '
-    'CLEAR_FAVICON). If the instruction is ambiguous, unsupported, or targets something '
-    'other than the current selection, return action type NONE and ask a brief clarifying '
-    'question in `reply`. Reply in the same language the user wrote in.'
+    'CLEAR_FAVICON), or a full email COMPOSITION when the user describes an entire email to '
+    'create (action type COMPOSE_EMAIL, with an ordered `items` array — each item an allowed '
+    'module type plus a `patch` of allowed properties for that type; a LAYOUT module type may '
+    'additionally carry `children`, one group per column index, each group\'s `modules` a list '
+    'of the SAME item shape but never itself a layout type — one level of nesting only; a '
+    'module with a repeatable list may additionally carry `repeatable_items`, an array of '
+    'objects using that module\'s own item fields). Never invent a brand name, price, date, or '
+    'claim not present in the user\'s own instruction — short generic scaffolding text (e.g. '
+    '"Shop Now", "Learn More") is fine, but do not fabricate specific facts. If the '
+    'instruction is ambiguous, unsupported, or targets something other than the current '
+    'selection, return action type NONE and ask a brief clarifying question in `reply`. Reply '
+    'in the same language the user wrote in.'
 )
 
 
@@ -66,6 +77,44 @@ def _action_schema():
     valid `module_type` values here is never a separately-maintained
     list. Mirrors ai_command_openai.py::_ACTION_SCHEMA's shape exactly."""
     all_types = sorted(module_capabilities.get_all_module_types())
+    flat_module_entry = {
+        'type': 'object',
+        'properties': {
+            'module_type': {'type': 'string', 'enum': all_types},
+            'patch': {'type': 'object'},
+        },
+        'required': ['module_type', 'patch'],
+        'additionalProperties': False,
+    }
+    # Sub-phase 7 — one composition item may be a layout type carrying
+    # `children` (one group per column, each group's modules the SAME
+    # flat shape as flat_module_entry — never itself nested further), or a
+    # non-layout type carrying `repeatable_items`. Both are always present
+    # as keys (possibly null) to satisfy strict-mode's "every property
+    # listed in `required`" rule — never omitted, same posture as every
+    # other nullable field in this schema.
+    composition_item = {
+        'type': 'object',
+        'properties': {
+            'module_type': {'type': 'string', 'enum': all_types},
+            'patch': {'type': 'object'},
+            'children': {
+                'type': ['array', 'null'],
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'column_index': {'type': 'integer'},
+                        'modules': {'type': 'array', 'items': flat_module_entry, 'maxItems': MAX_COMPOSITION_CHILDREN_PER_COLUMN},
+                    },
+                    'required': ['column_index', 'modules'],
+                    'additionalProperties': False,
+                },
+            },
+            'repeatable_items': {'type': ['array', 'null'], 'items': {'type': 'object'}},
+        },
+        'required': ['module_type', 'patch', 'children', 'repeatable_items'],
+        'additionalProperties': False,
+    }
     return {
         'name': 'email_ai_command',
         'strict': True,
@@ -82,15 +131,7 @@ def _action_schema():
                         'module_type': {'type': ['string', 'null'], 'enum': all_types + [None]},
                         'modules': {
                             'type': ['array', 'null'],
-                            'items': {
-                                'type': 'object',
-                                'properties': {
-                                    'module_type': {'type': 'string', 'enum': all_types},
-                                    'patch': {'type': 'object'},
-                                },
-                                'required': ['module_type', 'patch'],
-                                'additionalProperties': False,
-                            },
+                            'items': flat_module_entry,
                             'maxItems': MAX_GENERATED_MODULES,
                         },
                         'patch': {'type': ['object', 'null']},
@@ -100,8 +141,16 @@ def _action_schema():
                         # Sub-phase 4 — document-level title/subject/favicon.
                         'value': {'type': ['string', 'null']},
                         'url': {'type': ['string', 'null']},
+                        # Sub-phase 7 — COMPOSE_EMAIL's ordered plan.
+                        'items': {
+                            'type': ['array', 'null'],
+                            'items': composition_item,
+                            'maxItems': MAX_COMPOSITION_ITEMS,
+                        },
                     },
-                    'required': ['type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url'],
+                    'required': [
+                        'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
+                    ],
                     'additionalProperties': False,
                 },
             },

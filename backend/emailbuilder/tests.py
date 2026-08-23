@@ -1506,6 +1506,9 @@ from .ai_command import (  # noqa: E402
 )
 from .ai_command_openai import OpenAIEmailCommandProvider  # noqa: E402
 from .ai_command_local import LocalEmailCommandProvider  # noqa: E402
+from . import ai_command as ai_command_module  # noqa: E402
+from . import ai_command_openai as ai_command_openai_module  # noqa: E402
+from . import ai_command_local as ai_command_local_module  # noqa: E402
 from . import module_capabilities  # noqa: E402
 from .knowledge.rules import (  # noqa: E402
     AFFECTED_CLIENT_VALUES, CONCERN_VALUES, EMAIL_CLIENT_REGISTRY, KNOWLEDGE_RULE_CATEGORIES,
@@ -3877,3 +3880,594 @@ class CustomCssSecurityObfuscationTests(TestCase):
 
     def test_malformed_url_missing_close_paren_still_rejected(self):
         self._rejects('.x{background:url(javascript:alert(1)}')
+
+
+# ============================================================================
+# Feature 14 V3 Sub-phase 7 — Professional Email Composition & Template
+# Generation
+# ============================================================================
+
+from . import composition  # noqa: E402
+
+
+class CompositionEngineDeterministicTests(TestCase):
+    """composition.py's pure logic — no network, no provider, no view.
+    Covers the exact example briefs from the Sub-phase 7 spec plus every
+    curated pattern and the bounded free-text interpretation (never
+    exact-name-only matching)."""
+
+    def test_promotional_brief_with_explicit_sections(self):
+        result = composition.compose_from_brief(
+            'Create a promotional email for a summer sale with preheader, header, hero, products, '
+            'CTA, social links and footer.',
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'promotional')
+        types = [item['module_type'] for item in result['items']]
+        self.assertIn('header-preheader-logo', types)  # preheader signal upgraded the header slot
+        self.assertTrue(any(t.startswith('hero') for t in types))
+        self.assertTrue(any(t.startswith('product') for t in types))
+        self.assertTrue(any(t.startswith('cta') or t == 'button' for t in types))
+        self.assertTrue(any(t.startswith('social') for t in types))
+        self.assertTrue(any(t.startswith('footer') for t in types))
+        # The literal brief phrase becomes the hero headline -- never a
+        # fabricated headline.
+        hero_item = next(item for item in result['items'] if item['module_type'].startswith('hero'))
+        self.assertEqual(hero_item['patch'].get('headline'), 'Summer sale')
+
+    def test_newsletter_brief_produces_nested_two_column_layout(self):
+        result = composition.compose_from_brief(
+            'Build a newsletter with introduction, two content sections and a closing CTA.',
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'newsletter')
+        layout_items = [item for item in result['items'] if item['module_type'].startswith('layout-')]
+        self.assertEqual(len(layout_items), 1)
+        layout_item = layout_items[0]
+        self.assertIn('children', layout_item)
+        self.assertEqual(len(layout_item['children']), 2)
+        for group in layout_item['children']:
+            self.assertEqual(len(group['modules']), 1)
+            self.assertFalse(group['modules'][0]['module_type'].startswith('layout-'))
+        self.assertTrue(any(t['module_type'].startswith('cta') for t in result['items']))
+
+    def test_product_launch_brief(self):
+        result = composition.compose_from_brief('Create a product launch email.')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'product_launch')
+        self.assertTrue(any(item['module_type'].startswith('product') for item in result['items']))
+
+    def test_welcome_onboarding_brief(self):
+        result = composition.compose_from_brief('Make a welcome/onboarding email.')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'welcome')
+
+    def test_event_brief(self):
+        result = composition.compose_from_brief('Create an event announcement email for our webinar')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'event')
+
+    def test_transactional_brief(self):
+        result = composition.compose_from_brief('Make a transactional confirmation email')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'transactional')
+
+    def test_editorial_brief(self):
+        result = composition.compose_from_brief('Build an editorial email about our latest blog post')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'editorial')
+
+    def test_generic_email_request_degrades_to_announcement_pattern(self):
+        result = composition.compose_from_brief('Create a quick announcement email about our office closing')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'announcement')
+
+    def test_bare_pattern_keyword_without_the_word_email_still_composes(self):
+        """Not exact-name-only matching -- 'newsletter' alone (no literal
+        'email' word) still resolves, because every curated pattern name
+        IS unambiguously an email pattern in this builder."""
+        result = composition.compose_from_brief('Please build a newsletter for our subscribers')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'newsletter')
+
+    def test_unrelated_module_edit_request_is_not_a_composition(self):
+        self.assertIsNone(composition.compose_from_brief('update the button color to green'))
+
+    def test_single_module_add_request_is_not_a_composition(self):
+        self.assertIsNone(composition.compose_from_brief('Create a button'))
+
+    def test_empty_and_none_text_are_not_compositions(self):
+        self.assertIsNone(composition.compose_from_brief(''))
+        self.assertIsNone(composition.compose_from_brief(None))
+
+    def test_every_curated_pattern_resolves_to_at_least_one_item(self):
+        for key in composition.PATTERNS:
+            with self.subTest(pattern=key):
+                items = composition.build_composition(key)
+                self.assertGreater(len(items), 0)
+
+    def test_composition_never_exceeds_max_items(self):
+        for key in composition.PATTERNS:
+            items = composition.build_composition(
+                key, extra_sections={'preheader', 'header', 'hero', 'products', 'cta', 'social', 'footer'},
+            )
+            self.assertLessEqual(len(items), composition.MAX_COMPOSITION_ITEMS)
+
+    def test_every_composition_item_module_type_is_a_real_registered_type(self):
+        for key in composition.PATTERNS:
+            for item in composition.build_composition(key):
+                with self.subTest(pattern=key, module_type=item.module_type):
+                    self.assertIn(item.module_type, module_capabilities.get_all_module_types())
+
+    def test_social_signal_adds_social_section_when_pattern_lacks_one(self):
+        # 'transactional' base pattern has no social slot.
+        without = composition.build_composition('transactional')
+        self.assertFalse(any(i.module_type.startswith('social') for i in without))
+        with_social = composition.build_composition('transactional', extra_sections={'social'})
+        self.assertTrue(any(i.module_type.startswith('social') for i in with_social))
+
+    def test_products_signal_adds_products_section_when_pattern_lacks_one(self):
+        without = composition.build_composition('welcome')
+        self.assertFalse(any(i.module_type.startswith('product') for i in without))
+        with_products = composition.build_composition('welcome', extra_sections={'products'})
+        self.assertTrue(any(i.module_type.startswith('product') for i in with_products))
+
+    def test_repeatable_seed_items_are_real_manifest_schema_keys(self):
+        social_item = composition._social_item()
+        self.assertIsNotNone(social_item)
+        repeatable = module_capabilities.get_repeatable_field(social_item.module_type)
+        allowed_keys = {f['key'] for f in repeatable['itemSchema']}
+        for raw_item in social_item.repeatable_items:
+            for key in raw_item:
+                with self.subTest(key=key):
+                    self.assertIn(key, allowed_keys)
+
+    def test_to_dict_round_trip_shape(self):
+        item = composition.CompositionItem('button', {'text': 'Shop Now'})
+        as_dict = item.to_dict()
+        self.assertEqual(as_dict, {'module_type': 'button', 'patch': {'text': 'Shop Now'}})
+
+
+class ComposeEmailValidateActionTests(TestCase):
+    """The validate_action() COMPOSE_EMAIL gate -- proves a composition
+    item can never carry anything a hand-typed action wouldn't also be
+    allowed to carry, and that malformed input is safely rejected/reduced
+    rather than crashing or silently accepted."""
+
+    def test_missing_items_rejected(self):
+        self.assertIsNone(validate_action({'type': ActionType.COMPOSE_EMAIL}))
+
+    def test_empty_items_rejected(self):
+        self.assertIsNone(validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': []}))
+
+    def test_non_list_items_rejected(self):
+        self.assertIsNone(validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': 'not-a-list'}))
+
+    def test_unknown_module_type_dropped_entirely(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'not-a-real-type', 'patch': {}}],
+        })
+        self.assertIsNone(result)
+
+    def test_valid_flat_item_accepted(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {'text': 'Shop'}}],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'button', 'patch': {'text': 'Shop'}}])
+
+    def test_unsupported_patch_key_stripped_not_the_whole_item(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {'text': 'Shop', 'notARealField': 'x'}}],
+        })
+        self.assertEqual(result['items'][0]['patch'], {'text': 'Shop'})
+
+    def test_nested_layout_inside_layout_column_is_rejected(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [{'column_index': 0, 'modules': [{'module_type': 'layout-1col', 'patch': {}}]}],
+            }],
+        })
+        # The layout survives; the illegal nested-layout child is dropped,
+        # leaving no children at all (the group had nothing safe left).
+        self.assertEqual(result['items'], [{'module_type': 'layout-2col-50-50', 'patch': {}}])
+
+    def test_valid_nested_child_module_is_kept(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'Left'}}]},
+                    {'column_index': 1, 'modules': [{'module_type': 'text', 'patch': {'text': 'Right'}}]},
+                ],
+            }],
+        })
+        item = result['items'][0]
+        self.assertEqual(len(item['children']), 2)
+        self.assertEqual(item['children'][0]['modules'][0]['patch'], {'text': 'Left'})
+        self.assertEqual(item['children'][1]['modules'][0]['patch'], {'text': 'Right'})
+
+    def test_out_of_range_column_index_dropped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [{'column_index': 5, 'modules': [{'module_type': 'text', 'patch': {}}]}],
+            }],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'layout-2col-50-50', 'patch': {}}])
+
+    def test_negative_column_index_dropped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [{'column_index': -1, 'modules': [{'module_type': 'text', 'patch': {}}]}],
+            }],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'layout-2col-50-50', 'patch': {}}])
+
+    def test_duplicate_column_index_second_occurrence_dropped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'First'}}]},
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'Second'}}]},
+                ],
+            }],
+        })
+        self.assertEqual(len(result['items'][0]['children']), 1)
+
+    def test_children_count_bounded_by_column_count(self):
+        # layout-2col-50-50 only has 2 columns -- a 3rd group is ignored.
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {}}]},
+                    {'column_index': 1, 'modules': [{'module_type': 'text', 'patch': {}}]},
+                    {'column_index': 2, 'modules': [{'module_type': 'text', 'patch': {}}]},
+                ],
+            }],
+        })
+        self.assertEqual(len(result['items'][0]['children']), 2)
+
+    def test_repeatable_items_validated_field_by_field(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'social-icon-row', 'patch': {},
+                'repeatable_items': [{'label': 'Facebook', 'href': 'https://facebook.com/x', 'evilKey': 'x'}],
+            }],
+        })
+        item = result['items'][0]
+        self.assertEqual(item['repeatable_items'], [{'label': 'Facebook', 'href': 'https://facebook.com/x'}])
+
+    def test_repeatable_items_on_a_module_without_a_repeatable_field_are_ignored(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {}, 'repeatable_items': [{'label': 'x', 'href': 'y'}]}],
+        })
+        self.assertNotIn('repeatable_items', result['items'][0])
+
+    def test_items_beyond_max_composition_items_are_truncated(self):
+        raw_items = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_ITEMS + 5)]
+        result = validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': raw_items})
+        self.assertEqual(len(result['items']), ai_command_module.MAX_COMPOSITION_ITEMS)
+
+    def test_children_beyond_max_per_column_are_truncated(self):
+        raw_modules = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_CHILDREN_PER_COLUMN + 3)]
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'layout-1col', 'patch': {}, 'children': [{'column_index': 0, 'modules': raw_modules}]}],
+        })
+        self.assertEqual(
+            len(result['items'][0]['children'][0]['modules']), ai_command_module.MAX_COMPOSITION_CHILDREN_PER_COLUMN,
+        )
+
+    def test_non_dict_item_in_items_list_skipped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': ['not-a-dict', {'module_type': 'button', 'patch': {}}],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'button', 'patch': {}}])
+
+    def test_compose_email_always_requires_confirmation(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {}}],
+        })
+        self.assertTrue(requires_confirmation(action))
+
+    def test_unimplemented_action_types_still_safely_reduce_to_none(self):
+        """Sanity guard: adding COMPOSE_EMAIL to IMPLEMENTED must not have
+        broken the reduce-to-NONE behavior for a genuinely-not-yet-real
+        future action type."""
+        result = validate_action({'type': 'SOME_FUTURE_ACTION_TYPE'})
+        self.assertIsNone(result)
+
+
+class ComposeEmailAssetResolutionTests(TestCase):
+    """resolve_asset_references() for COMPOSE_EMAIL -- ownership-checked
+    asset resolution walked recursively across a composition item's own
+    patch, nested children, and repeatable items."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='compose.owner', email='compose.owner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='compose.intruder', email='compose.intruder@example.com', password='StrongPass123')
+        self.owned_asset = EmailAsset.objects.create(
+            user=self.user, name='Hero image', category='image',
+            source_type='external', external_url='https://example.com/owned-hero.png',
+        )
+        self.other_users_asset = EmailAsset.objects.create(
+            user=self.other_user, name='Not yours', category='image',
+            source_type='external', external_url='https://example.com/intruder.png',
+        )
+
+    def _request(self):
+        from django.test import RequestFactory
+
+        factory = RequestFactory()
+        request = factory.post('/api/v1/email-builder/ai-command/')
+        request.user = self.user
+        return request
+
+    def test_owned_asset_marker_in_top_level_patch_resolves(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'image', 'patch': {'src': {'assetId': self.owned_asset.pk}}}],
+        })
+        resolved = resolve_asset_references(action, self._request())
+        self.assertEqual(resolved['items'][0]['patch']['src'], 'https://example.com/owned-hero.png')
+
+    def test_other_users_asset_marker_in_nested_child_never_resolves(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-1col', 'patch': {},
+                'children': [{'column_index': 0, 'modules': [
+                    {'module_type': 'image', 'patch': {'src': {'assetId': self.other_users_asset.pk}}},
+                ]}],
+            }],
+        })
+        resolved = resolve_asset_references(action, self._request())
+        nested_patch = resolved['items'][0]['children'][0]['modules'][0]['patch']
+        self.assertNotIn('src', nested_patch)
+
+    def test_owned_asset_marker_in_repeatable_item_resolves(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'product-single', 'patch': {},
+                'repeatable_items': [{'imageSrc': {'assetId': self.owned_asset.pk}, 'name': 'Widget'}],
+            }],
+        })
+        resolved = resolve_asset_references(action, self._request())
+        self.assertEqual(
+            resolved['items'][0]['repeatable_items'][0]['imageSrc'], 'https://example.com/owned-hero.png',
+        )
+
+
+class RuleBasedEmailCommandProviderComposeTests(TestCase):
+    """The deterministic router's compose-intent detection -- the exact
+    example briefs from the Sub-phase 7 spec, plus regression guards
+    proving ordinary single-module commands are entirely unaffected."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_promotional_example_brief_resolves_to_compose_email(self):
+        result = self.provider.resolve(
+            'Create a promotional email for a summer sale with preheader, header, hero, products, '
+            'CTA, social links and footer.', {},
+        )
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        self.assertGreater(len(validated['items']), 1)
+
+    def test_newsletter_example_brief_resolves_to_compose_email(self):
+        result = self.provider.resolve('Build a newsletter with introduction, two content sections and a closing CTA.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+
+    def test_product_launch_example_brief(self):
+        result = self.provider.resolve('Create a product launch email.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+
+    def test_welcome_onboarding_example_brief(self):
+        result = self.provider.resolve('Make a welcome/onboarding email.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+
+    def test_zero_provider_operation_works_with_no_context_and_no_selection(self):
+        """The whole point of the deterministic path: it must work with an
+        empty context dict, no selected module, and no OpenAI/local
+        provider configured at all -- this test instantiates the router
+        directly, which IS the zero-provider path."""
+        result = self.provider.resolve('Create a promotional email for a launch', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertGreater(result.confidence, 0)
+
+    def test_compose_email_response_survives_full_validate_action_gate(self):
+        result = self.provider.resolve('Create a product launch email.', {})
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        for item in validated['items']:
+            self.assertIn(item['module_type'], module_capabilities.get_all_module_types())
+
+    # --- Regression guards: ordinary single-module commands unaffected ---
+
+    def test_add_a_button_still_inserts_a_single_module_not_a_composition(self):
+        result = self.provider.resolve('add a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+    def test_create_a_button_still_inserts_a_single_module_not_a_composition(self):
+        result = self.provider.resolve('Create a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+    def test_unrelated_style_command_still_works(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('make it bigger', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_MODULE_PROPS)
+
+    def test_explain_command_still_takes_priority_over_compose_detection(self):
+        result = self.provider.resolve('explain what vml is', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertEqual(result.confidence, 1.0)
+
+
+class OpenAIEmailCommandProviderComposeTests(TestCase):
+    """Provider-assisted composition -- the OpenAI provider CAN propose a
+    richer COMPOSE_EMAIL plan; malformed/invalid provider output is
+    rejected safely by the SAME validate_action() gate, never a second,
+    looser path for provider-authored compositions."""
+
+    def _fake_completion(self, payload_dict):
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=json.dumps(payload_dict)))]
+        return completion
+
+    def test_schema_includes_compose_email_items_shape(self):
+        schema = ai_command_openai_module._action_schema()
+        action_props = schema['schema']['properties']['action']['properties']
+        self.assertIn('items', action_props)
+        self.assertIn('COMPOSE_EMAIL', schema['schema']['properties']['action']['properties']['type']['enum'])
+
+    def test_valid_compose_email_structured_response_passes_validation(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'Composing a promotional email.', 'confidence': 0.9,
+            'action': {
+                'type': 'COMPOSE_EMAIL', 'target': None, 'module_type': None, 'modules': None, 'patch': None,
+                'enabled': None, 'css': None, 'value': None, 'url': None,
+                'items': [
+                    {'module_type': 'header-logo-center', 'patch': {}, 'children': None, 'repeatable_items': None},
+                    {
+                        'module_type': 'layout-2col-50-50', 'patch': {}, 'repeatable_items': None,
+                        'children': [
+                            {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'Left'}}]},
+                            {'column_index': 1, 'modules': [{'module_type': 'text', 'patch': {'text': 'Right'}}]},
+                        ],
+                    },
+                    {'module_type': 'button', 'patch': {'text': 'Shop Now'}, 'children': None, 'repeatable_items': None},
+                ],
+            },
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('create a promotional email', {})
+        self.assertEqual(result.action['type'], 'COMPOSE_EMAIL')
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        self.assertEqual(len(validated['items']), 3)
+        layout_item = validated['items'][1]
+        self.assertEqual(len(layout_item['children']), 2)
+
+    def test_provider_hallucinated_module_type_in_composition_is_dropped_not_trusted(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.9,
+            'action': {
+                'type': 'COMPOSE_EMAIL', 'target': None, 'module_type': None, 'modules': None, 'patch': None,
+                'enabled': None, 'css': None, 'value': None, 'url': None,
+                'items': [
+                    {'module_type': 'button', 'patch': {'text': 'Real'}, 'children': None, 'repeatable_items': None},
+                    {'module_type': 'fabricated-hero-type', 'patch': {}, 'children': None, 'repeatable_items': None},
+                ],
+            },
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('create a promotional email', {})
+        validated = validate_action(result.action)
+        self.assertEqual(len(validated['items']), 1)
+        self.assertEqual(validated['items'][0]['module_type'], 'button')
+
+    def test_malformed_provider_response_falls_back_to_deterministic_via_wrapper(self):
+        client = MagicMock()
+        bad_completion = MagicMock()
+        bad_completion.choices = [MagicMock(message=MagicMock(content='not valid json'))]
+        client.chat.completions.create.return_value = bad_completion
+        provider = FallbackEmailCommandProvider(
+            primary=OpenAIEmailCommandProvider(client_factory=lambda: client),
+            fallback=RuleBasedEmailCommandProvider(),
+        )
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('Create a promotional email for a summer sale', {})
+        # Falls back to the deterministic composition path -- still a real
+        # COMPOSE_EMAIL proposal, just from the always-available router.
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertEqual(result.provider, 'deterministic')
+
+    def test_provider_call_failure_falls_back_to_deterministic(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError('network down')
+        provider = FallbackEmailCommandProvider(
+            primary=OpenAIEmailCommandProvider(client_factory=lambda: client),
+            fallback=RuleBasedEmailCommandProvider(),
+        )
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('Build a newsletter with two content sections', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertEqual(result.provider, 'deterministic')
+
+
+class LocalEmailCommandProviderComposeTests(TestCase):
+    """Mirrors OpenAIEmailCommandProviderComposeTests for the local/self-
+    hosted provider -- same schema, same validation gate, same fallback
+    wrapper."""
+
+    def _fake_completion(self, payload_dict):
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=json.dumps(payload_dict)))]
+        return completion
+
+    def test_schema_includes_compose_email_items_shape(self):
+        schema = ai_command_local_module._action_schema()
+        action_props = schema['schema']['properties']['action']['properties']
+        self.assertIn('items', action_props)
+
+    def test_valid_compose_email_structured_response_passes_validation(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'Composing a welcome email.', 'confidence': 0.9,
+            'action': {
+                'type': 'COMPOSE_EMAIL', 'target': None, 'module_type': None, 'modules': None, 'patch': None,
+                'enabled': None, 'css': None, 'value': None, 'url': None,
+                'items': [
+                    {'module_type': 'hero-text-only', 'patch': {'headline': 'Welcome!'}, 'children': None, 'repeatable_items': None},
+                    {
+                        'module_type': 'social-icon-row', 'patch': {}, 'children': None,
+                        'repeatable_items': [{'label': 'Facebook', 'href': 'https://facebook.com/x'}],
+                    },
+                ],
+            },
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
+            result = provider.resolve('create a welcome email', {})
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        self.assertEqual(validated['items'][1]['repeatable_items'], [{'label': 'Facebook', 'href': 'https://facebook.com/x'}])
+
+    def test_malformed_json_falls_back_via_wrapper(self):
+        client = MagicMock()
+        bad_completion = MagicMock()
+        bad_completion.choices = [MagicMock(message=MagicMock(content='{broken'))]
+        client.chat.completions.create.return_value = bad_completion
+        provider = FallbackEmailCommandProvider(
+            primary=LocalEmailCommandProvider(client_factory=lambda: client),
+            fallback=RuleBasedEmailCommandProvider(),
+        )
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
+            result = provider.resolve('Create a product launch email.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertEqual(result.provider, 'deterministic')

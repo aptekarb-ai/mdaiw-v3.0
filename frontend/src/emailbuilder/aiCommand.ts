@@ -25,6 +25,27 @@ export interface AIInsertModuleEntry {
   patch: Record<string, unknown>;
 }
 
+// Sub-phase 7 — one node in a COMPOSE_EMAIL plan. Mirrors
+// backend/emailbuilder/ai_command.py's _validate_composition_item shape
+// exactly (snake_case field names match the wire format — never
+// remapped client-side, so a captured network response can be pasted
+// straight into a test fixture). `children` only appears on a layout
+// module type (one group per column index); `repeatable_items` only
+// appears on a module type with a repeatableField. Both are one level
+// deep only — a child module is always AIInsertModuleEntry-shaped, never
+// itself carrying `children`/`repeatable_items`.
+export interface AIComposeChildGroup {
+  column_index: number;
+  modules: AIInsertModuleEntry[];
+}
+
+export interface AIComposeItem {
+  module_type: AICommandModuleType;
+  patch: Record<string, unknown>;
+  children?: AIComposeChildGroup[];
+  repeatable_items?: Record<string, unknown>[];
+}
+
 export type AICommandAction =
   | { type: 'NONE' }
   | { type: 'INSERT_MODULE'; modules: AIInsertModuleEntry[] }
@@ -62,6 +83,12 @@ export type AICommandAction =
       op: 'add' | 'update' | 'remove' | 'reorder';
       item?: Record<string, unknown>; index?: number; fromIndex?: number; toIndex?: number;
     }
+  // Sub-phase 7 — the composition engine's one action type. Always
+  // requires confirmation (see requires_confirmation() in ai_command.py)
+  // and applies as ONE undo/redo history entry through
+  // useEmailBuilderState.ts's addComposedModules — see
+  // EmailBuilderWorkspacePage.tsx's handleApplyAiAction.
+  | { type: 'COMPOSE_EMAIL'; items: AIComposeItem[] }
   // Email Document Standards Sub-phase 2, item F — document-level (not
   // EDM/module-level) proposals. Never applied without an explicit
   // Apply click, same as every action type above — see AIEngineerPanel's
@@ -193,6 +220,10 @@ export function describeAction(action: AICommandAction): string {
         case 'reorder': return `Reorder items in the selected ${action.module_type} module's list`;
         default: return `Update the selected ${action.module_type} module's list`;
       }
+    case 'COMPOSE_EMAIL': {
+      const topLevelCount = action.items.length;
+      return `Compose a full email with ${topLevelCount} section${topLevelCount === 1 ? '' : 's'}`;
+    }
     case 'SET_RESET_CSS_ENABLED':
       return action.enabled ? 'Enable Email Reset CSS' : 'Disable Email Reset CSS';
     case 'SET_CUSTOM_CSS_ENABLED':

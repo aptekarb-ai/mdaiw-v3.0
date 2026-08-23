@@ -157,6 +157,25 @@ function cssProposalDetails(
   }
 }
 
+// Sub-phase 7 — one readable line per top-level composition item, so the
+// proposal card shows enough for the user to understand what will be
+// created BEFORE Apply (master-prompt "proposal-before-apply" contract),
+// without needing the full module registry client-side just to render a
+// human label — the raw module_type string plus nested/list-item counts
+// is honest and sufficient (Applying still shows the real result on the
+// canvas immediately after).
+function compositionSummaryLines(action: AICommandAction): string[] | null {
+  if (action.type !== 'COMPOSE_EMAIL') return null;
+  return action.items.map((item, index) => {
+    const nestedCount = item.children?.reduce((sum, group) => sum + group.modules.length, 0) ?? 0;
+    const listItemCount = item.repeatable_items?.length ?? 0;
+    let line = `${index + 1}. ${item.module_type}`;
+    if (nestedCount > 0) line += ` — ${nestedCount} nested module${nestedCount === 1 ? '' : 's'}`;
+    if (listItemCount > 0) line += ` — ${listItemCount} list item${listItemCount === 1 ? '' : 's'}`;
+    return line;
+  });
+}
+
 const HISTORY_STATUS_LABEL: Record<AIActionHistoryEntry['status'], string> = {
   applied: 'Applied',
   cancelled: 'Cancelled',
@@ -472,8 +491,11 @@ export function AIEngineerPanel({
                   Ask the AI Engineer to add a module, change the selected module&apos;s color/text/size/
                   alignment, delete or duplicate it, restyle every module of one type, enable/disable Email
                   Reset CSS and set/remove Custom CSS, change the title/subject/favicon, diagnose Outlook
-                  compatibility ("check this email for Classic Outlook issues"), or repair safe issues
-                  ("repair all safe issues"). Type a command or press the microphone.
+                  compatibility ("check this email for Classic Outlook issues"), repair safe issues
+                  ("repair all safe issues"), or compose a whole email from a brief ("create a promotional
+                  email for a summer sale with hero, products, CTA, social links and footer", "build a
+                  newsletter with two content sections", "make a welcome email"). Type a command or press
+                  the microphone.
                 </p>
               </div>
             )}
@@ -490,6 +512,7 @@ export function AIEngineerPanel({
               const cssDetails = cssProposalDetails(
                 pending.action, resetCssEnabled, customCssEnabled, customCss, emailTitle, emailSubject, faviconUrl,
               );
+              const compositionLines = compositionSummaryLines(pending.action);
               const applyBlocked = resolving || (pending.requiresStrongConfirmation && !strongConfirmChecked);
               return (
                 <div
@@ -529,6 +552,15 @@ export function AIEngineerPanel({
                         </ul>
                       )}
                     </div>
+                  )}
+
+                  {compositionLines && (
+                    <ol className="ai-engineer-panel__composition-list">
+                      {compositionLines.map((line, index) => (
+                        // eslint-disable-next-line react/no-array-index-key -- the list is a fixed, freshly-built plan snapshot for this one proposal, re-rendered whole on every change
+                        <li key={index}>{line}</li>
+                      ))}
+                    </ol>
                   )}
 
                   {pending.requiresStrongConfirmation && (

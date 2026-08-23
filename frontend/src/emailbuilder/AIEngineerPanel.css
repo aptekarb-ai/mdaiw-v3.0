@@ -191,6 +191,18 @@
   color: var(--color-warning);
 }
 
+/* Sub-phase 7 — the composition engine's ordered module-list preview,
+   shown inside the same proposal card every other action type uses. */
+.ai-engineer-panel__composition-list {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
+  font-size: 12px;
+  color: var(--color-text-dark);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 /* Sub-phase 4, item 4 — the Repair Engine's multi-issue proposal card. */
 .ai-engineer-panel__repair-list {
   margin: 0 0 var(--space-3);
