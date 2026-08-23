@@ -11,13 +11,16 @@
 //                                      preserved per approved decision E)
 //   9. optional Custom CSS            [Sub-phase 2]
 //   10. Outlook OfficeDocumentSettings [Sub-phase 3]
-//   11. scoped Outlook conditional CSS [Sub-phase 3]
+//   11. scoped Outlook conditional CSS  [Sub-phase 3 — spacer-row +
+//       font-fallback blocks, each emitted only when actually needed;
+//       see outlookCompatibility.ts]
 //   12. </head>
-// Positions 10/11 are NOT implemented yet (Sub-phase 3) — later phases
-// insert at the marked point below, they do not restructure this function.
 import { escapeAttribute, escapeHtml, sanitizeUrl } from './sanitize';
 import { renderResponsiveStyles } from './responsiveStyles';
 import { renderCustomCssBlock, renderResetCssBlock } from './emailCss';
+import {
+  renderOutlookFontFallbackCss, renderOutlookOfficeSettingsBlock, renderOutlookSpacerRowCss,
+} from './outlookCompatibility';
 import type { EmailDocumentContent } from './edm';
 
 export interface EmailHeadOptions {
@@ -106,7 +109,8 @@ export function renderEmailHead({
     + (resetCssEnabled ? renderResetCssBlock() : '')
     + renderResponsiveStyles(content)
     + (customCssEnabled ? renderCustomCssBlock(customCss ?? '') : '')
-    // --- Sub-phase 3 inserts the Outlook OfficeDocumentSettings XML
-    //     block and the scoped Outlook conditional CSS block here ---
+    + renderOutlookOfficeSettingsBlock()
+    + renderOutlookSpacerRowCss(content)
+    + renderOutlookFontFallbackCss(content)
   );
 }

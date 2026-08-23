@@ -120,3 +120,26 @@ describe('renderEmailHead', () => {
     expect(head).not.toContain('<style');
   });
 });
+
+describe('renderEmailHead — Sub-phase 3 Outlook compatibility', () => {
+  it('always includes the OfficeDocumentSettings block, after Custom CSS in canonical order', () => {
+    const head = renderEmailHead({ title: '', faviconUrl: '', content: EMPTY_CONTENT });
+    expect(head).toContain('<o:OfficeDocumentSettings>');
+    expect(head).toContain('<o:PixelsPerInch>96</o:PixelsPerInch>');
+    const titleIndex = head.indexOf('<title>');
+    const officeIndex = head.indexOf('<o:OfficeDocumentSettings>');
+    expect(officeIndex).toBeGreaterThan(titleIndex);
+  });
+
+  it('omits the Outlook spacer-row CSS block when the document has no Spacer module', () => {
+    const head = renderEmailHead({ title: '', faviconUrl: '', content: EMPTY_CONTENT });
+    expect(head).not.toContain('mso-spacer');
+  });
+
+  it('includes the Outlook spacer-row CSS block when the document has a Spacer module', () => {
+    const spacer = createModule('spacer', 0);
+    const content: EmailDocumentContent = { version: 1, modules: [spacer] };
+    const head = renderEmailHead({ title: '', faviconUrl: '', content });
+    expect(head).toContain('mso-spacer');
+  });
+});

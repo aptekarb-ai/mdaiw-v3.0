@@ -1,5 +1,8 @@
 import type { EmailDocumentContent } from './edm';
-import { renderModuleWithOuterStructure } from './registryCore';
+import {
+  renderModuleWithOuterStructure, resolveModuleDefinition, resolveNestedModuleParentPlaceholder,
+  wrapModuleComment,
+} from './registryCore';
 import { renderEmailHead } from './emailHead';
 
 export interface RenderableEmail {
@@ -36,8 +39,23 @@ export interface RenderableEmail {
 // exact same function).
 export function renderEmailBody(document: RenderableEmail): string {
   const modules = [...document.content.modules].sort((a, b) => a.order - b.order);
+  // Sub-phase 3, items 7/8 — every top-level module gets a deterministic
+  // `MODULE-N: LABEL` comment, N assigned strictly from this sorted
+  // render-order position (never from module.type, never persisted —
+  // recomputed fresh on every render, so duplicate/delete/reorder always
+  // renumbers correctly for free). A layout module's own nested-module
+  // comments come back from renderModuleWithOuterStructure still
+  // carrying the MODULE-__PARENT__.N placeholder (layoutCatalog.tsx has
+  // no way to know its own top-level number) — resolved to the real
+  // MODULE-N here, the one place that DOES know it.
   const rows = modules
-    .map((module) => `<tr><td>${renderModuleWithOuterStructure(module)}</td></tr>`)
+    .map((module, index) => {
+      const number = String(index + 1);
+      const definition = resolveModuleDefinition(module.type);
+      const rendered = resolveNestedModuleParentPlaceholder(renderModuleWithOuterStructure(module), number);
+      const commented = wrapModuleComment(rendered, `${number}: ${(definition?.label ?? module.type).toUpperCase()}`);
+      return `<tr><td>${commented}</td></tr>`;
+    })
     .join('');
 
   // Hybrid/fluid width strategy (04_Email_HTML_Rules.md: "explicit widths,

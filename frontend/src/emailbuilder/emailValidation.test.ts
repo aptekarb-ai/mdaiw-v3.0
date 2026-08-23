@@ -195,4 +195,99 @@ describe('validateEmail', () => {
     const report = validateEmail(html, content, 'generic');
     expect(report.issues.filter((i) => i.category === 'html' || i.category === 'outlook')).toHaveLength(0);
   });
+
+  it('Sub-phase 3: a real generated document with a spacer module (the one built-in that emits scoped MSO CSS) still produces zero outlook issues', () => {
+    const content = contentWith([createModule('spacer', 0)]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.filter((i) => i.category === 'outlook')).toHaveLength(0);
+  });
+
+  it('Sub-phase 3: flags a malformed (unbalanced) MSO conditional comment', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body><!--[if mso]><table><tr><td>x</td></tr></table></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:malformed-conditional-comment')).toBe(true);
+  });
+
+  it('Sub-phase 3: does not flag a balanced MSO conditional comment', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body><!--[if mso]><table><tr><td>x</td></tr></table><![endif]--></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:malformed-conditional-comment')).toBe(false);
+  });
+
+  it('Sub-phase 3: flags VML markup missing the xmlns:v namespace', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html xmlns="http://www.w3.org/1999/xhtml"><body><v:roundrect>x</v:roundrect></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:missing-vml-namespace')).toBe(true);
+  });
+
+  it('Sub-phase 3: does not flag VML markup when xmlns:v is present on <html>', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html xmlns:v="urn:schemas-microsoft-com:vml"><body><v:roundrect>x</v:roundrect></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:missing-vml-namespace')).toBe(false);
+  });
+
+  it('Sub-phase 3: does not flag missing VML namespace when there is no VML markup at all (no false positive on a normal document)', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:missing-vml-namespace')).toBe(false);
+  });
+
+  it('Sub-phase 3: flags a document with MSO conditional content but missing the 96-DPI Office config', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body><!--[if mso]><table><tr><td>x</td></tr></table><![endif]--></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:missing-office-dpi')).toBe(true);
+  });
+
+  it('Sub-phase 3: does not flag missing DPI config on a document with zero MSO conditional content', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body>plain</body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:missing-office-dpi')).toBe(false);
+  });
+
+  it('Sub-phase 3: real generated document (which always emits the 96-DPI block) never flags missing-office-dpi', () => {
+    const content = contentWith([createModule('text', 0)]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:missing-office-dpi')).toBe(false);
+  });
+
+  it('Sub-phase 3: flags an unscoped global tr{font-size:0} row-collapse rule (e.g. injected via Custom CSS)', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><head><style>tr{font-size:0;line-height:0;}</style></head><body></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:unsafe-global-row-collapse')).toBe(true);
+  });
+
+  it('Sub-phase 3: does not flag the scoped .mso-spacer rule the renderer itself emits', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><head><style>.mso-spacer{font-size:0;line-height:0;}</style></head><body></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:unsafe-global-row-collapse')).toBe(false);
+  });
+
+  it('Sub-phase 3: flags VML for New Outlook (web engine ignores VML) independently of the Classic Outlook namespace check', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html xmlns:v="urn:schemas-microsoft-com:vml"><body><v:roundrect>x</v:roundrect></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    const classicIssue = report.issues.find((i) => i.id === 'outlook-classic:missing-vml-namespace');
+    const newOutlookIssue = report.issues.find((i) => i.id === 'outlook-new:vml-not-processed');
+    expect(classicIssue).toBeUndefined();
+    expect(newOutlookIssue).toBeDefined();
+    expect(newOutlookIssue!.severity).toBe('warning');
+  });
+
+  it('Sub-phase 3: does not flag New Outlook when there is no VML at all (a real generated document)', () => {
+    const content = contentWith([createModule('text', 0)]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-new:vml-not-processed')).toBe(false);
+  });
 });

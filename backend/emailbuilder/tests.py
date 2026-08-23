@@ -1507,6 +1507,7 @@ from .ai_command import (  # noqa: E402
 from .ai_command_openai import OpenAIEmailCommandProvider  # noqa: E402
 from .ai_command_local import LocalEmailCommandProvider  # noqa: E402
 from . import module_capabilities  # noqa: E402
+from .knowledge.rules import KnowledgeRule, KnowledgeRuleValidationError, find_rule, load_rules  # noqa: E402
 
 
 def _selected(module_type, **props):
@@ -1748,6 +1749,137 @@ class EmailAiEngineerCssCommandTests(TestCase):
     def test_resolve_asset_references_passes_document_scope_actions_through_unchanged(self):
         action = {'type': ActionType.SET_CUSTOM_CSS, 'css': '.x{color:red}'}
         self.assertEqual(resolve_asset_references(action, request=None), action)
+
+
+class KnowledgeRuleTests(TestCase):
+    """Sub-phase 3, item 13 -- the KnowledgeRule contract stays satisfied
+    by every real rule, and load_rules()/find_rule() behave as the
+    deterministic explain intent (below) depends on."""
+
+    def test_load_rules_returns_nine_outlook_rules(self):
+        rules = load_rules()
+        self.assertEqual(len(rules), 9)
+        for rule in rules:
+            self.assertIsInstance(rule, KnowledgeRule)
+            self.assertEqual(rule.category, 'outlook')
+
+    def test_every_rule_id_is_unique(self):
+        rules = load_rules()
+        ids = [rule.id for rule in rules]
+        self.assertEqual(len(ids), len(set(ids)))
+
+    def test_find_rule_returns_the_matching_rule(self):
+        rule = find_rule('office-96-dpi')
+        self.assertIsNotNone(rule)
+        self.assertEqual(rule.id, 'office-96-dpi')
+
+    def test_find_rule_returns_none_for_an_unknown_id(self):
+        self.assertIsNone(find_rule('not-a-real-rule-id'))
+
+    def test_knowledge_rule_rejects_an_unknown_category(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(
+                id='bad', category='not-a-real-category', title='t', description='d', severity='info',
+                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
+                references=(), confidence=1.0,
+            )
+
+    def test_knowledge_rule_rejects_an_unknown_affected_client(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(
+                id='bad', category='outlook', title='t', description='d', severity='info',
+                affected_clients=('SOME_OTHER_CLIENT',), detection={}, suggested_fix=None, safe_auto_fix=False,
+                references=(), confidence=1.0,
+            )
+
+    def test_knowledge_rule_rejects_an_out_of_range_confidence(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(
+                id='bad', category='outlook', title='t', description='d', severity='info',
+                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
+                references=(), confidence=1.5,
+            )
+
+
+class EmailAiEngineerExplainIntentTests(TestCase):
+    """Sub-phase 3, item 13 -- deterministic (zero-OpenAI-token) "explain
+    X" intent on the always-available RuleBasedEmailCommandProvider,
+    sourced from knowledge/rules.py. Never mutates the document -- action
+    is always NONE, exactly like a genuine out-of-vocabulary command, but
+    with a real, specific reply instead of the generic clarify message."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_explain_new_outlook_vs_word_engine(self):
+        result = self.provider.resolve('explain the difference between new outlook and the word engine', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Word', result.reply)
+        self.assertIn('New Outlook', result.reply)
+
+    def test_explain_96_dpi(self):
+        result = self.provider.resolve('what is 96 dpi for outlook', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('PixelsPerInch', result.reply)
+
+    def test_explain_allowpng(self):
+        result = self.provider.resolve('explain allowpng', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('AllowPNG', result.reply)
+
+    def test_explain_vml_namespace(self):
+        result = self.provider.resolve('why does vml need a namespace', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('xmlns:v', result.reply)
+
+    def test_explain_vml_fallback(self):
+        result = self.provider.resolve('why does vml need a fallback', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('fallback', result.reply.lower())
+
+    def test_explain_row_collapse_danger(self):
+        result = self.provider.resolve('explain the row collapse trick', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('tr', result.reply)
+
+    def test_explain_spacer_row(self):
+        result = self.provider.resolve('what is a spacer row', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('spacer', result.reply.lower())
+
+    def test_explain_font_fallback(self):
+        result = self.provider.resolve('explain outlook font fallback', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('font', result.reply.lower())
+
+    def test_explain_conditional_comment_scope(self):
+        result = self.provider.resolve('explain conditional comment scope', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('mso', result.reply.lower())
+
+    def test_explain_bare_vml_falls_back_to_namespace_rule(self):
+        result = self.provider.resolve('explain vml', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('xmlns:v', result.reply)
+
+    def test_explain_unrecognized_topic_asks_which_one(self):
+        result = self.provider.resolve('explain something totally unrelated to outlook', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Which one', result.reply)
+
+    def test_explain_never_returns_a_mutating_action_type(self):
+        for message in [
+            'explain 96 dpi', 'why does vml need a fallback', 'what is allowpng',
+        ]:
+            result = self.provider.resolve(message, {})
+            self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_explain_is_checked_before_custom_css_pattern_so_it_never_mutates_css(self):
+        """An "explain" question about a CSS-adjacent Outlook topic must
+        never be misread as a custom-css mutation command."""
+        result = self.provider.resolve('explain the row collapse trick', {})
+        self.assertNotIn('css', result.action)
+        self.assertEqual(result.action, {'type': ActionType.NONE})
 
 
 class ValidateActionTests(TestCase):

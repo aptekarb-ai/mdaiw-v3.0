@@ -352,6 +352,106 @@ function checkLinksAndImages(html: string): ValidationIssue[] {
   return issues;
 }
 
+// Sub-phase 3, item 12 — Outlook-specific checks, kept STRICTLY separate
+// from checkHtmlAndOutlookAndImages (Feature 09's generic
+// computeCompatibilityChecks re-labeling) since these are new,
+// Sub-phase-3-specific concerns: malformed MSO conditional comments,
+// VML-without-namespace, missing Office DPI config, and an unscoped
+// global Outlook row-collapse rule. Classic Outlook ('outlook-classic:'
+// id prefix) and New Outlook ('outlook-new:' id prefix) issues are NEVER
+// merged into one undifferentiated "Outlook" bucket — New Outlook's
+// web-rendering engine does not process MSO conditional comments or VML
+// at all, so a Classic-only problem is never attributed to it, and vice
+// versa (see emailClientCapabilities.ts's OutlookAffinity, which keeps
+// the same distinction for the AI Engineer / client-matrix layer).
+//
+// Item 12's "do not create false positives merely because an email does
+// not contain VML" — every check below only fires when the RELEVANT
+// construct (a conditional comment, a VML tag, an unscoped row-collapse
+// rule) is actually present in `html`; an email with none of these
+// produces zero issues, exactly like the "clean empty document" baseline
+// test already asserts (score 100, zero issues).
+function checkOutlookCompatibility(html: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  const openConditionalCount = (html.match(/<!--\[if\s/gi) ?? []).length;
+  const closeConditionalCount = (html.match(/<!\[endif\]-->/g) ?? []).length;
+  if (openConditionalCount !== closeConditionalCount) {
+    issues.push({
+      id: 'outlook-classic:malformed-conditional-comment',
+      category: 'outlook',
+      severity: 'error',
+      title: 'Malformed Outlook conditional comment',
+      detail: `Found ${openConditionalCount} opening MSO conditional comment(s) but ${closeConditionalCount} closing "<![endif]-->" — Classic Outlook (Word rendering engine) may render this incorrectly or leak the fallback content.`,
+      fixType: 'none',
+    });
+  }
+
+  const hasVmlTags = /<v:[a-zA-Z]/.test(html);
+  const htmlTagMatch = /<html\b[^>]*>/i.exec(html);
+  const hasVmlNamespace = htmlTagMatch ? /xmlns:v=/.test(htmlTagMatch[0]) : false;
+  if (hasVmlTags && !hasVmlNamespace) {
+    issues.push({
+      id: 'outlook-classic:missing-vml-namespace',
+      category: 'outlook',
+      severity: 'error',
+      title: 'VML markup without the required namespace',
+      detail: 'This document contains VML markup but <html> is missing xmlns:v="urn:schemas-microsoft-com:vml" — Classic Outlook will not render it correctly.',
+      fixType: 'none',
+    });
+  }
+
+  // Office DPI/PNG config is only meaningful for a document that claims
+  // ANY Outlook support at all (i.e. emits at least one MSO conditional
+  // comment) — a document with zero MSO content has nothing to check
+  // here (never a false positive on a document that legitimately has no
+  // Outlook-targeted content).
+  if (openConditionalCount > 0 && !/<o:PixelsPerInch>96<\/o:PixelsPerInch>/.test(html)) {
+    issues.push({
+      id: 'outlook-classic:missing-office-dpi',
+      category: 'outlook',
+      severity: 'error',
+      title: 'Missing Office 96-DPI configuration',
+      detail: 'This document targets Outlook but is missing <o:PixelsPerInch>96</o:PixelsPerInch> — images may be scaled incorrectly in Classic Outlook.',
+      fixType: 'none',
+    });
+  }
+
+  // Item 2 regression guard — the renderer's OWN spacer treatment is
+  // always scoped to the .mso-spacer class (never a bare `tr` selector),
+  // so this can only ever fire from Custom CSS introducing an unscoped
+  // rule; still checked directly against the FULL rendered html (not
+  // re-implemented as a Custom-CSS-only scan) so it also catches any
+  // future renderer regression, not just a Custom CSS mistake.
+  if (/(^|[^.\w-])tr\s*\{[^}]*(?:font-size\s*:\s*0|line-height\s*:\s*0)/i.test(html)) {
+    issues.push({
+      id: 'outlook-classic:unsafe-global-row-collapse',
+      category: 'outlook',
+      severity: 'warning',
+      title: 'Unscoped Outlook row-collapse rule',
+      detail: 'A CSS rule zeroes out font-size/line-height on every <tr>, not just spacer rows — this can collapse real content rows in Classic Outlook. Scope it to a specific class instead.',
+      fixType: 'none',
+    });
+  }
+
+  return issues;
+}
+
+function checkNewOutlookCompatibility(html: string): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (/<v:[a-zA-Z]/.test(html)) {
+    issues.push({
+      id: 'outlook-new:vml-not-processed',
+      category: 'outlook',
+      severity: 'warning',
+      title: 'VML is not processed by New Outlook',
+      detail: 'New Outlook uses a Chromium-based web-rendering engine, not the Word engine — it ignores VML and MSO conditional comments entirely. Content relying only on VML needs a real HTML fallback for New Outlook to show anything at all.',
+      fixType: 'none',
+    });
+  }
+  return issues;
+}
+
 function checkPlatform(html: string, platform: EmailPlatform): ValidationIssue[] {
   const impacts = detectCompatibilityImpact(html, platform);
   return impacts.map((impact) => ({
@@ -379,6 +479,8 @@ function computeScore(issues: ValidationIssue[]): number {
 export function validateEmail(html: string, content: EmailDocumentContent, platform: EmailPlatform): ValidationReport {
   const issues: ValidationIssue[] = [
     ...checkHtmlAndOutlookAndImages(html),
+    ...checkOutlookCompatibility(html),
+    ...checkNewOutlookCompatibility(html),
     ...checkResponsive(html, content),
     ...checkAccessibilityAndDarkMode(html, content),
     ...checkLinksAndImages(html),

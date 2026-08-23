@@ -314,8 +314,16 @@ const spacerDefinition: ModuleDefinition<SpacerModuleProps> = {
     // the email-safe spacer pattern. Desktop height is the static-export
     // source of truth (mobileHeight is canvas-preview + data-model only,
     // same convention as every other Desktop/Mobile property this pass —
-    // see edm.ts's EmailModuleSettings docstring).
-    moduleTable(`<tr><td height="${module.props.height}" style="font-size:${module.props.height}px; line-height:${module.props.height}px;">&nbsp;</td></tr>`)
+    // see edm.ts's EmailModuleSettings docstring). The inline
+    // font-size/line-height (matching `height`) is what non-Outlook
+    // clients use; the `mso-spacer` class additionally picks up a
+    // SCOPED MSO-only zero-metrics override (see
+    // outlookCompatibility.ts's renderOutlookSpacerRowCss) — Classic
+    // Outlook's Word engine can add extra vertical space around a
+    // non-zero font-size/line-height even with an explicit `height`
+    // attribute, so it gets the stricter zero treatment; every other
+    // client keeps the height-matched values already here.
+    moduleTable(`<tr><td height="${module.props.height}" class="mso-spacer" style="font-size:${module.props.height}px; line-height:${module.props.height}px;">&nbsp;</td></tr>`)
   ),
 };
 

@@ -38,6 +38,7 @@ from dataclasses import dataclass
 
 from . import module_capabilities
 from .custom_css_security import MAX_CUSTOM_CSS_LENGTH, validate_custom_css_security
+from .knowledge.rules import find_rule
 
 MAX_MESSAGE_LENGTH = 500
 MAX_GENERATED_MODULES = 5
@@ -493,6 +494,45 @@ _SET_CUSTOM_CSS_PATTERN = re.compile(
     r'\b(?:set|add|replace|update)\b[^:]*\bcustom\s*css\b\s*(?:to|with)?\s*:?\s*(.+)$', re.IGNORECASE | re.DOTALL,
 )
 
+# Sub-phase 3, item 13 — deterministic, zero-OpenAI-token "explain X"
+# intent, sourced entirely from knowledge/rules.py's 9 Outlook/MSO
+# explainer entries. Never mutates the document (action is always NONE) —
+# this is a read-only knowledge lookup, never a proposal, so it does not
+# need an ActionType or DOCUMENT_SCOPE entry. Checked FIRST in resolve(),
+# before every mutating pattern, so a purely informational question (e.g.
+# "why does VML need a fallback?") is never misread as a CSS/insert
+# command. Patterns are checked in order — more specific phrases (e.g.
+# "vml ... namespace") are listed before the bare "vml" catch-all so a
+# fully-specific question still resolves to the more precise rule.
+_EXPLAIN_PATTERN = re.compile(r'\b(explain|what\s+is|what\'?s|why\s+does|why\s+is|tell\s+me\s+about)\b', re.IGNORECASE)
+_EXPLAIN_TOPICS = (
+    (re.compile(r'\bnew\s*outlook\b|\bword\s*engine\b', re.IGNORECASE), 'outlook-word-engine-vs-new-outlook'),
+    (re.compile(r'\b96[\s-]*dpi\b|\bpixels\s*per\s*inch\b|\bpixelsperinch\b', re.IGNORECASE), 'office-96-dpi'),
+    (re.compile(r'\ballow\s*png\b|\ballowpng\b', re.IGNORECASE), 'outlook-allow-png'),
+    (re.compile(r'\bvml\b.*\bnamespace\b|\bnamespace\b.*\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
+    (re.compile(r'\bvml\b.*\bfallback\b|\bfallback\b.*\bvml\b', re.IGNORECASE), 'vml-requires-html-fallback'),
+    (re.compile(r'\brow[\s-]*collapse\b|\bzero[\s-]*height\b', re.IGNORECASE), 'global-row-collapse-danger'),
+    (re.compile(r'\bspacer\b', re.IGNORECASE), 'spacer-row-safe-scoping'),
+    (re.compile(r'\bfont\s*fallback\b', re.IGNORECASE), 'outlook-font-fallback-mso-only'),
+    (re.compile(r'\bconditional\s*comment\b|mso\s*condition', re.IGNORECASE), 'conditional-comment-scope'),
+    (re.compile(r'\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
+)
+
+_EXPLAIN_CLARIFY_REPLY = (
+    'I can explain: the Word rendering engine vs New Outlook, the 96-DPI Office setting, AllowPNG, '
+    'the VML namespace, why VML needs an HTML fallback, why a global row-collapse rule is risky, safe '
+    'spacer-row scoping, Outlook font fallback, and MSO conditional-comment scope. Which one?'
+)
+
+
+def _find_explain_rule(lowered):
+    """First pattern match wins — order in _EXPLAIN_TOPICS matters (see
+    that constant's docstring)."""
+    for pattern, rule_id in _EXPLAIN_TOPICS:
+        if pattern.search(lowered):
+            return find_rule(rule_id)
+    return None
+
 
 def _find_module_type(lowered):
     for word, module_type in MODULE_TYPE_ALIASES.items():
@@ -543,6 +583,18 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
         lowered = text.lower()
         selected = (context or {}).get('selected_module')
         selected_type = selected.get('type') if isinstance(selected, dict) else None
+
+        # Sub-phase 3, item 13 — the read-only "explain X" knowledge
+        # lookup, checked before every mutating pattern (see
+        # _EXPLAIN_PATTERN's docstring above).
+        if _EXPLAIN_PATTERN.search(lowered):
+            rule = _find_explain_rule(lowered)
+            if rule is not None:
+                return CommandResult(
+                    reply=f'{rule.title}. {rule.description}',
+                    action={'type': ActionType.NONE}, confidence=1.0,
+                )
+            return CommandResult(reply=_EXPLAIN_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
 
         # Document-level CSS commands — checked BEFORE the generic
         # insert/delete/global-style patterns below, since phrases like

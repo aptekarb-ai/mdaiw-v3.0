@@ -345,6 +345,43 @@ export function renderModuleWithOuterStructure(module: EmailModule): string {
   });
 }
 
+// --- Sub-phase 3, items 7/8 — deterministic module HTML comments -------
+//
+// The ONE place that owns the `<!--===== MODULE-... =====-->` comment
+// syntax — htmlRenderer.ts (top-level modules) and catalog/
+// layoutCatalog.tsx (nested modules, one column-level deep — the only
+// nesting depth this architecture supports, see layoutModel.test.ts's
+// "layouts cannot nest inside a layout column" coverage) both call this
+// rather than hand-formatting the comment independently. Numbers are
+// always computed fresh at render time from the CURRENT sorted render
+// order — never read from persisted module data, so duplicating/
+// deleting/reordering modules always renumbers correctly with zero
+// stale-metadata risk (there is no metadata to go stale).
+export function wrapModuleComment(html: string, numberAndLabel: string): string {
+  return (
+    `<!--===== MODULE-${numberAndLabel} - START =====-->\n`
+    + `${html}\n`
+    + `<!--===== MODULE-${numberAndLabel} - ENDS =====-->\n`
+  );
+}
+
+// A nested module (rendered inside catalog/layoutCatalog.tsx, which has
+// no way to know its OWN parent layout's top-level render-order number)
+// is wrapped with this literal placeholder in place of the parent
+// number; htmlRenderer.ts resolves it to the real number once it knows
+// which top-level slot the layout itself occupies — see
+// resolveNestedModuleParentPlaceholder below. Safe as a plain string
+// search/replace: every module's text content is HTML-escaped before it
+// ever reaches this string (escapeHtml turns `<` into `&lt;`), so the
+// literal, UNescaped sequence "MODULE-__PARENT__." can only ever have
+// been produced by this exact code path — never by user-entered module
+// content — making a global replace collision-proof.
+export const NESTED_MODULE_PARENT_PLACEHOLDER = '__PARENT__';
+
+export function resolveNestedModuleParentPlaceholder(html: string, parentNumber: string): string {
+  return html.split(`MODULE-${NESTED_MODULE_PARENT_PLACEHOLDER}.`).join(`MODULE-${parentNumber}.`);
+}
+
 // Builder-canvas-only: shown whenever no image URL is set yet, or the
 // given URL fails to load — a polished placeholder instead of the
 // browser's native broken-image icon. Never affects the exported email

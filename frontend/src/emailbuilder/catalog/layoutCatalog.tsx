@@ -2,7 +2,8 @@ import type { EmailModuleType, LayoutModuleProps } from '../edm';
 import { ZERO_SPACING, resolveColumnGutter, resolveSpacing } from '../edm';
 import { widthCssValue } from '../dimensions';
 import {
-  GENERIC_ONLY, createResponsiveSettings, moduleTable, paddingStyle, renderModuleWithOuterStructure,
+  GENERIC_ONLY, NESTED_MODULE_PARENT_PLACEHOLDER, createResponsiveSettings, moduleTable, paddingStyle,
+  renderModuleWithOuterStructure, resolveModuleDefinition, wrapModuleComment,
   type ModuleDefinition,
 } from '../registryCore';
 import { columnResponsiveClassName, gutterResponsiveClassName } from '../responsiveStyles';
@@ -72,6 +73,15 @@ function layoutDefinition(
       const mobileGutterPx = mobileGutterDimension.unit === 'px' ? Math.round(mobileGutterDimension.value) : 0;
       const gutterActive = gutterPx > 0 || mobileGutterPx > 0;
 
+      // Sub-phase 3, item 8 — a single counter running across ALL
+      // columns (not reset per column), so every nested module gets a
+      // genuinely unique MODULE-__PARENT__.N comment regardless of which
+      // column it lives in — column 2's first module is .3, not another
+      // .1, if column 1 already has two. htmlRenderer.ts resolves
+      // __PARENT__ to the layout's own top-level number once rendering
+      // reaches it (layoutCatalog.tsx has no way to know that number
+      // itself — see registryCore.tsx's resolveNestedModuleParentPlaceholder).
+      let nestedModuleIndex = 0;
       const cells = columns.map((column, index) => {
         const width = module.props.columnWidths[index] ?? 0;
         const spacing = resolveSpacing(column.settings, 'desktop');
@@ -79,7 +89,13 @@ function layoutDefinition(
         const background = column.settings.backgroundColor ? `background-color:${column.settings.backgroundColor};` : '';
         const innerHtml = column.modules.length === 0
           ? '&nbsp;'
-          : column.modules.map((nested) => renderModuleWithOuterStructure(nested)).join('');
+          : column.modules.map((nested) => {
+            nestedModuleIndex += 1;
+            const nestedDefinition = resolveModuleDefinition(nested.type);
+            const nestedLabel = `${NESTED_MODULE_PARENT_PLACEHOLDER}.${nestedModuleIndex}: `
+              + (nestedDefinition?.label ?? nested.type).toUpperCase();
+            return wrapModuleComment(renderModuleWithOuterStructure(nested), nestedLabel);
+          }).join('');
         // class is appended AFTER width/valign (never before) so the
         // existing `<td width="N%" valign="...` literal-prefix tests
         // stay byte-identical whether or not Feature 07 needs a class here.

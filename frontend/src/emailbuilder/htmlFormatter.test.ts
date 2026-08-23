@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { formatEmailHtml } from './htmlFormatter';
 import { renderEmailDocument } from './htmlRenderer';
 import { renderResetCssBlock, renderCustomCssBlock } from './emailCss';
+import { createModule } from './moduleFactory';
+import { getModuleDefinition } from './moduleRegistry';
 
 describe('formatEmailHtml', () => {
   it('indents nested elements one level per depth', () => {
@@ -162,5 +164,94 @@ describe('formatEmailHtml', () => {
     // And the underlying raw string itself is never mutated by formatting.
     expect(rawHtml).toContain(renderResetCssBlock().trim());
     expect(rawHtml).toContain(renderCustomCssBlock('.brand{color:#002D38}').trim());
+  });
+});
+
+// Email Document Standards Sub-phase 3, item 11 — the formatter must
+// treat MSO/VML/Office XML conditional-comment content as opaque, never
+// re-indenting, corrupting, removing, or reinterpreting the nested XML
+// as ordinary DOM structure.
+describe('formatEmailHtml — MSO/VML/Office conditional comment round-trip (Sub-phase 3, item 11)', () => {
+  it('preserves a real generated OfficeDocumentSettings block byte-for-byte (single opaque unit)', () => {
+    const html = renderEmailDocument({ width: 700, content: { version: 1, modules: [] } });
+    const formatted = formatEmailHtml(html);
+    expect(formatted).toContain('<!--[if gte mso 9]>');
+    expect(formatted).toContain('<o:OfficeDocumentSettings>');
+    expect(formatted).toContain('<o:AllowPNG/>');
+    expect(formatted).toContain('<o:PixelsPerInch>96</o:PixelsPerInch>');
+    expect(formatted).toContain('</o:OfficeDocumentSettings>');
+    expect(formatted).toContain('<![endif]-->');
+    // Exactly one occurrence — not duplicated, not split into fragments.
+    expect((formatted.match(/<o:OfficeDocumentSettings>/g) ?? []).length).toBe(1);
+  });
+
+  it('round-trips [if gte mso 9] without corrupting the nested <xml> tag', () => {
+    const input = '<!--[if gte mso 9]><xml><o:OfficeDocumentSettings><o:AllowPNG/></o:OfficeDocumentSettings></xml><![endif]-->';
+    const output = formatEmailHtml(input);
+    const lines = output.split('\n').map((line) => line.trim());
+    expect(lines).toContain(input);
+  });
+
+  it('round-trips [if gte mso 15] (a conditional this app does not currently emit, but must still format safely)', () => {
+    const input = '<div><!--[if gte mso 15]><table><tr><td>legacy fallback</td></tr></table><![endif]--></div>';
+    const output = formatEmailHtml(input);
+    expect(output).toContain('<!--[if gte mso 15]><table><tr><td>legacy fallback</td></tr></table><![endif]-->');
+    // The real <div> around it is still tag-split/indented normally —
+    // only the MSO comment's OWN contents are opaque.
+    expect(output.split('\n')[0]).toBe('<div>');
+  });
+
+  it('round-trips VML namespace markup (xmlns:v/xmlns:o on <html>) without reinterpreting the colonized attribute names', () => {
+    const html = renderEmailDocument({ width: 700, content: { version: 1, modules: [] } });
+    const formatted = formatEmailHtml(html);
+    expect(formatted).toContain(
+      '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">',
+    );
+  });
+
+  it('does not duplicate, move, or drop the Outlook spacer-row <style> block when a Spacer module is present', () => {
+    const spacer = createModule('spacer', 0);
+    const html = renderEmailDocument({ width: 700, content: { version: 1, modules: [spacer] } });
+    const formatted = formatEmailHtml(html);
+    expect((formatted.match(/mso-spacer/g) ?? []).length).toBeGreaterThan(0);
+    expect((formatted.match(/<!--\[if mso\]>\n\s*<style type="text\/css">\n\s*\.mso-spacer/g) ?? []).length)
+      .toBeLessThanOrEqual(1);
+    const headStart = formatted.indexOf('<head>');
+    const headEnd = formatted.indexOf('</head>');
+    expect(formatted.indexOf('.mso-spacer')).toBeGreaterThan(headStart);
+    expect(formatted.indexOf('.mso-spacer')).toBeLessThan(headEnd);
+  });
+
+  it('does not corrupt module HTML comments — each MODULE-N comment stays a single opaque line', () => {
+    const text = createModule('text', 0);
+    const html = renderEmailDocument({ width: 700, content: { version: 1, modules: [text] } });
+    const formatted = formatEmailHtml(html);
+    const lines = formatted.split('\n').map((line) => line.trim());
+    const label = getModuleDefinition('text').label.toUpperCase();
+    expect(lines).toContain(`<!--===== MODULE-1: ${label} - START =====-->`);
+    expect(lines).toContain(`<!--===== MODULE-1: ${label} - ENDS =====-->`);
+  });
+
+  it('nested module comments (MODULE-N.1) also stay single opaque lines after formatting', () => {
+    const layout = createModule('layout-1col', 0);
+    const nested = createModule('button', 0);
+    layout.columns![0].modules.push(nested);
+    const html = renderEmailDocument({ width: 700, content: { version: 1, modules: [layout] } });
+    const formatted = formatEmailHtml(html);
+    const lines = formatted.split('\n').map((line) => line.trim());
+    const label = getModuleDefinition('button').label.toUpperCase();
+    expect(lines).toContain(`<!--===== MODULE-1.1: ${label} - START =====-->`);
+  });
+
+  it('Raw -> Formatted -> Raw is lossless for a document with Outlook blocks + module comments', () => {
+    const spacer = createModule('spacer', 0);
+    const text = createModule('text', 1);
+    const rawHtml = renderEmailDocument({ width: 700, content: { version: 1, modules: [spacer, text] } });
+    const formatted = formatEmailHtml(rawHtml);
+    expect(formatEmailHtml(rawHtml)).toBe(formatted);
+    expect(rawHtml).toContain('<o:OfficeDocumentSettings>');
+    expect(rawHtml).toContain('mso-spacer');
+    expect(rawHtml).toContain('MODULE-1:');
+    expect(rawHtml).toContain('MODULE-2:');
   });
 });
