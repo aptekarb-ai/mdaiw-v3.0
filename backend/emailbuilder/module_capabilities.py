@@ -112,6 +112,40 @@ def get_editable_field(module_type, field_key):
     return None
 
 
+def get_repeatable_field(module_type):
+    """The {path, label, itemSchema, minItems, maxItems} dict for one
+    module type's repeatable field, or None if it has none. Sub-phase 6,
+    work package E — ai_command.py's UPDATE_REPEATABLE_FIELD reads this
+    (never a second, hand-maintained repeatable-field list) to know which
+    module types support item-level editing and what each item's fields
+    are."""
+    capability = get_module_capability(module_type)
+    if not capability:
+        return None
+    return capability.get('repeatableField')
+
+
+def supports_bulletproof_cta(module_type):
+    """True when this module type renders a genuine clickable CTA/button
+    eligible for the shared VML bulletproof-button pairing — read
+    directly off the manifest entry's own `supportsBulletproofCta` flag
+    (see frontend moduleCapabilities.ts), never a hardcoded module-type
+    list here."""
+    capability = get_module_capability(module_type)
+    if not capability:
+        return False
+    return bool(capability.get('supportsBulletproofCta'))
+
+
+def supports_bulletproof_background(module_type):
+    """True only for the module type(s) that also have a real VML
+    background-image ghost-table fallback."""
+    capability = get_module_capability(module_type)
+    if not capability:
+        return False
+    return bool(capability.get('supportsBulletproofBackground'))
+
+
 def manifest_version():
     return _load()['version']
 

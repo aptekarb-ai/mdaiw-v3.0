@@ -10,6 +10,7 @@ import {
   GENERIC_ONLY, ImagePreview, cell, createResponsiveSettings, moduleTable, moduleTableRow, paddingStyle,
   textLine, type AnyModuleDefinition, type ModuleDefinition,
 } from '../registryCore';
+import { canRenderVmlButton, renderVmlButton } from '../vml';
 
 const textDefinition: ModuleDefinition<TextModuleProps> = {
   type: 'text',
@@ -158,6 +159,7 @@ const buttonDefinition: ModuleDefinition<ButtonModuleProps> = {
   imagePosition: null,
   platformCompatibility: GENERIC_ONLY,
   propertyEditor: 'button',
+  supportsBulletproofCta: true,
   editableFields: [
     { key: 'text', label: 'Button text', kind: 'text', valueType: 'text', group: 'content' },
     { key: 'href', label: 'Link URL', kind: 'url', valueType: 'url', group: 'content' },
@@ -234,7 +236,31 @@ const buttonDefinition: ModuleDefinition<ButtonModuleProps> = {
       ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td width="100%" bgcolor="${props.backgroundColor}" style="${tdStyle}">${link}</td></tr></table>`
       : `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td bgcolor="${props.backgroundColor}" style="${tdStyle}">${link}</td></tr></table>`;
     const style = `${paddingStyle(resolveSpacing(settings, 'desktop'))} text-align:${props.align};`;
-    return moduleTableRow(cell(table, style));
+    const plainRow = moduleTableRow(cell(table, style));
+
+    // Sub-phase 6, work package A — VML bulletproof-button pairing. Only
+    // applies when the module opted in (settings.outlookVml) AND the
+    // width mode is one VML can render reliably (see
+    // vml.ts::canRenderVmlButton) — 'full' width silently keeps the
+    // existing plain-only output rather than shipping an untested VML
+    // pattern.
+    if (settings.outlookVml && canRenderVmlButton({ widthMode })) {
+      const vmlHtml = renderVmlButton({
+        href: props.href,
+        text: props.text,
+        backgroundColor: props.backgroundColor,
+        textColor: props.textColor,
+        fontSize: props.fontSize,
+        borderRadius: props.borderRadius,
+        widthMode,
+        fixedWidth: props.fixedWidth,
+        paddingHorizontal: paddingH,
+        paddingVertical: paddingV,
+      }, table);
+      return moduleTableRow(cell(vmlHtml, style));
+    }
+
+    return plainRow;
   },
 };
 
@@ -343,6 +369,11 @@ function compositeDefinition(
     imagePosition: imageFirst ? 'left' : 'right',
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'composite',
+    // Sub-phase 6 closure — the CTA is optional content (only rendered
+    // when props.text.ctaText is set), but when present it IS a real
+    // filled button (see renderEmailHtml below) — same capability posture
+    // as every other conditionally-rendered CTA in this registry.
+    supportsBulletproofCta: true,
     editableFields: [
       { key: 'image.src', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
       { key: 'image.alt', label: 'Image alt text', kind: 'text', valueType: 'text', group: 'content' },
@@ -423,9 +454,26 @@ function compositeDefinition(
         + `width="${widthAttr(resolvedWidth)}" style="display:block; width:100%; max-width:${widthCssValue(resolvedWidth)}; height:auto; border:0;" />`,
         'width:40%; vertical-align:top;',
       );
-      const ctaHtml = props.text.ctaText
+      const plainCtaHtml = props.text.ctaText
         ? `<a href="${escapeAttribute(sanitizeUrl(props.text.ctaHref))}" style="display:inline-block; padding:8px 16px; background-color:#0082AD; color:#FFFFFF; font-family:Arial,Helvetica,sans-serif; font-size:12px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(props.text.ctaText)}</a>`
         : '';
+      // Sub-phase 6 closure — same VML bulletproof-button pairing as the
+      // standalone Button module (vml.ts::canRenderVmlButton/renderVmlButton),
+      // gated on settings.outlookVml. This CTA has no width-mode concept
+      // (always content-width), so canRenderVmlButton's 'full' decline
+      // never applies here.
+      const ctaHtml = (props.text.ctaText && settings.outlookVml)
+        ? renderVmlButton({
+          href: props.text.ctaHref ?? '',
+          text: props.text.ctaText,
+          backgroundColor: '#0082AD',
+          textColor: '#FFFFFF',
+          fontSize: 12,
+          borderRadius: 6,
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+        }, plainCtaHtml)
+        : plainCtaHtml;
       const textCell = cell(
         textLine(
           escapeHtml(props.text.text).replace(/\n/g, '<br>'),

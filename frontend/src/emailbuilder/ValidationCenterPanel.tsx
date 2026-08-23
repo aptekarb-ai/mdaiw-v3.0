@@ -17,6 +17,10 @@ interface ValidationCenterPanelProps {
   customCss?: string;
   onNavigateToModule: (moduleId: string) => void;
   onApplySafeFix: (moduleId: string, propPatch: Record<string, unknown>) => void;
+  // Sub-phase 6 — module SETTINGS-scope safe fixes (e.g. enabling the VML
+  // fallback) apply through the SAME updateModuleSettings path a manual
+  // Properties-panel edit already uses — never a new mutation pathway.
+  onApplySettingsFix: (moduleId: string, settingsPatch: Record<string, unknown>) => void;
   // Sub-phase 4, item 1/4 — document-scope safe fixes (e.g. re-enable
   // Reset CSS, clear an invalid favicon) apply through the SAME
   // builder.updateDocumentSettings path DocumentSettingsDialog and the AI
@@ -58,7 +62,7 @@ const STATUS_LABEL: Record<'good' | 'needs-improvement' | 'needs-attention', str
 // real, reproducible check.
 export function ValidationCenterPanel({
   width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
-  onNavigateToModule, onApplySafeFix, onApplyDocumentFix,
+  onNavigateToModule, onApplySafeFix, onApplySettingsFix, onApplyDocumentFix,
 }: ValidationCenterPanelProps) {
   const [applyingFixId, setApplyingFixId] = useState<string | null>(null);
   const [applyingAll, setApplyingAll] = useState(false);
@@ -107,6 +111,8 @@ export function ValidationCenterPanel({
   function applySafeFix(safeFix: NonNullable<ValidationIssue['safeFix']>) {
     if ('documentPatch' in safeFix) {
       onApplyDocumentFix(safeFix.documentPatch);
+    } else if ('settingsPatch' in safeFix) {
+      onApplySettingsFix(safeFix.moduleId, safeFix.settingsPatch);
     } else {
       onApplySafeFix(safeFix.moduleId, safeFix.propPatch);
     }

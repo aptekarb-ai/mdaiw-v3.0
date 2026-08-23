@@ -9,6 +9,7 @@ import {
   GENERIC_ONLY, ImagePreview, cell, createResponsiveSettings, moduleTableRow, textLine, type AnyModuleDefinition,
   type ModuleDefinition, type ModuleImagePosition, type RepeatableFieldConfig, type SchemaField,
 } from '../registryCore';
+import { renderVmlButton } from '../vml';
 
 // --- Heading + Text (+ optional image, + optional CTA) -----------------
 
@@ -70,6 +71,10 @@ function contentBlockDefinition(variant: ContentVariant): ModuleDefinition<Conte
     imagePosition,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 closure — only the withCta variants render a real
+    // filled button (see renderEmailHtml's ctaHtml below); the plain
+    // Heading + Text variant has no CTA at all.
+    ...(variant.withCta ? { supportsBulletproofCta: true } : {}),
     editableFields: contentEditableFields(withImage, variant.withCta),
     createDefaultProps: () => ({
       heading: 'A short, clear heading',
@@ -123,9 +128,23 @@ function contentBlockDefinition(variant: ContentVariant): ModuleDefinition<Conte
         `text-align:${props.align}; font-family:Arial,Helvetica,sans-serif; font-size:15px; color:#333333;`,
         variant.withCta ? 16 : 0,
       );
-      const ctaHtml = variant.withCta
+      const plainCtaHtml = variant.withCta
         ? `<a href="${escapeAttribute(sanitizeUrl(props.ctaHref))}" style="display:inline-block; padding:10px 18px; background-color:#0082AD; color:#FFFFFF; font-family:Arial,Helvetica,sans-serif; font-size:13px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(props.ctaText)}</a>`
         : '';
+      // Sub-phase 6 closure — same shared VML bulletproof-button pairing
+      // as every other CTA-rendering module here, gated on settings.outlookVml.
+      const ctaHtml = (variant.withCta && settings.outlookVml)
+        ? renderVmlButton({
+          href: props.ctaHref,
+          text: props.ctaText,
+          backgroundColor: '#0082AD',
+          textColor: '#FFFFFF',
+          fontSize: 13,
+          borderRadius: 6,
+          paddingHorizontal: 18,
+          paddingVertical: 10,
+        }, plainCtaHtml)
+        : plainCtaHtml;
       const textCellHtml = `${headingHtml}${textHtml}${ctaHtml}`;
 
       if (variant.layout === 'none') {
@@ -350,6 +369,10 @@ const iconTextRowsField: RepeatableFieldConfig<IconTextRow> = {
   createItem: () => ({ title: 'New row', text: '' }),
   maxItems: MAX_ICON_TEXT_ROWS,
   addLabel: 'Add row',
+  itemSchema: [
+    { key: 'title', label: 'Title', kind: 'text', valueType: 'text', group: 'content' },
+    { key: 'text', label: 'Text', kind: 'text', valueType: 'text', group: 'content' },
+  ],
   renderItemFields: (item, update) => (
     <>
       <label className="properties-panel__field">

@@ -698,5 +698,41 @@ describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phas
       expect((result.current.modules[0].props as unknown as TextModuleProps).color).not.toBe('#ff0000');
       expect((result.current.modules[1].props as unknown as TextModuleProps).color).not.toBe('#00ff00');
     });
+
+    it('Sub-phase 6: applies a module SETTINGS patch (e.g. enabling VML) via the 4th argument, in the same commit as prop/document patches', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('button'));
+      const moduleId = result.current.modules[0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [{ moduleId, propPatch: { text: 'Buy Now' } }],
+        { reset_css_enabled: false },
+        [{ moduleId, settingsPatch: { outlookVml: true } }],
+      ));
+
+      expect(result.current.modules[0].settings.outlookVml).toBe(true);
+      expect((result.current.modules[0].props as unknown as { text: string }).text).toBe('Buy Now');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(false);
+
+      act(() => result.current.undo());
+      // One undo reverts all three (prop, settings, document) — proves a
+      // single history commit, same posture as the module+document case above.
+      expect(result.current.modules[0].settings.outlookVml).toBeUndefined();
+      expect((result.current.modules[0].props as unknown as { text: string }).text).not.toBe('Buy Now');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(true);
+    });
+
+    it('Sub-phase 6: applies a settings patch to a module nested inside a layout column', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      const columnId = result.current.modules[0].columns![0].id;
+      act(() => result.current.insertNestedModule(layoutId, columnId, 'button'));
+      const nestedId = result.current.modules[0].columns![0].modules[0].id;
+
+      act(() => result.current.applyRepairPatch([], null, [{ moduleId: nestedId, settingsPatch: { outlookVml: true } }]));
+
+      expect(result.current.modules[0].columns![0].modules[0].settings.outlookVml).toBe(true);
+    });
   });
 });

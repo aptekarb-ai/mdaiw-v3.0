@@ -2088,4 +2088,310 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
       selected_module: expect.objectContaining({ type: 'text' }),
     })));
   });
+
+  // --- Sub-phase 6, work package D/E — the six reserved ActionTypes plus
+  // UPDATE_REPEATABLE_FIELD, each proven end-to-end: proposal shown ->
+  // Apply -> real, visible effect through an EXISTING mutator, never a
+  // parallel mutation path.
+
+  it('APPLY_VML_PATTERN enables the button VML fallback, visible in Code view', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will enable the Classic Outlook VML fallback for the selected button.',
+      action: { type: 'APPLY_VML_PATTERN', target: 'selected', module_type: 'button' },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'enable outlook vml for this button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Enable the Classic Outlook VML fallback/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('v:roundrect');
+    expect(textarea.value).toContain('<!--[if !mso]><!-->');
+  });
+
+  it('APPLY_OUTLOOK_WRAPPER enables the background-image VML fallback, visible in Code view', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Hero');
+    await user.click(await screen.findByRole('button', { name: 'Add Background Image Hero' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will enable the Classic Outlook VML background fallback.',
+      action: { type: 'APPLY_OUTLOOK_WRAPPER', target: 'selected', module_type: 'hero-background-image' },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'enable outlook wrapper for this background');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Enable the Classic Outlook VML background fallback/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('<v:rect');
+    expect(textarea.value).toContain('<v:fill type="tile"');
+  });
+
+  it('RESTRUCTURE_LAYOUT changes the selected layout module\'s column widths', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'This will change the column widths to 70% / 30%. Please confirm.',
+      action: { type: 'RESTRUCTURE_LAYOUT', target: 'selected', module_type: 'layout-2col-50-50', widths: [70, 30] },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'change the column widths to 70/30');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Change the selected layout's column widths/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('width="70%"');
+    expect(textarea.value).toContain('width="30%"');
+  });
+
+  it('INSERT_NESTED_MODULE inserts a module into the selected column', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(await screen.findByRole('button', { name: 'Column 1, empty' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will insert a text module into the selected column.',
+      action: {
+        type: 'INSERT_NESTED_MODULE', target: 'selected_column', module_type: 'text',
+        patch: { text: 'Nested Hello' },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'add a text module here saying Nested Hello');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Insert a text module into the selected column');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getAllByText('Nested Hello').length).toBeGreaterThan(0);
+  });
+
+  it('INSERT_NESTED_MODULE declines silently when no column is selected', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    // Deselect the layout (and its column) by adding a top-level text
+    // module, which becomes the new selection.
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will insert a text module into the selected column.',
+      action: { type: 'INSERT_NESTED_MODULE', target: 'selected_column', module_type: 'text', patch: {} },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'add a text module here');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Insert a text module into the selected column');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    // No crash, and no phantom module inserted anywhere.
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.queryByText('Nested Hello')).not.toBeInTheDocument();
+  });
+
+  it('REPLACE_UNSUPPORTED_PROPERTY updates the selected module through the SAME path as UPDATE_MODULE_PROPS', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will replace the unsupported width mode on the selected button.',
+      action: {
+        type: 'REPLACE_UNSUPPORTED_PROPERTY', target: 'selected', module_type: 'button',
+        patch: { text: 'Buy Now Instead' },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'replace the unsupported property');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Replace an unsupported property/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getByText('Buy Now Instead')).toBeInTheDocument();
+  });
+
+  it('UPDATE_REPEATABLE_FIELD adds a nav link item to the selected header module', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Header');
+    await user.click(await screen.findByRole('button', { name: 'Add Logo + Navigation' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will add a Pricing link to the navigation.',
+      action: {
+        type: 'UPDATE_REPEATABLE_FIELD', target: 'selected', module_type: 'header-logo-nav', op: 'add',
+        item: { label: 'Pricing', href: 'https://example.com/pricing' },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'add a pricing nav link');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText("Add an item to the selected header-logo-nav module's list");
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getByRole('button', { name: 'Pricing' })).toBeInTheDocument();
+  });
+
+  it('UPDATE_REPEATABLE_FIELD remove requires confirmation and removes the item on Apply', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Header');
+    await user.click(await screen.findByRole('button', { name: 'Add Logo + Navigation' }));
+    expect(screen.getByRole('button', { name: /^Shop/ })).toBeInTheDocument();
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'This will remove a navigation link. Please confirm.',
+      action: { type: 'UPDATE_REPEATABLE_FIELD', target: 'selected', module_type: 'header-logo-nav', op: 'remove', index: 0 },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      confidence: 0.9,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'remove the first nav link');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText("Remove item 1 from the selected header-logo-nav module's list");
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.queryByRole('button', { name: /^Shop/ })).not.toBeInTheDocument();
+  });
+
+  // --- Sub-phase 6 closure -- repeatable-field UPDATE/REORDER via NL ---
+
+  it('UPDATE_REPEATABLE_FIELD (op update) changes a nav link label through the AI Engineer', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Header');
+    await user.click(await screen.findByRole('button', { name: 'Add Logo + Navigation' }));
+    expect(screen.getByRole('button', { name: /^Shop/ })).toBeInTheDocument();
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'This will change item 1\'s Label to "Services". Please confirm.',
+      action: {
+        type: 'UPDATE_REPEATABLE_FIELD', target: 'selected', module_type: 'header-logo-nav', op: 'update',
+        index: 0, item: { label: 'Services' },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'change the first nav link label to Services');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText("Update item 1 of the selected header-logo-nav module's list");
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    expect(screen.getByRole('button', { name: 'Services' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Shop/ })).not.toBeInTheDocument();
+  });
+
+  it('UPDATE_REPEATABLE_FIELD (op reorder) moves a nav link through the AI Engineer', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Header');
+    await user.click(await screen.findByRole('button', { name: 'Add Logo + Navigation' }));
+    const before = screen.getAllByRole('button', { name: /^Shop|^About|^Contact/ }).map((el) => el.textContent);
+    expect(before).toEqual(['Shop', 'About', 'Contact']);
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'This will move item 1 to position 3. Please confirm.',
+      action: {
+        type: 'UPDATE_REPEATABLE_FIELD', target: 'selected', module_type: 'header-logo-nav', op: 'reorder',
+        fromIndex: 0, toIndex: 2,
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'move the first nav link to position 3');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText("Reorder items in the selected header-logo-nav module's list");
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    const after = screen.getAllByRole('button', { name: /^Shop|^About|^Contact/ }).map((el) => el.textContent);
+    expect(after).toEqual(['About', 'Contact', 'Shop']);
+  });
 });

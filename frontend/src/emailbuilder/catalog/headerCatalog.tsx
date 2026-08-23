@@ -6,6 +6,7 @@ import {
   GENERIC_ONLY, ImagePreview, createResponsiveSettings, type ModuleDefinition, type RepeatableFieldConfig,
   type SchemaField,
 } from '../registryCore';
+import { renderVmlButton } from '../vml';
 
 const MAX_NAV_LINKS = 6;
 
@@ -17,6 +18,10 @@ const navLinksField: RepeatableFieldConfig<NavLink> = {
   createItem: () => ({ label: 'New Link', href: '' }),
   maxItems: MAX_NAV_LINKS,
   addLabel: 'Add nav link',
+  itemSchema: [
+    { key: 'label', label: 'Label', kind: 'text', valueType: 'text', group: 'content' },
+    { key: 'href', label: 'URL', kind: 'url', valueType: 'url', group: 'content' },
+  ],
   renderItemFields: (item, update) => (
     <>
       <label className="properties-panel__field">
@@ -115,6 +120,11 @@ function headerDefinition(variant: HeaderVariant): ModuleDefinition<HeaderModule
     imagePosition: null,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 closure — only header-logo-cta renders a real filled
+    // button; header-logo-nav's navLinks are plain text nav links (no
+    // background fill — see renderEmailHtml's navCells below), so they
+    // correctly do NOT get this capability.
+    ...(variant.showCta ? { supportsBulletproofCta: true } : {}),
     editableFields: editableFields(variant),
     repeatableField: variant.showNav ? navLinksField : undefined,
     createDefaultProps: () => ({
@@ -184,7 +194,21 @@ function headerDefinition(variant: HeaderVariant): ModuleDefinition<HeaderModule
           .join('');
         mainRow = `<tr><td align="left" valign="middle">${logo}</td><td align="right" valign="middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>${navCells}</tr></table></td></tr>`;
       } else if (variant.showCta) {
-        const button = `<a href="${escapeAttribute(sanitizeUrl(props.ctaHref))}" style="display:inline-block; padding:10px 18px; background-color:#0082AD; color:#FFFFFF; font-family:Arial,Helvetica,sans-serif; font-size:13px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(props.ctaText)}</a>`;
+        const plainButton = `<a href="${escapeAttribute(sanitizeUrl(props.ctaHref))}" style="display:inline-block; padding:10px 18px; background-color:#0082AD; color:#FFFFFF; font-family:Arial,Helvetica,sans-serif; font-size:13px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(props.ctaText)}</a>`;
+        // Sub-phase 6 closure — same shared VML bulletproof-button
+        // pairing as every other CTA-rendering module here.
+        const button = settings.outlookVml
+          ? renderVmlButton({
+            href: props.ctaHref,
+            text: props.ctaText,
+            backgroundColor: '#0082AD',
+            textColor: '#FFFFFF',
+            fontSize: 13,
+            borderRadius: 6,
+            paddingHorizontal: 18,
+            paddingVertical: 10,
+          }, plainButton)
+          : plainButton;
         mainRow = `<tr><td align="left" valign="middle">${logo}</td><td align="right" valign="middle">${button}</td></tr>`;
       } else {
         mainRow = `<tr><td align="${props.align}">${logo}</td></tr>`;

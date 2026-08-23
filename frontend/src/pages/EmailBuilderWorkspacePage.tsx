@@ -190,11 +190,17 @@ export function EmailBuilderWorkspacePage() {
     const modulePatches = items
       .filter((item): item is Extract<RepairActionItem, { kind: 'module' }> => item.kind === 'module')
       .map((item) => ({ moduleId: item.moduleId, propPatch: item.propPatch }));
+    // Sub-phase 6 — module SETTINGS repairs (e.g. enabling the VML
+    // fallback) route through the same one-history-commit batch as prop
+    // and document repairs, never a separate Apply.
+    const settingsPatches = items
+      .filter((item): item is Extract<RepairActionItem, { kind: 'module-settings' }> => item.kind === 'module-settings')
+      .map((item) => ({ moduleId: item.moduleId, settingsPatch: item.settingsPatch }));
     const documentItems = items.filter((item): item is Extract<RepairActionItem, { kind: 'document' }> => item.kind === 'document');
     const documentPatch = documentItems.length > 0
       ? documentItems.reduce((acc, item) => ({ ...acc, ...item.documentPatch }), {} as Record<string, unknown>)
       : null;
-    builder.applyRepairPatch(modulePatches, documentPatch);
+    builder.applyRepairPatch(modulePatches, documentPatch, settingsPatches);
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
   }, []);
@@ -305,7 +311,14 @@ export function EmailBuilderWorkspacePage() {
   // the selection while the proposal card was showing, this safely
   // declines rather than silently mutating the wrong module.
   const handleApplyAiAction = useCallback((action: AICommandAction, capturedSelectedModuleId: string | null): boolean => {
-    const targetsCurrentSelection = action.type === 'UPDATE_MODULE_PROPS' || action.type === 'DELETE_MODULE' || action.type === 'DUPLICATE_MODULE';
+    // Sub-phase 6 — the same "selection must not have changed since the
+    // proposal was shown" safety gate UPDATE_MODULE_PROPS already uses,
+    // extended to every new target:'selected' action type.
+    const targetsCurrentSelection = action.type === 'UPDATE_MODULE_PROPS' || action.type === 'DELETE_MODULE'
+      || action.type === 'DUPLICATE_MODULE' || action.type === 'UPDATE_MODULE_SETTINGS'
+      || action.type === 'APPLY_VML_PATTERN' || action.type === 'APPLY_OUTLOOK_WRAPPER'
+      || action.type === 'RESTRUCTURE_LAYOUT' || action.type === 'REPLACE_UNSUPPORTED_PROPERTY'
+      || action.type === 'UPDATE_REPEATABLE_FIELD';
     if (targetsCurrentSelection && builder.selectedModuleId !== capturedSelectedModuleId) {
       return false;
     }
@@ -347,12 +360,97 @@ export function EmailBuilderWorkspacePage() {
         builder.applyGlobalStyle(action.module_type, action.patch);
         return true;
       }
+      // Sub-phase 6, work package D — the six previously-reserved action
+      // types. Every case below routes through an EXISTING mutator
+      // (handleUpdateSettings/insertNestedModuleWithProps/
+      // updateColumnWidths/handleUpdateProps) — never a new mutation path.
+      case 'UPDATE_MODULE_SETTINGS': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        handleUpdateSettings(builder.selectedModuleId, action.patch);
+        return true;
+      }
+      case 'APPLY_VML_PATTERN':
+      case 'APPLY_OUTLOOK_WRAPPER': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        handleUpdateSettings(builder.selectedModuleId, { outlookVml: true });
+        return true;
+      }
+      case 'RESTRUCTURE_LAYOUT': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        const columnWidths = builder.selectedModule.columns;
+        if (!columnWidths || columnWidths.length !== action.widths.length) {
+          return false;
+        }
+        builder.updateColumnWidths(builder.selectedModuleId, action.widths);
+        return true;
+      }
+      case 'INSERT_NESTED_MODULE': {
+        if (!builder.selectedColumn) return false;
+        // Defense-in-depth mirror of ai_command.py's own one-level-nesting
+        // gate — never nest a layout module inside a layout column.
+        if (isLayoutModuleType(action.module_type)) return false;
+        builder.insertNestedModuleWithProps(
+          builder.selectedColumn.layoutId, builder.selectedColumn.columnId, action.module_type, action.patch,
+        );
+        return true;
+      }
+      case 'REPLACE_UNSUPPORTED_PROPERTY': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        handleUpdateProps(builder.selectedModuleId, action.patch);
+        return true;
+      }
+      case 'UPDATE_REPEATABLE_FIELD': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        const definition = getModuleDefinition(action.module_type);
+        const repeatable = definition.repeatableField;
+        const path = repeatable?.path;
+        if (!repeatable || !path) return false;
+        const currentArray = (builder.selectedModule.props as Record<string, unknown>)[path];
+        if (!Array.isArray(currentArray)) return false;
+
+        let nextArray: unknown[];
+        if (action.op === 'add') {
+          if (!action.item) return false;
+          nextArray = [...currentArray, { ...repeatable.createItem(), ...action.item }];
+        } else if (action.op === 'update') {
+          if (action.index === undefined || action.index < 0 || action.index >= currentArray.length || !action.item) {
+            return false;
+          }
+          const patchedItem = action.item;
+          nextArray = currentArray.map((item, i) => (i === action.index ? { ...(item as object), ...patchedItem } : item));
+        } else if (action.op === 'remove') {
+          if (action.index === undefined || action.index < 0 || action.index >= currentArray.length) return false;
+          if (currentArray.length <= (repeatable.minItems ?? 0)) return false;
+          nextArray = currentArray.filter((_, i) => i !== action.index);
+        } else {
+          if (action.fromIndex === undefined || action.toIndex === undefined) return false;
+          if (action.fromIndex < 0 || action.fromIndex >= currentArray.length) return false;
+          nextArray = [...currentArray];
+          const [moved] = nextArray.splice(action.fromIndex, 1);
+          const clamped = Math.max(0, Math.min(action.toIndex, nextArray.length));
+          nextArray.splice(clamped, 0, moved);
+        }
+        if (nextArray.length > (repeatable.maxItems ?? 20)) return false;
+
+        handleUpdateProps(builder.selectedModuleId, { [path]: nextArray });
+        return true;
+      }
       case 'NONE':
       default:
         return false;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
-  }, [builder, handleUpdateProps]);
+  }, [builder, handleUpdateProps, handleUpdateSettings]);
 
   const handleAddModule = useCallback((type: EmailModuleType) => {
     if (activeColumn && !isLayoutModuleType(type)) {
@@ -494,6 +592,7 @@ export function EmailBuilderWorkspacePage() {
               builder.selectModule(moduleId);
             }}
             onApplySafeFix={handleUpdateProps}
+            onApplySettingsFix={handleUpdateSettings}
             onApplyDocumentFix={builder.updateDocumentSettings}
           />
         ) : editorMode === 'ai' ? (

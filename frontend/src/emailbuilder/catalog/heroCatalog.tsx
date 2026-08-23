@@ -6,6 +6,8 @@ import {
   GENERIC_ONLY, ImagePreview, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition,
   type ModuleImagePosition, type SchemaField,
 } from '../registryCore';
+import { renderVmlBackground, renderVmlButton } from '../vml';
+import { DEFAULT_EMAIL_WIDTH } from '../widthOptions';
 
 type HeroLayout = 'image-top' | 'background' | 'text-only' | 'image-left' | 'image-right' | 'centered';
 
@@ -83,6 +85,13 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
     imagePosition: variant.imagePosition,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 closure — every hero variant renders a real filled CTA
+    // button unconditionally (see renderEmailHtml's buttonHtml below).
+    supportsBulletproofCta: true,
+    // Background Image Hero also has its own separate VML ghost-table
+    // background pattern (already wired below); the two capabilities
+    // compose (button VML nests inside the background VML's v:textbox).
+    ...(variant.layout === 'background' ? { supportsBulletproofBackground: true } : {}),
     editableFields: editableFields(hasImage),
     createDefaultProps: () => ({
       headline: 'Introducing something great',
@@ -138,13 +147,31 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
       const { props, settings } = module;
       const headlineHtml = textLine(escapeHtml(props.headline), `font-family:Arial,Helvetica,sans-serif; font-size:28px; color:${props.textColor};`, 8);
       const subtextHtml = textLine(escapeHtml(props.subtext), `font-family:Arial,Helvetica,sans-serif; font-size:15px; color:${props.textColor}; opacity:0.85;`, 20);
-      const buttonHtml = (
+      const plainButtonHtml = (
         // align="center" (HTML attribute, not CSS margin) centers this
         // block-level table the Outlook-safe way.
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">'
         + `<tr><td style="border-radius:6px; background-color:#76C043;"><a href="${escapeAttribute(sanitizeUrl(props.ctaHref))}" target="_blank" rel="noopener noreferrer" style="display:inline-block; padding:12px 24px; font-family:Arial,Helvetica,sans-serif; font-size:14px; font-weight:bold; color:#002D38; text-decoration:none; border-radius:6px;">${escapeHtml(props.ctaText)}</a></td></tr>`
         + '</table>'
       );
+      // Sub-phase 6 closure — same shared VML bulletproof-button pairing
+      // as every other CTA-rendering module here. For the Background
+      // Image Hero this nests inside the module's own separate VML
+      // background wrapping below — the two are orthogonal and Outlook
+      // resolves nested [if mso] conditional comments regardless of the
+      // surrounding v:textbox.
+      const buttonHtml = settings.outlookVml
+        ? renderVmlButton({
+          href: props.ctaHref,
+          text: props.ctaText,
+          backgroundColor: '#76C043',
+          textColor: '#002D38',
+          fontSize: 14,
+          borderRadius: 6,
+          paddingHorizontal: 24,
+          paddingVertical: 12,
+        }, plainButtonHtml)
+        : plainButtonHtml;
       const imgHtml = `<img src="${escapeAttribute(sanitizeUrl(props.imageSrc))}" alt="${escapeAttribute(props.imageAlt)}" width="480" style="display:block; width:100%; max-width:480px; height:auto; border:0;" />`;
       const spacing = resolveSpacing(settings, 'desktop');
       const containerStyle = `padding:${spacing.paddingTop}px ${spacing.paddingRight}px ${spacing.paddingBottom}px ${spacing.paddingLeft}px; background-color:${props.backgroundColor};`;
@@ -161,16 +188,36 @@ function heroDefinition(variant: HeroVariant): ModuleDefinition<HeroModuleProps>
       if (variant.layout === 'background') {
         // Table-cell `background` attribute + inline background-image —
         // the email-safe "ghost table" technique, not a structural DIV.
-        // No VML fallback for Outlook Classic — a documented MVP
-        // limitation (see the master prompt's honesty requirements).
         const safeImageUrl = escapeAttribute(sanitizeUrl(props.imageSrc));
         const bgCellStyle = `${containerStyle} background-image:url('${safeImageUrl}'); background-size:cover; background-position:center; text-align:${props.align};`;
+        const innerContent = `${headlineHtml}${subtextHtml}${buttonHtml}`;
         const bgTable = (
           `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">`
           + `<tr><td align="${props.align}" background="${safeImageUrl}" style="${bgCellStyle}">`
-          + `${headlineHtml}${subtextHtml}${buttonHtml}`
+          + innerContent
           + '</td></tr></table>'
         );
+
+        // Sub-phase 6, work package A — real VML background fallback for
+        // Classic Outlook (opt-in via settings.outlookVml; see vml.ts).
+        // DEFAULT_EMAIL_WIDTH is a deterministic width estimate — this
+        // renderer has no access to the actual EmailDocument.width (module
+        // definitions render module-local HTML only), a documented,
+        // known limitation, not a fabricated value.
+        if (settings.outlookVml) {
+          const vmlWrapped = renderVmlBackground(
+            {
+              imageSrc: props.imageSrc,
+              backgroundColor: props.backgroundColor,
+              paddingTop: spacing.paddingTop,
+              paddingBottom: spacing.paddingBottom,
+            },
+            DEFAULT_EMAIL_WIDTH,
+            bgTable,
+          );
+          return moduleTableRow(cell(vmlWrapped));
+        }
+
         return moduleTableRow(cell(bgTable));
       }
 

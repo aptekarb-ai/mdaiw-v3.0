@@ -17,6 +17,7 @@ function content(modules: EmailModule[] = []): EmailDocumentContent {
 function renderPanel(overrides: Partial<Parameters<typeof ValidationCenterPanel>[0]> = {}) {
   const onNavigateToModule = vi.fn();
   const onApplySafeFix = vi.fn();
+  const onApplySettingsFix = vi.fn();
   const onApplyDocumentFix = vi.fn();
   render(
     <ValidationCenterPanel
@@ -32,11 +33,12 @@ function renderPanel(overrides: Partial<Parameters<typeof ValidationCenterPanel>
       resetCssEnabled
       onNavigateToModule={onNavigateToModule}
       onApplySafeFix={onApplySafeFix}
+      onApplySettingsFix={onApplySettingsFix}
       onApplyDocumentFix={onApplyDocumentFix}
       {...overrides}
     />,
   );
-  return { onNavigateToModule, onApplySafeFix, onApplyDocumentFix };
+  return { onNavigateToModule, onApplySafeFix, onApplySettingsFix, onApplyDocumentFix };
 }
 
 describe('ValidationCenterPanel', () => {
@@ -148,6 +150,7 @@ describe('ValidationCenterPanel', () => {
         resetCssEnabled
         onNavigateToModule={vi.fn()}
         onApplySafeFix={vi.fn()}
+        onApplySettingsFix={vi.fn()}
         onApplyDocumentFix={vi.fn()}
       />,
     );
@@ -164,6 +167,7 @@ describe('ValidationCenterPanel', () => {
         resetCssEnabled
         onNavigateToModule={vi.fn()}
         onApplySafeFix={vi.fn()}
+        onApplySettingsFix={vi.fn()}
         onApplyDocumentFix={vi.fn()}
       />,
     );

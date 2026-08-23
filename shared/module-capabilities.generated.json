@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "generatedFrom": "frontend/src/emailbuilder/moduleRegistry.tsx",
   "moduleCount": 53,
   "modules": [
@@ -57,7 +57,10 @@
           "max": 50
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-article-teaser",
@@ -109,7 +112,10 @@
           "group": "content"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-feature-list",
@@ -125,7 +131,10 @@
           "group": "content"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-heading-text",
@@ -153,7 +162,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-heading-text-cta",
@@ -193,7 +205,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-icon-text-rows",
@@ -202,7 +217,29 @@
       "isLayout": false,
       "columnCount": null,
       "editableFields": [],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "items",
+        "label": "Rows",
+        "itemSchema": [
+          {
+            "key": "title",
+            "label": "Title",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "text",
+            "label": "Text",
+            "valueType": "text",
+            "group": "content"
+          }
+        ],
+        "minItems": 0,
+        "maxItems": 8
+      },
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-image-left",
@@ -254,7 +291,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-image-right",
@@ -306,7 +346,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-image-top",
@@ -358,7 +401,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "content-quote",
@@ -386,7 +432,10 @@
           "group": "content"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "cta-banner",
@@ -450,7 +499,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "cta-centered",
@@ -514,7 +566,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "cta-dual",
@@ -590,7 +645,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "cta-text-cta",
@@ -654,7 +712,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "divider",
@@ -684,7 +745,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "footer-address-contact",
@@ -742,7 +806,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "footer-preference-unsubscribe",
@@ -794,7 +861,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "footer-simple-legal",
@@ -846,7 +916,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "footer-social-legal",
@@ -898,7 +971,29 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "socialPlatforms",
+        "label": "Social links",
+        "itemSchema": [
+          {
+            "key": "label",
+            "label": "Platform",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "href",
+            "label": "URL",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 0,
+        "maxItems": 6
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "header-compact",
@@ -944,7 +1039,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "header-logo-center",
@@ -990,7 +1088,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "header-logo-cta",
@@ -1048,7 +1149,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "header-logo-left",
@@ -1094,7 +1198,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "header-logo-nav",
@@ -1140,7 +1247,29 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "navLinks",
+        "label": "Navigation links",
+        "itemSchema": [
+          {
+            "key": "label",
+            "label": "Label",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "href",
+            "label": "URL",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 0,
+        "maxItems": 6
+      },
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "header-preheader-logo",
@@ -1192,7 +1321,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "hero-background-image",
@@ -1256,7 +1388,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": true
     },
     {
       "type": "hero-centered-promo",
@@ -1308,7 +1443,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "hero-image-cta",
@@ -1372,7 +1510,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "hero-image-left",
@@ -1436,7 +1577,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "hero-image-right",
@@ -1500,7 +1644,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "hero-text-only",
@@ -1552,7 +1699,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "image",
@@ -1592,7 +1742,10 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "image-text",
@@ -1652,7 +1805,10 @@
           "max": 72
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-1col",
@@ -1661,7 +1817,10 @@
       "isLayout": true,
       "columnCount": 1,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-2col-30-70",
@@ -1670,7 +1829,10 @@
       "isLayout": true,
       "columnCount": 2,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-2col-40-60",
@@ -1679,7 +1841,10 @@
       "isLayout": true,
       "columnCount": 2,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-2col-50-50",
@@ -1688,7 +1853,10 @@
       "isLayout": true,
       "columnCount": 2,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-2col-60-40",
@@ -1697,7 +1865,10 @@
       "isLayout": true,
       "columnCount": 2,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-2col-70-30",
@@ -1706,7 +1877,10 @@
       "isLayout": true,
       "columnCount": 2,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-3col",
@@ -1715,7 +1889,10 @@
       "isLayout": true,
       "columnCount": 3,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-4col",
@@ -1724,7 +1901,10 @@
       "isLayout": true,
       "columnCount": 4,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-5col",
@@ -1733,7 +1913,10 @@
       "isLayout": true,
       "columnCount": 5,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "layout-6col",
@@ -1742,7 +1925,10 @@
       "isLayout": true,
       "columnCount": 6,
       "editableFields": [],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "product-grid",
@@ -1770,7 +1956,59 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "items",
+        "label": "Products",
+        "itemSchema": [
+          {
+            "key": "imageSrc",
+            "label": "Image URL",
+            "valueType": "image_asset",
+            "group": "content"
+          },
+          {
+            "key": "imageAlt",
+            "label": "Alt text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "name",
+            "label": "Product name",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "price",
+            "label": "Price",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "description",
+            "label": "Description",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaText",
+            "label": "Button text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaHref",
+            "label": "Button link",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 4,
+        "maxItems": 4
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "product-image-price-cta",
@@ -1798,7 +2036,59 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "items",
+        "label": "Products",
+        "itemSchema": [
+          {
+            "key": "imageSrc",
+            "label": "Image URL",
+            "valueType": "image_asset",
+            "group": "content"
+          },
+          {
+            "key": "imageAlt",
+            "label": "Alt text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "name",
+            "label": "Product name",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "price",
+            "label": "Price",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "description",
+            "label": "Description",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaText",
+            "label": "Button text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaHref",
+            "label": "Button link",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 1,
+        "maxItems": 1
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "product-single",
@@ -1826,7 +2116,59 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "items",
+        "label": "Products",
+        "itemSchema": [
+          {
+            "key": "imageSrc",
+            "label": "Image URL",
+            "valueType": "image_asset",
+            "group": "content"
+          },
+          {
+            "key": "imageAlt",
+            "label": "Alt text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "name",
+            "label": "Product name",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "price",
+            "label": "Price",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "description",
+            "label": "Description",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaText",
+            "label": "Button text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaHref",
+            "label": "Button link",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 1,
+        "maxItems": 1
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "product-three-cards",
@@ -1854,7 +2196,59 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "items",
+        "label": "Products",
+        "itemSchema": [
+          {
+            "key": "imageSrc",
+            "label": "Image URL",
+            "valueType": "image_asset",
+            "group": "content"
+          },
+          {
+            "key": "imageAlt",
+            "label": "Alt text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "name",
+            "label": "Product name",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "price",
+            "label": "Price",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "description",
+            "label": "Description",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaText",
+            "label": "Button text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaHref",
+            "label": "Button link",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 3,
+        "maxItems": 3
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "product-two-cards",
@@ -1882,7 +2276,59 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "items",
+        "label": "Products",
+        "itemSchema": [
+          {
+            "key": "imageSrc",
+            "label": "Image URL",
+            "valueType": "image_asset",
+            "group": "content"
+          },
+          {
+            "key": "imageAlt",
+            "label": "Alt text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "name",
+            "label": "Product name",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "price",
+            "label": "Price",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "description",
+            "label": "Description",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaText",
+            "label": "Button text",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "ctaHref",
+            "label": "Button link",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 2,
+        "maxItems": 2
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "social-follow-us",
@@ -1904,7 +2350,29 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "platforms",
+        "label": "Social links",
+        "itemSchema": [
+          {
+            "key": "label",
+            "label": "Platform",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "href",
+            "label": "URL",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 0,
+        "maxItems": 6
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "social-icon-row",
@@ -1920,7 +2388,29 @@
           "group": "style"
         }
       ],
-      "hasRepeatableField": true
+      "hasRepeatableField": true,
+      "repeatableField": {
+        "path": "platforms",
+        "label": "Social links",
+        "itemSchema": [
+          {
+            "key": "label",
+            "label": "Platform",
+            "valueType": "text",
+            "group": "content"
+          },
+          {
+            "key": "href",
+            "label": "URL",
+            "valueType": "url",
+            "group": "content"
+          }
+        ],
+        "minItems": 0,
+        "maxItems": 6
+      },
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "spacer",
@@ -1938,7 +2428,10 @@
           "max": 200
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "text",
@@ -1980,7 +2473,10 @@
           "max": 72
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": false,
+      "supportsBulletproofBackground": false
     },
     {
       "type": "text-image",
@@ -2040,7 +2536,10 @@
           "max": 72
         }
       ],
-      "hasRepeatableField": false
+      "hasRepeatableField": false,
+      "repeatableField": null,
+      "supportsBulletproofCta": true,
+      "supportsBulletproofBackground": false
     }
   ]
 }

@@ -5,6 +5,7 @@ import {
   GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition,
   type RepeatableFieldConfig,
 } from '../registryCore';
+import { renderVmlButton } from '../vml';
 
 // Feature 06 (instruction 30) — a closed set of common platform names to
 // pick from, plus a free-text option, rather than an unbounded free-text
@@ -23,6 +24,10 @@ function socialLinksField(addLabel: string): RepeatableFieldConfig<SocialPlatfor
     createItem: () => ({ label: 'Facebook', href: '' }),
     maxItems: MAX_SOCIAL_LINKS,
     addLabel,
+    itemSchema: [
+      { key: 'label', label: 'Platform', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'href', label: 'URL', kind: 'url', valueType: 'url', group: 'content' },
+    ],
     renderItemFields: (item, update) => (
       <>
         <label className="properties-panel__field">
@@ -87,6 +92,15 @@ function socialDefinition(variant: SocialVariant): ModuleDefinition<SocialModule
     imagePosition: null,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 final reconciliation — the social platform "pill" links
+    // ARE a visibly bordered/rounded control (border:1px solid #B8C8CD;
+    // border-radius:999px). No background fill does NOT exempt them from
+    // needing VML: Classic Outlook's Word engine ignores CSS border-radius
+    // regardless of fill, so an unfilled pill degrades to a square-cornered
+    // bordered rectangle without the VML fallback below. Uses the SAME
+    // shared renderVmlButton primitive as cta-dual's outline secondary CTA
+    // (stroke="t", fillcolor="none") — see renderEmailHtml.
+    supportsBulletproofCta: true,
     editableFields: [
       ...(variant.showHeading ? [{ key: 'headingText', label: 'Heading', kind: 'text' as const, group: 'content' as const }] : []),
       { key: 'align', label: 'Alignment', kind: 'align' as const, group: 'style' as const },
@@ -123,11 +137,27 @@ function socialDefinition(variant: SocialVariant): ModuleDefinition<SocialModule
         ? textLine(escapeHtml(props.headingText), 'font-family:Arial,Helvetica,sans-serif; font-size:14px; font-weight:bold; color:#333333;', 12)
         : '';
       const cellsHtml = props.platforms
-        .map((platform) => (
-          '<td style="padding:0 4px;">'
-          + `<a href="${escapeAttribute(sanitizeUrl(platform.href))}" style="display:inline-block; padding:6px 14px; border:1px solid #B8C8CD; border-radius:999px; font-family:Arial,Helvetica,sans-serif; font-size:12px; font-weight:bold; color:#333333; text-decoration:none;">${escapeHtml(platform.label)}</a>`
-          + '</td>'
-        ))
+        .map((platform) => {
+          const plainPill = `<a href="${escapeAttribute(sanitizeUrl(platform.href))}" style="display:inline-block; padding:6px 14px; border:1px solid #B8C8CD; border-radius:999px; font-family:Arial,Helvetica,sans-serif; font-size:12px; font-weight:bold; color:#333333; text-decoration:none;">${escapeHtml(platform.label)}</a>`;
+          // Sub-phase 6 final reconciliation — outline/pill VML pairing,
+          // same shared renderVmlButton primitive cta-dual's secondary CTA
+          // uses (unfilled backgroundColor triggers the outline branch).
+          const pillHtml = settings.outlookVml
+            ? renderVmlButton({
+              href: platform.href,
+              text: platform.label,
+              backgroundColor: '',
+              textColor: '#333333',
+              fontSize: 12,
+              borderRadius: 999,
+              paddingHorizontal: 14,
+              paddingVertical: 6,
+              borderColor: '#B8C8CD',
+              borderWidth: 1,
+            }, plainPill)
+            : plainPill;
+          return `<td style="padding:0 4px;">${pillHtml}</td>`;
+        })
         .join('');
       // align="center" (HTML attribute, not CSS margin) centers this
       // block-level table.

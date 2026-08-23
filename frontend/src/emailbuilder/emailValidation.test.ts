@@ -266,6 +266,226 @@ describe('validateEmail', () => {
     expect(report.issues.some((i) => i.id === 'outlook-classic:unsafe-global-row-collapse')).toBe(true);
   });
 
+  it('Sub-phase 3: also flags a missing AllowPNG (not just DPI) as the same combined issue', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body><!--[if mso]><table><tr><td>x</td></tr></table><![endif]--></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === 'outlook-classic:missing-office-dpi');
+    expect(issue?.detail).toContain('AllowPNG');
+    expect(issue?.detail).toContain('PixelsPerInch');
+  });
+
+  // --- Sub-phase 6, work package B: expanded Classic Outlook diagnostics ---
+
+  it('Sub-phase 6: flags a <table> missing explicit cellpadding/cellspacing', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body><table><tr><td>x</td></tr></table></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:table-missing-cell-spacing-attrs')).toBe(true);
+  });
+
+  it('Sub-phase 6: a real generated document (always emits cellpadding/cellspacing) never flags table spacing', () => {
+    const content = contentWith([createModule('text', 0)]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:table-missing-cell-spacing-attrs')).toBe(false);
+  });
+
+  it('Sub-phase 6: flags an <img> missing an explicit width attribute', () => {
+    const content = contentWith([]);
+    const html = '<!doctype html><html><body><img src="https://example.com/a.png" alt="" /></body></html>';
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:image-missing-width-attribute')).toBe(true);
+  });
+
+  it('Sub-phase 6: a real generated image module (always emits width) never flags image width', () => {
+    const image = createModule('image', 0);
+    (image as EmailModule<{ src: string }>).props = { ...(image.props as { src: string }), src: 'https://example.com/a.png' };
+    const content = contentWith([image]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-classic:image-missing-width-attribute')).toBe(false);
+  });
+
+  it('Sub-phase 6: flags Custom CSS line-height without a paired mso-line-height-rule:exactly', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: 'x', faviconUrl: '', resetCssEnabled: true,
+      customCssEnabled: true, customCss: '.foo { line-height: 22px; }',
+    });
+    expect(report.issues.some((i) => i.id === 'outlook-classic:custom-css-line-height-without-mso-rule')).toBe(true);
+  });
+
+  it('Sub-phase 6: does not flag Custom CSS line-height that IS paired with mso-line-height-rule:exactly', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: 'x', faviconUrl: '', resetCssEnabled: true,
+      customCssEnabled: true, customCss: '.foo { line-height: 22px; mso-line-height-rule: exactly; }',
+    });
+    expect(report.issues.some((i) => i.id === 'outlook-classic:custom-css-line-height-without-mso-rule')).toBe(false);
+  });
+
+  it('Sub-phase 6: flags Custom CSS using float/position/flex/grid (unsupported by the Word engine)', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    for (const css of ['.a { float: left; }', '.a { position: absolute; }', '.a { display: flex; }', '.a { display: grid; }']) {
+      const report = validateEmail(html, content, 'generic', {
+        emailSubject: 'x', faviconUrl: '', resetCssEnabled: true, customCssEnabled: true, customCss: css,
+      });
+      expect(report.issues.some((i) => i.id === 'outlook-classic:custom-css-unsupported-layout'), css).toBe(true);
+    }
+  });
+
+  it('Sub-phase 6: does not flag ordinary Custom CSS with no layout-unsupported properties', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic', {
+      emailSubject: 'x', faviconUrl: '', resetCssEnabled: true, customCssEnabled: true, customCss: '.a { color: red; }',
+    });
+    expect(report.issues.some((i) => i.id === 'outlook-classic:custom-css-unsupported-layout')).toBe(false);
+  });
+
+  it('Sub-phase 6: flags a Background Image Hero with a real image and no VML fallback, with a safe settingsPatch fix', () => {
+    const hero = createModule('hero-background-image', 0);
+    (hero as EmailModule<{ imageSrc: string }>).props = { ...(hero.props as { imageSrc: string }), imageSrc: 'https://example.com/hero.jpg' };
+    const content = contentWith([hero]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === `outlook-classic:background-image-needs-vml:${hero.id}`);
+    expect(issue).toBeDefined();
+    expect(issue?.fixType).toBe('safe');
+    expect(issue?.safeFix).toEqual({ moduleId: hero.id, settingsPatch: { outlookVml: true } });
+  });
+
+  it('Sub-phase 6: does not flag a Background Image Hero with no image src set (nothing to fall back for)', () => {
+    const hero = createModule('hero-background-image', 0);
+    const content = contentWith([hero]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:background-image-needs-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6: does not flag a Background Image Hero once VML is already enabled', () => {
+    const hero = createModule('hero-background-image', 0);
+    (hero as EmailModule<{ imageSrc: string }>).props = { ...(hero.props as { imageSrc: string }), imageSrc: 'https://example.com/hero.jpg' };
+    hero.settings = { ...hero.settings, outlookVml: true };
+    const content = contentWith([hero]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:background-image-needs-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6: flags a rounded Button with no VML fallback, with a safe settingsPatch fix', () => {
+    const button = createModule('button', 0);
+    (button as EmailModule<{ borderRadius: number }>).props = { ...(button.props as { borderRadius: number }), borderRadius: 10 };
+    const content = contentWith([button]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === `outlook-classic:button-rounded-corners-need-vml:${button.id}`);
+    expect(issue).toBeDefined();
+    expect(issue?.fixType).toBe('safe');
+    expect(issue?.safeFix).toEqual({ moduleId: button.id, settingsPatch: { outlookVml: true } });
+  });
+
+  it('Sub-phase 6: does not flag a square (borderRadius 0) Button', () => {
+    const button = createModule('button', 0);
+    (button as EmailModule<{ borderRadius: number }>).props = { ...(button.props as { borderRadius: number }), borderRadius: 0 };
+    const content = contentWith([button]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:button-rounded-corners-need-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6: does not flag a rounded full-width Button (VML pattern declined by design, not an unfixed problem)', () => {
+    const button = createModule('button', 0);
+    (button as EmailModule<{ borderRadius: number; widthMode: string }>).props = {
+      ...(button.props as { borderRadius: number; widthMode: string }), borderRadius: 10, widthMode: 'full',
+    };
+    const content = contentWith([button]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:button-rounded-corners-need-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6 closure: flags a cta-centered module with a real CTA and no VML fallback (generalized, non-Button type)', () => {
+    const cta = createModule('cta-centered', 0);
+    (cta as EmailModule<{ ctaText: string; ctaHref: string }>).props = {
+      ...(cta.props as { ctaText: string; ctaHref: string }), ctaText: 'Get Started', ctaHref: 'https://example.com',
+    };
+    const content = contentWith([cta]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === `outlook-classic:button-rounded-corners-need-vml:${cta.id}`);
+    expect(issue).toBeDefined();
+    expect(issue?.safeFix).toEqual({ moduleId: cta.id, settingsPatch: { outlookVml: true } });
+  });
+
+  it('Sub-phase 6 closure: flags each product item independently in a multi-CTA product module', () => {
+    const product = createModule('product-two-cards', 0);
+    const content = contentWith([product]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    // Default seed props already set real ctaText for both items — one
+    // issue per module (not per item; the fix enables VML for the whole
+    // module, which covers every item), confirming the module-level fire.
+    expect(report.issues.some((i) => i.id === `outlook-classic:button-rounded-corners-need-vml:${product.id}`)).toBe(true);
+  });
+
+  it('Sub-phase 6 closure: does not flag a module with no CTA content set (nothing to fall back for)', () => {
+    const contentBlock = createModule('content-heading-text-cta', 0);
+    (contentBlock as EmailModule<{ ctaText: string }>).props = { ...(contentBlock.props as { ctaText: string }), ctaText: '' };
+    const content = contentWith([contentBlock]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:button-rounded-corners-need-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6 closure: never flags a plain-link module (header-logo-nav) even with real navLinks', () => {
+    const header = createModule('header-logo-nav', 0);
+    const content = contentWith([header]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:button-rounded-corners-need-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6 final reconciliation: flags a bordered pill-link module (social-icon-row) with no VML fallback', () => {
+    const social = createModule('social-icon-row', 0);
+    const content = contentWith([social]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    const issue = report.issues.find((i) => i.id === `outlook-classic:button-rounded-corners-need-vml:${social.id}`);
+    expect(issue).toBeDefined();
+    expect(issue?.fixType).toBe('safe');
+    expect(issue?.safeFix).toEqual({ moduleId: social.id, settingsPatch: { outlookVml: true } });
+  });
+
+  it('Sub-phase 6 final reconciliation: does not flag social-icon-row once VML is already enabled', () => {
+    const social = createModule('social-icon-row', 0);
+    social.settings = { ...social.settings, outlookVml: true };
+    const content = contentWith([social]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:button-rounded-corners-need-vml:'))).toBe(false);
+  });
+
+  it('Sub-phase 6 final reconciliation: flags footer-social-legal\'s bordered pills but the check is unrelated to its plain unsubscribe link', () => {
+    const footer = createModule('footer-social-legal', 0);
+    const content = contentWith([footer]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === `outlook-classic:button-rounded-corners-need-vml:${footer.id}`)).toBe(true);
+  });
+
+  it('Sub-phase 6 final reconciliation: still never flags footer-preference-unsubscribe (plain underlined text links only, no pills)', () => {
+    const footer = createModule('footer-preference-unsubscribe', 0);
+    const content = contentWith([footer]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id.startsWith('outlook-classic:button-rounded-corners-need-vml:'))).toBe(false);
+  });
+
   it('Sub-phase 4: the unsafe global row-collapse rule has a safe fix that disables Custom CSS', () => {
     const content = contentWith([]);
     const html = '<!doctype html><html><head><style>tr{font-size:0;line-height:0;}</style></head><body></body></html>';

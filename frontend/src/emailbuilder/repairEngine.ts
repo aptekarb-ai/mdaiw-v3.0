@@ -66,6 +66,29 @@ export function buildRepairCandidates(
   for (const issue of report.issues) {
     if (issue.fixType !== 'safe' || !issue.safeFix) continue;
 
+    if ('settingsPatch' in issue.safeFix) {
+      const { moduleId, settingsPatch } = issue.safeFix;
+      const entries = Object.entries(settingsPatch);
+      const [key, afterValue] = entries[0] ?? [undefined, undefined];
+      const module = findModuleById(modules, moduleId);
+      const beforeValue = key && module ? (module.settings as unknown as Record<string, unknown>)[key] : undefined;
+      candidates.push({
+        issueId: issue.id,
+        title: issue.title,
+        detail: issue.detail,
+        severity: issue.severity,
+        category: issue.category,
+        affectedClient: affectedClientLabel(issue.id),
+        moduleId,
+        before: formatValue(beforeValue),
+        after: formatValue(afterValue),
+        confidence: 1.0,
+        safeAutoFix: true,
+        item: { kind: 'module-settings', issueId: issue.id, moduleId, settingsPatch },
+      });
+      continue;
+    }
+
     if ('documentPatch' in issue.safeFix) {
       const entries = Object.entries(issue.safeFix.documentPatch);
       const [key, afterValue] = entries[0] ?? [undefined, undefined];
@@ -117,18 +140,22 @@ export function buildRepairCandidates(
 // combined patch, one history commit).
 export function toApplyRepairPatchArgs(candidates: RepairCandidate[]): {
   modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[];
+  settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[];
   documentPatch: Partial<EmailDocumentSettingsSnapshot> | null;
 } {
   const modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[] = [];
+  const settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[] = [];
   let documentPatch: Record<string, unknown> | null = null;
 
   for (const candidate of candidates) {
     if (candidate.item.kind === 'module') {
       modulePatches.push({ moduleId: candidate.item.moduleId, propPatch: candidate.item.propPatch });
+    } else if (candidate.item.kind === 'module-settings') {
+      settingsPatches.push({ moduleId: candidate.item.moduleId, settingsPatch: candidate.item.settingsPatch });
     } else {
       documentPatch = { ...(documentPatch ?? {}), ...candidate.item.documentPatch };
     }
   }
 
-  return { modulePatches, documentPatch: documentPatch as Partial<EmailDocumentSettingsSnapshot> | null };
+  return { modulePatches, settingsPatches, documentPatch: documentPatch as Partial<EmailDocumentSettingsSnapshot> | null };
 }

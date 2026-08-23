@@ -151,6 +151,14 @@ export interface EmailModuleSettings {
   // responsive <style> block (see responsiveStyles.ts) rather than never
   // rendering the module at all — never deletes it from the EDM.
   visibility?: ModuleVisibility;
+  // Feature 14 V3 Sub-phase 6 — when true, renderEmailHtml pairs this
+  // module's normal HTML output with a real VML fallback for Classic
+  // Outlook (see vml.ts). Only meaningful for module types
+  // vml.ts::supportsVmlButtonPattern/supportsVmlBackgroundPattern
+  // recognize; every other module type ignores this flag entirely.
+  // Undefined/false = today's exact existing behavior (no VML), so this
+  // is purely additive.
+  outlookVml?: boolean;
 }
 
 export type ModuleVisibility = 'all' | 'hideMobile' | 'hideDesktop';

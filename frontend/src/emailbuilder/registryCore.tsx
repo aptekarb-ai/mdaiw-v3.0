@@ -91,6 +91,16 @@ export interface RepeatableFieldConfig<Item> {
   minItems?: number;
   maxItems?: number;
   addLabel?: string;
+  // Feature 14 V3 Sub-phase 6, work package E — the JSON-serializable
+  // per-item field contract the Email AI Engineer's capability manifest
+  // needs to validate add/update operations item-by-item (see
+  // moduleCapabilities.ts's buildModuleCapabilityManifest and
+  // ai_command.py's UPDATE_REPEATABLE_FIELD). Deliberately a SEPARATE
+  // declaration from renderItemFields (a React render function, never
+  // JSON-serializable) rather than trying to derive one from the other —
+  // every field here must correspond to a real key `createItem()`/
+  // `renderItemFields` already handles.
+  itemSchema: SchemaField[];
 }
 
 // A module definition owns everything the builder needs for one module
@@ -130,6 +140,17 @@ export interface ModuleDefinition<Props = Record<string, unknown>> {
   // createDefaultProps().columnWidths entry. Absent for every other
   // module type; moduleFactory.ts only calls this when present.
   createDefaultColumns?: () => EmailColumn[];
+  // Feature 14 V3 Sub-phase 6 closure — capability metadata for the
+  // shared bulletproof-VML renderer (vml.ts). Set explicitly, once, at
+  // the module DEFINITION that genuinely renders a clickable CTA/button
+  // (real background fill or border, padding, corner radius — never a
+  // plain text/nav/social link) or a real CSS background-image — never
+  // inferred from the type name. This is the single source of truth
+  // vml.ts's supportsVmlButtonPattern/supportsVmlBackgroundPattern read
+  // through the registry resolver; a module NOT listed here is never
+  // VML-wrapped, no matter what its settings say.
+  supportsBulletproofCta?: boolean;
+  supportsBulletproofBackground?: boolean;
   renderPreview: (module: EmailModule<Props>, viewport?: BuilderViewMode) => ReactNode;
   renderEmailHtml: (module: EmailModule<Props>) => string;
 }

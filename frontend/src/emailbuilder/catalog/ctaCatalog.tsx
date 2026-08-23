@@ -4,6 +4,7 @@ import { escapeAttribute, escapeHtml, sanitizeUrl } from '../sanitize';
 import {
   GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition, type SchemaField,
 } from '../registryCore';
+import { renderVmlButton } from '../vml';
 
 type CtaLayout = 'centered' | 'banner' | 'text-cta' | 'dual';
 
@@ -64,7 +65,14 @@ function buttonPreview(text: string, backgroundColor: string, textColor: string,
   );
 }
 
-function buttonHtml(text: string, href: string, backgroundColor: string, textColor: string, primary = true): string {
+function buttonHtml(
+  text: string,
+  href: string,
+  backgroundColor: string,
+  textColor: string,
+  primary = true,
+  outlookVml = false,
+): string {
   const style = primary
     ? `background-color:${backgroundColor}; color:${textColor};`
     : `background-color:${backgroundColor}; color:${textColor}; border:1px solid ${textColor};`;
@@ -72,11 +80,29 @@ function buttonHtml(text: string, href: string, backgroundColor: string, textCol
   // text-align:center/right center or align this table — no CSS margin
   // needed. Horizontal gap between two of these (the "dual" layout) is
   // added by the caller via a padded wrapping <span>, never margin here.
-  return (
+  const plainHtml = (
     '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display:inline-block;">'
     + `<tr><td style="border-radius:6px; ${style}"><a href="${escapeAttribute(sanitizeUrl(href))}" target="_blank" rel="noopener noreferrer" style="display:inline-block; padding:10px 20px; font-family:Arial,Helvetica,sans-serif; font-size:13px; font-weight:bold; text-decoration:none; border-radius:6px; color:inherit;">${escapeHtml(text)}</a></td></tr>`
     + '</table>'
   );
+  // Sub-phase 6 closure — same shared VML bulletproof-button pairing as
+  // the standalone Button module. A secondary (primary=false) button has
+  // no fill (backgroundColor is '' for cta-dual's default secondary), so
+  // renderVmlButton's own isFilled() check renders it as an outline VML
+  // shape with the real textColor as the stroke — never a fabricated fill.
+  if (!outlookVml) return plainHtml;
+  return renderVmlButton({
+    href,
+    text,
+    backgroundColor: primary ? backgroundColor : (backgroundColor || ''),
+    textColor,
+    fontSize: 13,
+    borderRadius: 6,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderColor: primary ? undefined : textColor,
+    borderWidth: primary ? undefined : 1,
+  }, plainHtml);
 }
 
 // Horizontal gap between adjacent inline-block elements via padding on a
@@ -98,6 +124,11 @@ function ctaDefinition(variant: CtaVariant): ModuleDefinition<CtaModuleProps> {
     imagePosition: null,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 closure — every layout renders a real filled (or, for
+    // cta-dual's secondary, outline) button via the shared buttonHtml()
+    // helper below — genuine bulletproof-CTA candidates, unlike a plain
+    // text/nav link.
+    supportsBulletproofCta: true,
     editableFields: editableFields(variant.layout),
     createDefaultProps: () => ({
       heading: 'Ready to get started?',
@@ -152,16 +183,18 @@ function ctaDefinition(variant: CtaVariant): ModuleDefinition<CtaModuleProps> {
       const secondaryBg = props.secondaryCtaBackgroundColor || 'transparent';
       const secondaryText = props.secondaryCtaTextColor || DEFAULT_SECONDARY_BUTTON_TEXT;
 
+      const outlookVml = settings.outlookVml === true;
+
       if (variant.layout === 'text-cta') {
         const fallbackText = textLine(escapeHtml(props.text), `font-family:Arial,Helvetica,sans-serif; font-size:14px; color:${props.textColor};`);
         const textCell = cell(`${headingHtml}${textHtml || fallbackText}`, 'width:65%; vertical-align:middle;');
-        const buttonCell = cell(buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText), 'width:35%; vertical-align:middle; text-align:right;');
+        const buttonCell = cell(buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText, true, outlookVml), 'width:35%; vertical-align:middle; text-align:right;');
         return moduleTableRow(cell(`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="${containerStyle}"><tr>${textCell}${buttonCell}</tr></table>`));
       }
 
       const buttons = variant.layout === 'dual'
-        ? `${withHorizontalGap(buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText), 4)}${withHorizontalGap(buttonHtml(props.secondaryCtaText, props.secondaryCtaHref, secondaryBg, secondaryText, false), 4)}`
-        : buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText);
+        ? `${withHorizontalGap(buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText, true, outlookVml), 4)}${withHorizontalGap(buttonHtml(props.secondaryCtaText, props.secondaryCtaHref, secondaryBg, secondaryText, false, outlookVml), 4)}`
+        : buttonHtml(props.ctaText, props.ctaHref, primaryBg, primaryText, true, outlookVml);
       return moduleTableRow(cell(`${headingHtml}${textHtml}${buttons}`, `${containerStyle} text-align:${props.align};`));
     },
   };

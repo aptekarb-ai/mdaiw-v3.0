@@ -104,6 +104,7 @@ export interface UseEmailBuilderState {
   applyRepairPatch: (
     modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
     documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
+    settingsPatches?: { moduleId: string; settingsPatch: Record<string, unknown> }[],
   ) => void;
   addModule: (type: EmailModuleType) => void;
   insertModuleAt: (type: EmailModuleType, index: number) => void;
@@ -132,6 +133,13 @@ export interface UseEmailBuilderState {
   // undo/redo covers nested operations for free (see the `commit`
   // docstring below).
   insertNestedModule: (layoutId: string, columnId: string, type: EmailModuleType, index?: number) => void;
+  // Sub-phase 6 — the AI Engineer's INSERT_NESTED_MODULE action seeds the
+  // new module's props from an already-validated patch in the SAME
+  // history commit as the insert, exactly like addModuleWithProps already
+  // does for top-level AI inserts.
+  insertNestedModuleWithProps: (
+    layoutId: string, columnId: string, type: EmailModuleType, patch: Record<string, unknown>, index?: number,
+  ) => string;
   insertNestedSavedModule: (layoutId: string, columnId: string, saved: SavedEmailModule, index?: number) => void;
   deleteNestedModule: (layoutId: string, columnId: string, moduleId: string) => void;
   duplicateNestedModule: (layoutId: string, columnId: string, moduleId: string) => void;
@@ -225,15 +233,21 @@ export function useEmailBuilderState(): UseEmailBuilderState {
   const applyRepairPatch = useCallback((
     modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
     documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
+    settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[] = [],
   ) => {
     let nextModules = modulesRef.current;
-    if (modulePatches.length > 0) {
-      const patchByModuleId = new Map(modulePatches.map((entry) => [entry.moduleId, entry.propPatch]));
+    if (modulePatches.length > 0 || settingsPatches.length > 0) {
+      const propPatchByModuleId = new Map(modulePatches.map((entry) => [entry.moduleId, entry.propPatch]));
+      const settingsPatchByModuleId = new Map(settingsPatches.map((entry) => [entry.moduleId, entry.settingsPatch]));
       const applyToList = (list: EmailModule[]): EmailModule[] => list.map((module) => {
         let updated = module;
-        const patch = patchByModuleId.get(module.id);
-        if (patch) {
-          updated = { ...updated, props: { ...updated.props, ...patch } };
+        const propPatch = propPatchByModuleId.get(module.id);
+        if (propPatch) {
+          updated = { ...updated, props: { ...updated.props, ...propPatch } };
+        }
+        const settingsPatch = settingsPatchByModuleId.get(module.id);
+        if (settingsPatch) {
+          updated = { ...updated, settings: { ...updated.settings, ...settingsPatch } };
         }
         if (updated.columns) {
           updated = {
@@ -419,6 +433,18 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setSelectedColumn(null);
   }, [commit]);
 
+  const insertNestedModuleWithProps = useCallback((
+    layoutId: string, columnId: string, type: EmailModuleType, patch: Record<string, unknown>, index?: number,
+  ) => {
+    const current = modulesRef.current;
+    const created = createModule(type, index ?? 0);
+    const newModule = Object.keys(patch).length ? { ...created, props: { ...created.props, ...patch } } : created;
+    commit(insertNestedModuleInTree(current, layoutId, columnId, newModule, index));
+    setSelectedModuleId(newModule.id);
+    setSelectedColumn(null);
+    return newModule.id;
+  }, [commit]);
+
   const insertNestedSavedModule = useCallback((layoutId: string, columnId: string, saved: SavedEmailModule, index?: number) => {
     const current = modulesRef.current;
     const newModule = createModuleFromSaved(saved, index ?? 0);
@@ -535,6 +561,7 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     updateModuleProps,
     updateModuleSettings,
     insertNestedModule,
+    insertNestedModuleWithProps,
     insertNestedSavedModule,
     deleteNestedModule,
     duplicateNestedModule,

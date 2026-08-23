@@ -1639,6 +1639,255 @@ class RuleBasedEmailCommandProviderTests(TestCase):
         for entry in modules:
             self.assertIn(entry['module_type'], ('text', 'image', 'button'))
 
+    # --- Sub-phase 6, work package D/E -- new NL vocabulary ---
+
+    def test_nested_insert_here_phrasing(self):
+        result = self.provider.resolve('add a text module here', {})
+        self.assertEqual(result.action, {
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {},
+        })
+
+    def test_nested_insert_into_this_column_phrasing(self):
+        result = self.provider.resolve('insert a button into this column', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_NESTED_MODULE)
+        self.assertEqual(result.action['module_type'], 'button')
+
+    def test_plain_add_a_button_is_NOT_misread_as_a_nested_insert(self):
+        # Regression guard -- "add a button" (no "here"/"in this column")
+        # must still route to the ORIGINAL top-level INSERT_MODULE.
+        result = self.provider.resolve('add a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+    def test_vml_pattern_for_a_selected_button(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('enable outlook vml for this button', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'button'})
+
+    def test_outlook_wrapper_for_a_selected_background_hero(self):
+        context = {'selected_module': _selected('hero-background-image')}
+        result = self.provider.resolve('enable outlook wrapper for this background', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'hero-background-image'})
+
+    def test_vml_for_background_hero_always_routes_to_outlook_wrapper_not_button_pattern(self):
+        # Regression guard -- Sub-phase 6 closure gave hero-background-image
+        # BOTH supportsBulletproofCta AND supportsBulletproofBackground (its
+        # own CTA VML nests inside its background ghost-table VML). The
+        # generic "enable outlook vml" phrasing must still resolve to the
+        # single covering action (APPLY_OUTLOOK_WRAPPER), never the
+        # button-only APPLY_VML_PATTERN, for this one dual-capability type.
+        context = {'selected_module': _selected('hero-background-image')}
+        result = self.provider.resolve('enable outlook vml for this module', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'hero-background-image'})
+
+    def test_vml_pattern_for_a_selected_cta_module_now_supported(self):
+        # Sub-phase 6 closure expanded bulletproof-CTA VML beyond the
+        # standalone Button module -- cta-centered is one of the 22 newly
+        # eligible module types.
+        context = {'selected_module': _selected('cta-centered')}
+        result = self.provider.resolve('enable outlook vml for this', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'cta-centered'})
+
+    def test_vml_pattern_for_a_selected_pill_link_module_now_supported(self):
+        # Sub-phase 6 final reconciliation -- bordered/rounded pill-link
+        # modules (social-icon-row, social-follow-us, footer-social-legal)
+        # are genuine VML-button candidates: Classic Outlook ignores
+        # border-radius regardless of background fill.
+        context = {'selected_module': _selected('social-icon-row')}
+        result = self.provider.resolve('enable outlook vml for this', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'social-icon-row'})
+
+    def test_vml_declined_for_a_module_type_that_does_not_support_it(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('enable vml for this', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('does not support', result.reply)
+
+    def test_vml_still_declined_for_a_plain_nav_link_module(self):
+        # header-logo-nav has no bordered/rounded container at all --
+        # remains excluded even after the pill-link reconciliation.
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('enable vml for this', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('does not support', result.reply)
+
+    def test_hide_on_mobile(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('hide this on mobile', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text', 'patch': {'visibility': 'hideMobile'},
+        })
+
+    def test_hide_on_desktop(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('hide this on desktop', context)
+        self.assertEqual(result.action['patch'], {'visibility': 'hideDesktop'})
+
+    def test_show_on_both(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('show it on both desktop and mobile', context)
+        self.assertEqual(result.action['patch'], {'visibility': 'all'})
+
+    def test_restructure_layout_two_numbers(self):
+        context = {'selected_module': _selected('layout-2col-50-50', columnWidths=[50, 50])}
+        result = self.provider.resolve('change the column widths to 70/30', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [70.0, 30.0],
+        })
+
+    def test_restructure_layout_wrong_number_of_widths_asks_for_the_correct_count(self):
+        context = {'selected_module': _selected('layout-3col', columnWidths=[33, 33, 34])}
+        result = self.provider.resolve('change the column widths to 70/30', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('3 width', result.reply)
+
+    def test_restructure_layout_declined_for_a_non_layout_module(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('change the column widths to 70/30', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('not a layout', result.reply)
+
+    def test_remove_first_nav_link(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('remove the first nav link', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'remove', 'index': 0,
+        })
+
+    def test_remove_second_item(self):
+        context = {'selected_module': _selected('product-single')}
+        result = self.provider.resolve('remove the second item', context)
+        self.assertEqual(result.action['index'], 1)
+
+    def test_remove_repeatable_declined_for_a_module_with_no_list(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('remove the first link', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn("doesn't have a list", result.reply)
+
+    def test_plain_remove_this_is_NOT_misread_as_a_repeatable_removal(self):
+        # Regression guard -- "remove this" (no ordinal + list-item noun)
+        # must still route to the ORIGINAL DELETE_MODULE.
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('remove this', context)
+        self.assertEqual(result.action['type'], ActionType.DELETE_MODULE)
+
+    # --- Sub-phase 6 closure -- repeatable-field ADD/UPDATE/REORDER via NL ---
+
+    def test_add_nav_link_with_explicit_label_and_url(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve(
+            'add a navigation link called Pricing with URL https://example.com/pricing', context,
+        )
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'Pricing', 'href': 'https://example.com/pricing'},
+        })
+
+    def test_add_social_link_with_for_and_using_connectors(self):
+        context = {'selected_module': _selected('social-icon-row')}
+        result = self.provider.resolve('add a social link for LinkedIn using https://linkedin.com/company/x', context)
+        self.assertEqual(result.action['item'], {'label': 'LinkedIn', 'href': 'https://linkedin.com/company/x'})
+
+    def test_add_icon_text_row_with_saying_connector(self):
+        context = {'selected_module': _selected('content-icon-text-rows')}
+        result = self.provider.resolve('add a row called Highlights saying Great stuff here', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'content-icon-text-rows', 'op': 'add',
+            'item': {'title': 'Highlights', 'text': 'Great stuff here'},
+        })
+
+    def test_add_never_fabricates_content_when_nothing_supplied(self):
+        # "add a navigation link" alone falls through to the generic
+        # insert-module clarify reply rather than proposing an empty/
+        # invented item.
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('add a navigation link', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_add_declines_an_unsafe_url_rather_than_dropping_or_inventing_one(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('add a navigation link called Pricing with URL javascript:alert(1)', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn("couldn't use", result.reply)
+
+    def test_add_declines_a_richer_schema_it_cannot_bound_safely(self):
+        # product-single's itemSchema has 7 fields -- the bounded two-field
+        # ADD parser correctly declines rather than guessing which fields
+        # the user's free text maps to.
+        context = {'selected_module': _selected('product-single')}
+        result = self.provider.resolve('add a product called Widget with URL https://example.com/widget', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('richer item', result.reply)
+
+    def test_update_nav_link_label_by_ordinal(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('change the second navigation link label to Services', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav',
+            'op': 'update', 'index': 1, 'item': {'label': 'Services'},
+        })
+
+    def test_update_product_field_via_synonym_title_to_name(self):
+        # "title" is not a literal key/label on ProductItem (it's "name" /
+        # "Product name") -- resolved via the synonym table, never guessed.
+        context = {'selected_module': _selected('product-single')}
+        result = self.provider.resolve('change the first product title to Summer Collection', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'product-single',
+            'op': 'update', 'index': 0, 'item': {'name': 'Summer Collection'},
+        })
+
+    def test_update_asks_which_field_when_none_can_be_resolved(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('change the second navigation link banana to Services', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('Which field', result.reply)
+
+    def test_update_declines_an_invalid_value_rather_than_fabricating_one(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('change the first navigation link url to not-a-url', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn("couldn't use", result.reply)
+
+    def test_update_never_misroutes_a_plain_font_size_change(self):
+        # Regression guard -- no ordinal/item-noun present, so this must
+        # still reach the ORIGINAL UPDATE_MODULE_PROPS style-patch path.
+        context = {'selected_module': _selected('text', fontSize=16)}
+        result = self.provider.resolve('change the font size to 20', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'text',
+            'patch': {'fontSize': 20},
+        })
+
+    def test_update_never_misroutes_setting_the_email_title(self):
+        # Regression guard -- this exact collision was caught live: an
+        # earlier version of the router let "product title to X" get
+        # matched by the (unrelated) email-title pattern.
+        result = self.provider.resolve('set the email title to My Newsletter', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_EMAIL_TITLE, 'value': 'My Newsletter'})
+
+    def test_reorder_moves_an_item_to_a_new_position(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('move the fourth navigation link to position 2', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav',
+            'op': 'reorder', 'fromIndex': 3, 'toIndex': 1,
+        })
+
+    def test_add_repeatable_is_checked_before_nested_insert_despite_a_trailing_here(self):
+        # Regression guard for the exact collision found during
+        # implementation -- "... saying Great stuff here" ends in the
+        # literal word _NESTED_INSERT_PATTERN also looks for.
+        context = {'selected_module': _selected('content-icon-text-rows')}
+        result = self.provider.resolve('add a row called Highlights saying Great stuff here', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_REPEATABLE_FIELD)
+
+    def test_nested_insert_still_works_when_repeatable_add_pattern_does_not_match(self):
+        result = self.provider.resolve('add a text module here', {})
+        self.assertEqual(result.action, {
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {},
+        })
+
 
 class ResolveColorTests(TestCase):
     def test_hex_passthrough_uppercased(self):
@@ -2398,6 +2647,278 @@ class ValidateActionTests(TestCase):
             {'type': ActionType.CLEAR_FAVICON},
         ]:
             self.assertTrue(requires_confirmation(action))
+
+    # --- Sub-phase 6, work package D -- the six previously-reserved action types ---
+
+    def test_update_module_settings_accepts_the_allow_listed_boolean_fields(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'button',
+            'patch': {'outlookVml': True},
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'target': 'selected', 'module_type': 'button',
+            'patch': {'outlookVml': True},
+        })
+
+    def test_update_module_settings_accepts_visibility_enum(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text',
+            'patch': {'visibility': 'hideMobile'},
+        })
+        self.assertEqual(result['patch'], {'visibility': 'hideMobile'})
+
+    def test_update_module_settings_rejects_unknown_settings_key(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text',
+            'patch': {'columnGutter': {'value': 999}},
+        })
+        self.assertIsNone(result)
+
+    def test_update_module_settings_rejects_invalid_visibility_value(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text',
+            'patch': {'visibility': 'hideEverything'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_module_settings_rejects_non_boolean_for_boolean_field(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'button',
+            'patch': {'outlookVml': 'yes'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_module_settings_rejects_unknown_module_type(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'not-a-real-type',
+            'patch': {'outlookVml': True},
+        })
+        self.assertIsNone(result)
+
+    def test_apply_vml_pattern_accepts_button(self):
+        result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'button'})
+        self.assertEqual(result, {'type': ActionType.APPLY_VML_PATTERN, 'target': 'selected', 'module_type': 'button'})
+
+    def test_apply_vml_pattern_rejects_a_non_button_capable_type(self):
+        result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'text'})
+        self.assertIsNone(result)
+
+    def test_apply_outlook_wrapper_accepts_hero_background_image(self):
+        result = validate_action({'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'hero-background-image'})
+        self.assertEqual(result, {
+            'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'target': 'selected', 'module_type': 'hero-background-image',
+        })
+
+    def test_apply_outlook_wrapper_rejects_a_non_background_capable_type(self):
+        # A button is VML-button-capable but NOT VML-background-capable --
+        # proves the two allow-lists are genuinely distinct, not aliases.
+        result = validate_action({'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'button'})
+        self.assertIsNone(result)
+
+    def test_apply_vml_pattern_accepts_every_manifest_bulletproof_cta_type(self):
+        # Sub-phase 6 closure -- APPLY_VML_PATTERN is now capability-driven
+        # (module_capabilities.supports_bulletproof_cta), not a hardcoded
+        # {'button'} set. Every one of the eligible types must validate,
+        # proving the wiring is genuinely manifest-driven rather than a
+        # second hand-typed list that happens to match today. Includes the
+        # final-reconciliation pill-link types: their bordered/rounded
+        # container degrades to a square in Classic Outlook exactly like an
+        # unfilled button would, regardless of the missing background fill.
+        for module_type in [
+            'cta-centered', 'cta-banner', 'cta-text-cta', 'cta-dual',
+            'content-heading-text-cta', 'content-image-left', 'content-image-right', 'content-image-top',
+            'hero-image-cta', 'hero-background-image', 'hero-text-only', 'hero-image-left', 'hero-image-right',
+            'hero-centered-promo', 'header-logo-cta', 'product-single', 'product-two-cards', 'product-three-cards',
+            'product-image-price-cta', 'product-grid', 'image-text', 'text-image',
+            'social-icon-row', 'social-follow-us', 'footer-social-legal',
+        ]:
+            with self.subTest(module_type=module_type):
+                result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': module_type})
+                self.assertEqual(result, {'type': ActionType.APPLY_VML_PATTERN, 'target': 'selected', 'module_type': module_type})
+
+    def test_apply_vml_pattern_still_rejects_plain_link_module_types(self):
+        # Evidence-based exclusions surviving the final reconciliation --
+        # these render plain text/nav links with NO bordered/rounded
+        # container at all (unlike the pill-link types above).
+        for module_type in [
+            'header-logo-nav', 'content-article-teaser', 'footer-preference-unsubscribe',
+            'footer-simple-legal', 'footer-address-contact',
+        ]:
+            with self.subTest(module_type=module_type):
+                result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': module_type})
+                self.assertIsNone(result)
+
+    def test_restructure_layout_accepts_valid_widths_summing_to_100(self):
+        result = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [60, 40],
+        })
+        self.assertEqual(result, {
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'target': 'selected', 'module_type': 'layout-2col-50-50',
+            'widths': [60.0, 40.0],
+        })
+
+    def test_restructure_layout_rejects_a_non_layout_module_type(self):
+        result = validate_action({'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'text', 'widths': [100]})
+        self.assertIsNone(result)
+
+    def test_restructure_layout_rejects_widths_not_summing_to_100(self):
+        result = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [60, 60],
+        })
+        self.assertIsNone(result)
+
+    def test_restructure_layout_rejects_a_width_below_the_minimum(self):
+        result = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-3col', 'widths': [95, 3, 2],
+        })
+        self.assertIsNone(result)
+
+    def test_restructure_layout_requires_confirmation(self):
+        action = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [60, 40],
+        })
+        self.assertTrue(requires_confirmation(action))
+
+    def test_insert_nested_module_accepts_a_non_layout_type_with_a_patch(self):
+        result = validate_action({
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {'text': 'Hello'},
+        })
+        self.assertEqual(result, {
+            'type': ActionType.INSERT_NESTED_MODULE, 'target': 'selected_column', 'module_type': 'text',
+            'patch': {'text': 'Hello'},
+        })
+
+    def test_insert_nested_module_rejects_nesting_a_layout_inside_a_layout(self):
+        result = validate_action({
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'layout-2col-50-50', 'patch': {},
+        })
+        self.assertIsNone(result)
+
+    def test_insert_nested_module_rejects_unknown_module_type(self):
+        result = validate_action({'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'not-a-real-type', 'patch': {}})
+        self.assertIsNone(result)
+
+    def test_insert_nested_module_tolerates_a_missing_patch(self):
+        result = validate_action({'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'button'})
+        self.assertEqual(result['patch'], {})
+
+    def test_replace_unsupported_property_uses_the_same_gate_as_update_module_props(self):
+        result = validate_action({
+            'type': ActionType.REPLACE_UNSUPPORTED_PROPERTY, 'module_type': 'text',
+            'patch': {'color': 'green', 'onclick': 'alert(1)'},
+        })
+        self.assertEqual(result['patch'], {'color': '#76C043'})
+
+    def test_replace_unsupported_property_rejects_unknown_module_type(self):
+        result = validate_action({
+            'type': ActionType.REPLACE_UNSUPPORTED_PROPERTY, 'module_type': 'not-a-real-type', 'patch': {'color': 'green'},
+        })
+        self.assertIsNone(result)
+
+    # --- Sub-phase 6, work package E -- UPDATE_REPEATABLE_FIELD ---
+
+    def test_update_repeatable_field_add_validates_item_against_manifest_item_schema(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'Pricing', 'href': 'https://example.com/pricing', 'onclick': 'alert(1)'},
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'target': 'selected', 'module_type': 'header-logo-nav',
+            'op': 'add', 'item': {'label': 'Pricing', 'href': 'https://example.com/pricing'},
+        })
+
+    def test_update_repeatable_field_add_rejects_a_module_type_with_no_repeatable_field(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'text', 'op': 'add',
+            'item': {'label': 'x', 'href': 'https://example.com'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_repeatable_field_add_drops_an_unsafe_href_but_keeps_the_safe_label(self):
+        # Same per-field drop convention _validate_patch already uses for
+        # UPDATE_MODULE_PROPS — an unsafe individual field is dropped, not
+        # a reason to reject the whole item, as long as something safe
+        # survives.
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'x', 'href': 'javascript:alert(1)'},
+        })
+        self.assertEqual(result['item'], {'label': 'x'})
+        self.assertNotIn('href', result['item'])
+
+    def test_update_repeatable_field_add_rejects_an_empty_item(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'notARealKey': 'x'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_repeatable_field_update_requires_a_non_negative_index(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'update',
+            'index': 0, 'item': {'label': 'Renamed'},
+        })
+        self.assertEqual(result['index'], 0)
+        rejected = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'update',
+            'index': -1, 'item': {'label': 'x'},
+        })
+        self.assertIsNone(rejected)
+
+    def test_update_repeatable_field_remove_requires_a_non_negative_index(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'remove', 'index': 2,
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'target': 'selected', 'module_type': 'header-logo-nav',
+            'op': 'remove', 'index': 2,
+        })
+
+    def test_update_repeatable_field_remove_requires_confirmation(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'remove', 'index': 0,
+        })
+        self.assertTrue(requires_confirmation(action))
+
+    def test_update_repeatable_field_add_does_not_require_confirmation(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'x', 'href': 'https://example.com'},
+        })
+        self.assertFalse(requires_confirmation(action))
+
+    def test_update_repeatable_field_reorder_requires_both_indices(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'reorder',
+            'fromIndex': 0, 'toIndex': 2,
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'target': 'selected', 'module_type': 'header-logo-nav',
+            'op': 'reorder', 'fromIndex': 0, 'toIndex': 2,
+        })
+
+    def test_update_repeatable_field_rejects_an_unknown_op(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'delete_everything',
+        })
+        self.assertIsNone(result)
+
+    def test_update_repeatable_field_works_for_product_items_too(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'product-single', 'op': 'update',
+            'index': 0, 'item': {'name': 'New Product', 'price': '$19.99'},
+        })
+        self.assertEqual(result['item'], {'name': 'New Product', 'price': '$19.99'})
+
+    def test_reserved_action_types_are_no_longer_reduced_to_none(self):
+        # Sub-phase 5's provenance/knowledge tests already prove the
+        # OPPOSITE state (reserved-but-unimplemented) is gone; this proves
+        # every one of the six now round-trips through its own real branch.
+        for action_type in ActionType.STRUCTURAL | {
+            ActionType.UPDATE_MODULE_SETTINGS, ActionType.INSERT_NESTED_MODULE,
+            ActionType.APPLY_OUTLOOK_WRAPPER, ActionType.APPLY_VML_PATTERN, ActionType.REPLACE_UNSUPPORTED_PROPERTY,
+        }:
+            self.assertIn(action_type, ActionType.IMPLEMENTED)
 
 
 class EmailAICommandViewTests(TestCase):
