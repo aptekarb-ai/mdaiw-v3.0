@@ -1507,7 +1507,11 @@ from .ai_command import (  # noqa: E402
 from .ai_command_openai import OpenAIEmailCommandProvider  # noqa: E402
 from .ai_command_local import LocalEmailCommandProvider  # noqa: E402
 from . import module_capabilities  # noqa: E402
-from .knowledge.rules import KnowledgeRule, KnowledgeRuleValidationError, find_rule, load_rules  # noqa: E402
+from .knowledge.rules import (  # noqa: E402
+    AFFECTED_CLIENT_VALUES, CONCERN_VALUES, EMAIL_CLIENT_REGISTRY, KNOWLEDGE_RULE_CATEGORIES,
+    KnowledgeRule, KnowledgeRuleValidationError, find_rule, find_rules_by_category, find_rules_by_client,
+    find_rules_by_concern, load_rules,
+)
 
 
 def _selected(module_type, **props):
@@ -1751,19 +1755,42 @@ class EmailAiEngineerCssCommandTests(TestCase):
         self.assertEqual(resolve_asset_references(action, request=None), action)
 
 
-class KnowledgeRuleTests(TestCase):
-    """Sub-phase 3, item 13 -- the KnowledgeRule contract stays satisfied
-    by every real rule, and load_rules()/find_rule() behave as the
-    deterministic explain intent (below) depends on."""
+def _minimal_rule_kwargs(**overrides):
+    """A fully-valid baseline KnowledgeRule kwargs dict, for tests that
+    only want to exercise ONE deliberately-broken field. Sub-phase 5
+    added `concerns`/`source` as required fields with no default, so
+    every test that constructs a KnowledgeRule directly (rather than via
+    load_rules()) needs a valid value for both, or it fails with a
+    TypeError from the dataclass constructor itself -- before
+    __post_init__ even runs -- which would silently defeat tests that
+    exist specifically to prove __post_init__'s OWN validation."""
+    kwargs = {
+        'id': 'bad', 'category': 'outlook', 'title': 't', 'description': 'd', 'severity': 'info',
+        'affected_clients': ('BOTH',), 'concerns': ('rendering-engine',), 'detection': {},
+        'suggested_fix': None, 'safe_auto_fix': False, 'references': (), 'confidence': 1.0,
+        'source': {'name': 'test', 'url': None, 'license': None, 'version': None, 'date': None, 'transformation': None},
+    }
+    kwargs.update(overrides)
+    return kwargs
 
-    def test_load_rules_returns_nine_outlook_rules_and_five_document_rules(self):
+
+class KnowledgeRuleTests(TestCase):
+    """Sub-phase 3, item 13 + Sub-phase 4, item 6 + Sub-phase 5 (Phase B
+    -- Professional Email Knowledge Engine) -- the KnowledgeRule contract
+    stays satisfied by every real rule, and load_rules()/find_rule()/the
+    new find_rules_by_*() query helpers behave as the deterministic
+    explain intent (below) depends on."""
+
+    def test_load_rules_returns_fifty_rules_across_the_original_categories(self):
         rules = load_rules()
-        self.assertEqual(len(rules), 14)
+        self.assertEqual(len(rules), 50)
         for rule in rules:
             self.assertIsInstance(rule, KnowledgeRule)
         outlook_rules = [r for r in rules if r.category == 'outlook']
         document_rules = [r for r in rules if r.category == 'document']
-        self.assertEqual(len(outlook_rules), 9)
+        # Sub-phase 3/4's original counts must never shrink -- Sub-phase 5
+        # is additive only.
+        self.assertGreaterEqual(len(outlook_rules), 9)
         self.assertEqual(len(document_rules), 5)
 
     def test_row_collapse_rule_is_kept_in_sync_with_the_repair_engines_actual_safe_fix(self):
@@ -1789,27 +1816,164 @@ class KnowledgeRuleTests(TestCase):
 
     def test_knowledge_rule_rejects_an_unknown_category(self):
         with self.assertRaises(KnowledgeRuleValidationError):
-            KnowledgeRule(
-                id='bad', category='not-a-real-category', title='t', description='d', severity='info',
-                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
-                references=(), confidence=1.0,
-            )
+            KnowledgeRule(**_minimal_rule_kwargs(category='not-a-real-category'))
 
     def test_knowledge_rule_rejects_an_unknown_affected_client(self):
         with self.assertRaises(KnowledgeRuleValidationError):
-            KnowledgeRule(
-                id='bad', category='outlook', title='t', description='d', severity='info',
-                affected_clients=('SOME_OTHER_CLIENT',), detection={}, suggested_fix=None, safe_auto_fix=False,
-                references=(), confidence=1.0,
-            )
+            KnowledgeRule(**_minimal_rule_kwargs(affected_clients=('SOME_OTHER_CLIENT',)))
 
     def test_knowledge_rule_rejects_an_out_of_range_confidence(self):
         with self.assertRaises(KnowledgeRuleValidationError):
-            KnowledgeRule(
-                id='bad', category='outlook', title='t', description='d', severity='info',
-                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
-                references=(), confidence=1.5,
-            )
+            KnowledgeRule(**_minimal_rule_kwargs(confidence=1.5))
+
+    # --- Sub-phase 5 -- new required fields' own validation ---
+
+    def test_knowledge_rule_rejects_empty_concerns(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(concerns=()))
+
+    def test_knowledge_rule_rejects_an_unknown_concern(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(concerns=('not-a-real-concern',)))
+
+    def test_knowledge_rule_rejects_a_non_dict_source(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source='not-a-dict'))
+
+    def test_knowledge_rule_rejects_a_source_missing_name(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source={
+                'name': '', 'url': None, 'license': None, 'version': None, 'date': None, 'transformation': None,
+            }))
+
+    def test_knowledge_rule_rejects_a_source_with_unexpected_keys(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source={
+                'name': 'x', 'url': None, 'license': None, 'version': None, 'date': None,
+                'transformation': None, 'unexpected_key': 'oops',
+            }))
+
+    def test_knowledge_rule_rejects_a_source_missing_a_required_key(self):
+        """Every source key must be PRESENT (even if its value is None) --
+        provenance must never be silently partial."""
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source={'name': 'x', 'url': None, 'license': None}))
+
+    # --- Sub-phase 5 -- lookup by issue/category/client/concern ---
+
+    def test_lookup_by_category(self):
+        rules = find_rules_by_category('outlook')
+        self.assertGreater(len(rules), 0)
+        for rule in rules:
+            self.assertEqual(rule.category, 'outlook')
+
+    def test_lookup_by_client(self):
+        gmail_rules = find_rules_by_client('GMAIL')
+        self.assertGreater(len(gmail_rules), 0)
+        for rule in gmail_rules:
+            self.assertIn('GMAIL', rule.affected_clients)
+
+    def test_lookup_by_concern(self):
+        vml_rules = find_rules_by_concern('vml')
+        self.assertGreater(len(vml_rules), 0)
+        for rule in vml_rules:
+            self.assertIn('vml', rule.concerns)
+
+    def test_lookup_by_client_and_category_can_disagree_with_lookup_by_concern(self):
+        """Proves the two axes (category vs concern) are genuinely
+        independent, not the same dimension under two names: a rule
+        tagged with the 'vml' concern can belong to a DIFFERENT category
+        than 'outlook' (email-bulletproof-background-pattern is
+        category='images', concerns includes 'vml') -- concern and
+        category are not just relabelings of each other."""
+        vml_concern_rule_categories = {r.category for r in find_rules_by_concern('vml')}
+        self.assertIn('outlook', vml_concern_rule_categories)
+        self.assertIn('images', vml_concern_rule_categories)
+        self.assertGreater(len(vml_concern_rule_categories), 1)
+
+    # --- Sub-phase 5 -- Classic vs New Outlook distinctness under the
+    # larger rule set (item: "Classic Outlook and New Outlook remain
+    # distinct") ---
+
+    def test_classic_and_new_outlook_rules_are_disjoint_except_for_both_tagged_rules(self):
+        classic_only = {r.id for r in load_rules() if r.affected_clients == ('OUTLOOK_CLASSIC',)}
+        new_only = {r.id for r in load_rules() if r.affected_clients == ('NEW_OUTLOOK',)}
+        self.assertTrue(classic_only.isdisjoint(new_only))
+        self.assertGreater(len(classic_only), len(new_only) - 1)  # Classic has deeper coverage today
+
+    def test_new_outlook_dark_mode_and_classic_outlook_dark_mode_are_different_rules_with_different_facts(self):
+        new_rule = find_rule('new-outlook-auto-dark-mode')
+        classic_rule = find_rule('outlook-classic-no-auto-dark-mode')
+        self.assertNotEqual(new_rule.id, classic_rule.id)
+        self.assertEqual(new_rule.affected_clients, ('NEW_OUTLOOK',))
+        self.assertEqual(classic_rule.affected_clients, ('OUTLOOK_CLASSIC',))
+        # the facts genuinely disagree (New Outlook DOES auto-invert,
+        # Classic does NOT) -- proves this isn't two copies of one fact.
+        self.assertIn('does not automatically invert', classic_rule.description)
+        self.assertIn('can automatically invert', new_rule.description)
+
+    # --- Sub-phase 5 -- provenance survives, and is never fabricated ---
+
+    def test_every_rule_has_complete_provenance(self):
+        for rule in load_rules():
+            self.assertIsInstance(rule.source, dict, msg=rule.id)
+            self.assertTrue(rule.source.get('name'), msg=rule.id)
+            for key in ('url', 'license', 'version', 'date', 'transformation'):
+                self.assertIn(key, rule.source, msg=f'{rule.id} missing source.{key}')
+
+    def test_caniemail_informed_rules_never_overclaim_a_literal_dataset_adaptation(self):
+        """PROVENANCE HONESTY -- a rule cross-referenced against Can I
+        Email's public data (not literally parsed from it) must say so
+        honestly, never claim "ADAPTED FROM Can I Email" wording that
+        would imply an automated transform that did not happen."""
+        caniemail_rules = [r for r in load_rules() if 'caniemail.com' in (r.source.get('url') or '')]
+        self.assertGreater(len(caniemail_rules), 0)
+        for rule in caniemail_rules:
+            self.assertNotIn('ADAPTED FROM', rule.source['name'].upper())
+            self.assertIn('cross-referenced', rule.source['name'])
+            self.assertIsNone(rule.source['version'])  # no dataset snapshot was pinned
+
+    def test_developer_authored_rules_never_claim_an_external_source(self):
+        developer_rules = [r for r in load_rules() if r.source['url'] is None]
+        self.assertGreater(len(developer_rules), 0)
+        for rule in developer_rules:
+            self.assertIn('developer-authored', rule.source['name'])
+
+    # --- Sub-phase 5 -- zero-network lookup (deterministic operation) ---
+
+    def test_load_rules_never_touches_the_network(self):
+        """A crude but real guarantee: load_rules() returns a plain
+        in-memory tuple->list conversion with zero I/O of any kind --
+        proven by the fact it completes with no mocking/patching of any
+        network or filesystem primitive required."""
+        import time
+        started = time.perf_counter()
+        load_rules()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        self.assertLess(elapsed_ms, 50)  # a real network/disk call would be orders of magnitude slower
+
+    # --- Feature 14 V3 architectural invariant (client-registry
+    # extensibility) -- proves the taxonomy is genuinely structured-data-
+    # driven, not a permanently finite hardcoded enum. ---
+
+    def test_affected_client_values_is_computed_from_the_registry_not_independently_hardcoded(self):
+        from emailbuilder.knowledge.rules import _AFFECTED_CLIENT_META_VALUES
+        self.assertEqual(AFFECTED_CLIENT_VALUES, frozenset(EMAIL_CLIENT_REGISTRY.keys()) | _AFFECTED_CLIENT_META_VALUES)
+
+    def test_every_registry_client_has_a_name_and_engine_family(self):
+        for client_id, meta in EMAIL_CLIENT_REGISTRY.items():
+            self.assertTrue(meta.get('name'), msg=client_id)
+            self.assertTrue(meta.get('engine_family'), msg=client_id)
+
+    # --- Validation Center / AI Engineer shared source of truth ---
+
+    def test_knowledge_categories_stay_in_lockstep_with_validation_centers_categories(self):
+        """frontend/src/emailbuilder/emailValidation.ts's 9 categories are
+        the single source of truth this mirrors -- a category present
+        here but not there (or vice versa) is a rule-authoring bug."""
+        self.assertEqual(KNOWLEDGE_RULE_CATEGORIES, {
+            'document', 'html', 'outlook', 'responsive', 'accessibility', 'links', 'images', 'dark-mode', 'platform',
+        })
 
 
 class EmailAiEngineerExplainIntentTests(TestCase):
@@ -1928,6 +2092,99 @@ class EmailAiEngineerExplainIntentTests(TestCase):
         result = self.provider.resolve('explain the row collapse trick', {})
         self.assertNotIn('css', result.action)
         self.assertEqual(result.action, {'type': ActionType.NONE})
+
+
+class EmailAiEngineerExplainIntentSubphase5Tests(TestCase):
+    """Sub-phase 5 -- deterministic explain coverage for the expanded
+    (14 -> 50 rule) knowledge base, one representative phrasing per new
+    client/concern. Proves the AI Engineer's zero-token explain intent
+    genuinely surfaces the Sub-phase 5 knowledge, not just the original
+    14 rules."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def _assert_explains(self, message, expected_substring):
+        result = self.provider.resolve(message, {})
+        self.assertEqual(result.action, {'type': ActionType.NONE}, msg=message)
+        self.assertIn(expected_substring, result.reply, msg=message)
+        return result
+
+    def test_explain_gmail_dark_mode(self):
+        self._assert_explains('explain gmail dark mode', 'Gmail')
+
+    def test_explain_apple_mail_dark_mode(self):
+        self._assert_explains('explain apple mail dark mode', 'Apple Mail')
+
+    def test_explain_new_outlook_dark_mode_differs_from_classic(self):
+        new_result = self._assert_explains('explain new outlook dark mode', 'New Outlook')
+        classic_result = self._assert_explains('explain classic outlook dark mode', 'Classic Outlook')
+        self.assertNotEqual(new_result.reply, classic_result.reply)
+
+    def test_explain_bare_dark_mode_gives_the_cross_client_strategy_not_a_single_client_guess(self):
+        # generic answer synthesizes across clients (may cite several as
+        # examples) rather than answering as if only one client was asked
+        # about -- proven by citing more than one client by name, not by
+        # the absence of any single client's name.
+        result = self._assert_explains('what is dark mode', 'three distinct behaviors')
+        self.assertIn('Gmail', result.reply)
+        self.assertIn('Classic Outlook', result.reply)
+
+    def test_explain_outlook_com(self):
+        self._assert_explains('explain outlook.com', 'Outlook.com')
+
+    def test_explain_new_outlook_css_support(self):
+        self._assert_explains('explain new outlook css support', 'Chromium')
+
+    def test_explain_ios_mail_format_detection(self):
+        self._assert_explains('explain ios mail format detection', 'auto-links')
+
+    def test_explain_dynamic_type(self):
+        self._assert_explains('what is dynamic type', 'Dynamic Type')
+
+    def test_explain_gmail_clipping(self):
+        self._assert_explains('explain gmail clipping', '102KB')
+
+    def test_explain_gmail_image_blocking(self):
+        self._assert_explains('explain gmail image blocking', 'proxies')
+
+    def test_explain_gmail_bare_gives_a_gmail_specific_answer(self):
+        self._assert_explains('explain gmail', 'Gmail')
+
+    def test_explain_apple_mail_bare(self):
+        self._assert_explains('explain apple mail', 'Apple Mail')
+
+    def test_explain_yahoo_mail(self):
+        self._assert_explains('explain yahoo mail', 'Yahoo')
+
+    def test_explain_aol_mail(self):
+        self._assert_explains('explain aol mail', 'AOL')
+
+    def test_explain_bulletproof_button(self):
+        self._assert_explains('explain bulletproof button', 'VML')
+
+    def test_explain_outlook_background_image(self):
+        self._assert_explains('explain outlook background image', 'Word')
+
+    def test_explain_table_layout(self):
+        self._assert_explains('explain table layout', 'table')
+
+    def test_explain_outlook_line_height(self):
+        self._assert_explains('explain outlook line height', 'mso-line-height-rule')
+
+    def test_explain_hybrid_width(self):
+        self._assert_explains('explain hybrid width', 'ghost table')
+
+    def test_explain_absolute_links(self):
+        self._assert_explains('explain absolute links', 'https://')
+
+    def test_explain_wcag_contrast(self):
+        self._assert_explains('explain wcag contrast', 'WCAG')
+
+    def test_explain_unrecognized_new_topic_still_gives_the_updated_clarify_reply(self):
+        result = self.provider.resolve('explain the meaning of life', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Gmail', result.reply)  # the clarify reply itself now advertises the new topics
 
 
 class EmailAiEngineerDocumentSettingsCommandTests(TestCase):

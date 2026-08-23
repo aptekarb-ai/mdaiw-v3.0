@@ -569,16 +569,80 @@ _FAVICON_VALUE_PREFIX_PATTERN = re.compile(r'^(?:url\s+)?(?:to|as)?\s*:?\s*', re
 # "vml ... namespace") are listed before the bare "vml" catch-all so a
 # fully-specific question still resolves to the more precise rule.
 _EXPLAIN_PATTERN = re.compile(r'\b(explain|what\s+is|what\'?s|why\s+does|why\s+is|tell\s+me\s+about)\b', re.IGNORECASE)
+# Sub-phase 5 — extended from 16 to ~60 topic patterns as the knowledge
+# base grew from 14 to 50 rules. ORDERING DISCIPLINE (unchanged from
+# Sub-phase 3, now load-bearing at this size): a client+concern COMBO
+# pattern (e.g. "dark mode" + "gmail") must be listed BEFORE any single-
+# keyword pattern it could otherwise collide with (e.g. the bare "new
+# outlook" pattern below would swallow "explain new outlook dark mode"
+# if the dark-mode-specific combo weren't checked first) — first match
+# in this tuple wins, always.
 _EXPLAIN_TOPICS = (
+    # --- Dark mode: client-specific combos BEFORE any bare client/topic
+    # pattern that could otherwise steal the match. ---
+    (re.compile(r'\bdark\s*mode\b.*\bgmail\b|\bgmail\b.*\bdark\s*mode\b', re.IGNORECASE), 'gmail-dark-mode-auto-invert'),
+    (re.compile(r'\bdark\s*mode\b.*\bapple\b|\bapple\b.*\bdark\s*mode\b', re.IGNORECASE), 'apple-mail-dark-mode-auto-invert'),
+    (re.compile(r'\bdark\s*mode\b.*\bnew\s*outlook\b|\bnew\s*outlook\b.*\bdark\s*mode\b', re.IGNORECASE), 'new-outlook-auto-dark-mode'),
+    (re.compile(r'\bdark\s*mode\b.*\bclassic\s*outlook\b|\bclassic\s*outlook\b.*\bdark\s*mode\b', re.IGNORECASE), 'outlook-classic-no-auto-dark-mode'),
+    # bare "dark mode" + "outlook" (no classic/new qualifier) deliberately
+    # does NOT default to Classic — routes to the honest cross-client
+    # strategy rule instead, same non-conflation discipline as everywhere
+    # else in this codebase.
+    (re.compile(r'\bwcag\b|\bcontrast\s*ratio\b|\baa\s*contrast\b', re.IGNORECASE), 'email-accessibility-wcag-contrast'),
+    (re.compile(r'\bdark\s*mode\b', re.IGNORECASE), 'email-dark-mode-general-strategy'),
+
+    # --- New Outlook vs Outlook.com, and New Outlook CSS, BEFORE the
+    # bare "new outlook" catch-all. ---
+    (re.compile(r'\boutlook\.?com\b|\bwebmail\s*outlook\b', re.IGNORECASE), 'new-outlook-vs-outlook-com'),
+    (re.compile(r'\bnew\s*outlook\b.*\bcss\b|\bcss\b.*\bnew\s*outlook\b', re.IGNORECASE), 'new-outlook-modern-css-support'),
+
+    # --- iOS Mail specific, BEFORE the generic format-detection pattern. ---
+    (re.compile(r'\bios\b.*\b(auto[\s-]*link|format[\s-]*detection|phone|address)\b', re.IGNORECASE), 'ios-mail-format-detection'),
+    (re.compile(r'\bdynamic\s*type\b', re.IGNORECASE), 'ios-mail-dynamic-type-scaling'),
+    (re.compile(r'\bios\s*mail\b', re.IGNORECASE), 'ios-mail-format-detection'),
+
+    # --- Gmail specific. ---
+    (re.compile(r'\bgmail\b.*\bclip', re.IGNORECASE), 'gmail-clipping-threshold'),
+    (re.compile(r'\bgmail\b.*\bimage\b|\bimage\b.*\bgmail\b', re.IGNORECASE), 'gmail-image-proxying-and-blocking'),
+    (re.compile(r'\bgmail\b.*\b(style|css)\b', re.IGNORECASE), 'gmail-embedded-style-support'),
+    (re.compile(r'\bgmail\b.*\bmedia\s*quer', re.IGNORECASE), 'gmail-media-query-support'),
+    (re.compile(r'\bgmail\b', re.IGNORECASE), 'gmail-embedded-style-support'),
+
+    # --- Apple Mail specific. ---
+    (re.compile(r'\bapple\s*mail\b', re.IGNORECASE), 'apple-mail-best-css-support'),
+
+    # --- Yahoo / AOL specific. ---
+    (re.compile(r'\byahoo\b.*\bimage\b|\bimage\b.*\byahoo\b', re.IGNORECASE), 'yahoo-mail-image-blocking'),
+    (re.compile(r'\byahoo\b', re.IGNORECASE), 'yahoo-mail-css-support'),
+    (re.compile(r'\baol\b', re.IGNORECASE), 'aol-mail-shared-yahoo-infrastructure'),
+
+    # --- New Outlook bare catch-all (after every combo above). ---
     (re.compile(r'\bnew\s*outlook\b|\bword\s*engine\b', re.IGNORECASE), 'outlook-word-engine-vs-new-outlook'),
     (re.compile(r'\b96[\s-]*dpi\b|\bpixels\s*per\s*inch\b|\bpixelsperinch\b', re.IGNORECASE), 'office-96-dpi'),
     (re.compile(r'\ballow\s*png\b|\ballowpng\b', re.IGNORECASE), 'outlook-allow-png'),
     (re.compile(r'\bvml\b.*\bnamespace\b|\bnamespace\b.*\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
     (re.compile(r'\bvml\b.*\bfallback\b|\bfallback\b.*\bvml\b', re.IGNORECASE), 'vml-requires-html-fallback'),
+    (re.compile(r'\bbulletproof\b.*\bbutton\b|\bbutton\b.*\bvml\b|\bvml\b.*\bbutton\b', re.IGNORECASE), 'outlook-bulletproof-button-pattern'),
+    (re.compile(r'\bbackground\s*image\b.*\boutlook\b|\boutlook\b.*\bbackground\s*image\b', re.IGNORECASE), 'outlook-background-image-needs-vml'),
+    (re.compile(r'\bbackground\s*image\b', re.IGNORECASE), 'email-bulletproof-background-pattern'),
     (re.compile(r'\brow[\s-]*collapse\b|\bzero[\s-]*height\b', re.IGNORECASE), 'global-row-collapse-danger'),
     (re.compile(r'\bspacer\b', re.IGNORECASE), 'spacer-row-safe-scoping'),
+    (re.compile(r'\bmso[\s-]*hide\b', re.IGNORECASE), 'outlook-mso-hide-preheader'),
+    (re.compile(r'\bpreheader\b', re.IGNORECASE), 'email-preheader-pattern-general'),
     (re.compile(r'\bfont\s*fallback\b', re.IGNORECASE), 'outlook-font-fallback-mso-only'),
     (re.compile(r'\bconditional\s*comment\b|mso\s*condition', re.IGNORECASE), 'conditional-comment-scope'),
+    (re.compile(r'\btable[\s-]*layout\b|\btables?\b.*\blayout\b', re.IGNORECASE), 'outlook-table-layout-required'),
+    (re.compile(r'\bline[\s-]*height\b.*\b(outlook|mso|exactly)\b|\b(outlook|mso)\b.*\bline[\s-]*height\b', re.IGNORECASE), 'outlook-line-height-exactly'),
+    (re.compile(r'\bline[\s-]*height\b', re.IGNORECASE), 'email-explicit-line-height-general'),
+    (re.compile(r'\bcss\s*support\b.*\boutlook\b|\boutlook\b.*\bcss\s*support\b', re.IGNORECASE), 'outlook-css-support-subset'),
+    (re.compile(r'\blist\b.*\b(padding|indent)\b.*\boutlook\b|\boutlook\b.*\blist\b', re.IGNORECASE), 'outlook-list-padding-behavior'),
+    (re.compile(r'\blist\b.*\b(padding|indent)\b', re.IGNORECASE), 'email-list-cross-client-indentation'),
+    (re.compile(r'\bhybrid\b.*\bwidth\b|\bfluid\b.*\bwidth\b', re.IGNORECASE), 'email-hybrid-width-strategy'),
+    (re.compile(r'\bmedia\s*quer', re.IGNORECASE), 'email-media-query-support-general'),
+    (re.compile(r'\bfont\s*fallback\b|\bfont\s*stack\b', re.IGNORECASE), 'email-font-fallback-stack-general'),
+    (re.compile(r'\babsolute\b.*\blinks?\b|\bhttps?\s*links?\b', re.IGNORECASE), 'email-links-absolute-https-only'),
+    (re.compile(r'\binline\s*style\b|\bstyle\s*block\b', re.IGNORECASE), 'email-css-inline-vs-style-block-strategy'),
+    (re.compile(r'\bchromium\b|\bwebkit\b', re.IGNORECASE), 'email-webmail-chromium-webkit-family'),
     # Sub-phase 4, item 6 — document-standards explainer rules.
     (re.compile(r'\btitle\b.*\b(name|subject)\b|\b(name|subject)\b.*\btitle\b', re.IGNORECASE), 'email-title-vs-document-name'),
     (re.compile(r'\bsubject\b', re.IGNORECASE), 'email-subject-is-send-metadata'),
@@ -587,14 +651,16 @@ _EXPLAIN_TOPICS = (
     (re.compile(r'\breset\s*css\b', re.IGNORECASE), 'reset-css-purpose'),
     (re.compile(r'\bmeta\s*(?:data)?\s*baseline\b|\brequired\s*meta\b|\bformat[\s-]*detection\b', re.IGNORECASE), 'required-email-meta-baseline'),
     (re.compile(r'\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
+    (re.compile(r'\balt\s*text\b|\bimage\b.*\baccessib', re.IGNORECASE), 'email-accessibility-alt-text-general'),
+    (re.compile(r'\bcss\s*support\b', re.IGNORECASE), 'email-css-inline-vs-style-block-strategy'),
 )
 
 _EXPLAIN_CLARIFY_REPLY = (
-    'I can explain: the Word rendering engine vs New Outlook, the 96-DPI Office setting, AllowPNG, '
-    'the VML namespace, why VML needs an HTML fallback, why a global row-collapse rule is risky, safe '
-    'spacer-row scoping, Outlook font fallback, MSO conditional-comment scope, the email title vs the '
-    'document name, why the subject is send metadata, favicon URL requirements, Reset CSS, and the '
-    'required email meta baseline. Which one?'
+    'Which one? I can explain a wide range of email-client compatibility topics — Classic and New Outlook, '
+    'Gmail, Apple Mail, iOS Mail, Yahoo Mail, AOL Mail, VML, MSO conditional comments, dark mode, tables, '
+    'fonts, line-height, backgrounds, buttons, lists, links, accessibility, and this document\'s own title/'
+    'subject/favicon/Reset CSS/required meta baseline. Ask about a specific topic or client and I\'ll '
+    'explain it.'
 )
 
 
