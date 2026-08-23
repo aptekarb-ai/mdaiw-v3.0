@@ -201,3 +201,67 @@ class SavedEmailModule(models.Model):
 
     def __str__(self):
         return f'{self.name} (user={self.user_id})'
+
+
+class RepairSignalOutcome(models.TextChoices):
+    ACCEPTED = 'accepted', 'Accepted'
+    REJECTED = 'rejected', 'Rejected'
+
+
+class RepairSignalSource(models.TextChoices):
+    VALIDATION_CENTER_SINGLE = 'validation_center_single', 'Validation Center — single Fix'
+    VALIDATION_CENTER_BULK = 'validation_center_bulk', 'Validation Center — Fix All'
+    AI_ENGINEER_REPAIR = 'ai_engineer_repair', 'AI Engineer — repair proposal'
+
+
+class LearnedRepairSignal(models.Model):
+    """Feature 14 V3 Sub-phase 8 — one explicit, per-user Accept/Reject
+    decision about a REPAIR ISSUE TYPE (never a specific document/module
+    instance). Ranking/advisory only — see learning.py's module docstring
+    for the full invariant list this table must never violate. Deliberately
+    minimal: no document/module/content/prop fields, ever (see the
+    approved report — storing instance identifiers or raw content here
+    would be both unnecessary for ranking and a privacy/blast-radius risk
+    this feature has no reason to take on).
+
+    `event_id` is a client-generated identifier for the ONE human
+    interaction (a single Fix click, or one candidate within one Fix-All/
+    AI-Engineer-repair-proposal Apply-or-Cancel click) that produced this
+    row — see EmailBuilderWorkspacePage's callers. The
+    (user, event_id) uniqueness below is the DURABLE correctness
+    mechanism for "retrying the same network request must not create a
+    second learning event" (approved amendment) — the cache-based rate
+    limit in views.py is abuse protection only, never deduplication."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='learned_repair_signals',
+    )
+    # Not a strict Django UUIDField on purpose — the frontend reuses
+    # idGenerator.ts's existing generateId() (crypto.randomUUID() with a
+    # non-UUID string fallback for environments without it), the SAME id
+    # generator every EDM module/column id already uses, rather than
+    # introducing a second, UUID-only id generator for this one field.
+    # Uniqueness (not UUID-ness) is what the idempotency contract needs.
+    event_id = models.CharField(max_length=64)
+    # Stable "<category>:<rule-slug>" signature only — see
+    # repairEngine.ts's signatureForIssueId(). NEVER the full
+    # ValidationIssue.id (which carries a per-instance module/document id
+    # suffix), never props/content/HTML, never a provider prompt.
+    signature = models.CharField(max_length=160)
+    outcome = models.CharField(max_length=20, choices=RepairSignalOutcome.choices)
+    source = models.CharField(max_length=30, choices=RepairSignalSource.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'event_id'], name='unique_learned_repair_signal_event'),
+        ]
+        indexes = [
+            models.Index(fields=['user', 'signature', 'created_at'], name='learnedrepairsignal_rank_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.signature}={self.outcome} (user={self.user_id})'

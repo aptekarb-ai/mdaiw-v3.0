@@ -5,12 +5,23 @@ import { AIEngineerPanel } from './AIEngineerPanel';
 import { requestAICommand } from '../api/client';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { createModule } from './moduleFactory';
+import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import type { AICommandResponse } from './aiCommand';
 
 vi.mock('../api/client', () => ({ requestAICommand: vi.fn() }));
 vi.mock('../hooks/useSpeechRecognition', () => ({
   isSpeechRecognitionSupported: vi.fn(),
   useSpeechRecognition: vi.fn(),
+}));
+// Sub-phase 8 — mocked at the module boundary so these UI tests assert
+// WHAT gets recorded (signature/outcome/source) without depending on a
+// real network call; learningSignals.ts's own unit tests separately cover
+// its actual apiRequest wiring and failure-swallowing behavior.
+vi.mock('./learningSignals', () => ({
+  recordRepairSignal: vi.fn().mockResolvedValue(undefined),
+  clearLearnedRepairSignals: vi.fn().mockResolvedValue(true),
+  newLearningEventId: vi.fn(() => 'test-event-id'),
+  fetchRepairRanking: vi.fn().mockResolvedValue({}),
 }));
 
 function mockSpeech(overrides: Partial<ReturnType<typeof useSpeechRecognition>> = {}) {
@@ -535,6 +546,24 @@ describe('AIEngineerPanel — Sub-phase 4, item 2/4: document diagnose/repair in
     expect(await screen.findByText('Cancelled. Nothing was changed.')).toBeInTheDocument();
   });
 
+  it('Cancel on a repair proposal records a REJECTED learning signal for the candidate', async () => {
+    mockSpeech();
+    renderPanel({ resetCssEnabled: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(recordRepairSignal).toHaveBeenCalledWith({
+      eventId: 'test-event-id',
+      signature: 'document:reset-css-disabled',
+      outcome: 'rejected',
+      source: 'ai_engineer_repair',
+    });
+  });
+
   it('Apply on a repair proposal calls onApplyRepairAction with the deterministic repair item', async () => {
     mockSpeech();
     const { onApplyRepairAction } = renderPanel({ resetCssEnabled: false });
@@ -549,6 +578,71 @@ describe('AIEngineerPanel — Sub-phase 4, item 2/4: document diagnose/repair in
       { kind: 'document', issueId: 'document:reset-css-disabled', documentPatch: { reset_css_enabled: true } },
     ]);
     expect(await screen.findByText('Repaired 1 issue.')).toBeInTheDocument();
+  });
+
+  it('Apply on a repair proposal records an ACCEPTED learning signal for the candidate, with its own event id', async () => {
+    mockSpeech();
+    renderPanel({ resetCssEnabled: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(newLearningEventId).toHaveBeenCalled();
+    expect(recordRepairSignal).toHaveBeenCalledWith({
+      eventId: 'test-event-id',
+      signature: 'document:reset-css-disabled',
+      outcome: 'accepted',
+      source: 'ai_engineer_repair',
+    });
+  });
+
+  it('Apply that fails to apply (onApplyRepairAction returns false) records no learning signal', async () => {
+    mockSpeech();
+    renderPanel({ resetCssEnabled: false, onApplyRepairAction: vi.fn().mockReturnValue(false) });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText('Could not apply the repair. Please try again.');
+    expect(recordRepairSignal).not.toHaveBeenCalled();
+  });
+
+  it('"Clear learned preferences" shows the required confirmation copy and calls clearLearnedRepairSignals only after confirming', async () => {
+    mockSpeech();
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('tab', { name: 'History' }));
+    await user.click(screen.getByRole('button', { name: 'Clear learned preferences' }));
+
+    expect(screen.getByText(
+      'Clear learned preferences? This resets recommendation ordering only and does not affect '
+      + 'email content, validation rules, or safety rules.',
+    )).toBeInTheDocument();
+    expect(clearLearnedRepairSignals).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(clearLearnedRepairSignals).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Learned preferences cleared/)).toBeInTheDocument();
+  });
+
+  it('"Clear learned preferences" confirmation Cancel does not call clearLearnedRepairSignals', async () => {
+    mockSpeech();
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('tab', { name: 'History' }));
+    await user.click(screen.getByRole('button', { name: 'Clear learned preferences' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(clearLearnedRepairSignals).not.toHaveBeenCalled();
+    expect(screen.queryByText(/This resets recommendation ordering only/)).not.toBeInTheDocument();
   });
 
   it('a repair-keyword request with no matching issue never fabricates a proposal', async () => {

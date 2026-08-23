@@ -4471,3 +4471,432 @@ class LocalEmailCommandProviderComposeTests(TestCase):
             result = provider.resolve('Create a product launch email.', {})
         self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
         self.assertEqual(result.provider, 'deterministic')
+
+
+# ============================================================================
+# Feature 14 V3 Sub-phase 8 — Safe Self-Learning / Memory (repair-signal
+# ranking only)
+# ============================================================================
+
+from datetime import timedelta  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from django.db import IntegrityError  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+from . import learning as learning_module  # noqa: E402
+from .models import LearnedRepairSignal, RepairSignalOutcome, RepairSignalSource  # noqa: E402
+
+
+class LearningSignatureAndEventIdValidationTests(TestCase):
+    def test_valid_signature_accepted(self):
+        self.assertTrue(learning_module.is_valid_signature('outlook-classic:button-rounded-corners-need-vml'))
+
+    def test_signature_missing_colon_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlookclassicbuttonvml'))
+
+    def test_signature_with_uppercase_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('Outlook-Classic:Button'))
+
+    def test_signature_with_extra_segments_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlook-classic:button:extra'))
+
+    def test_signature_with_script_injection_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlook-classic:<script>alert(1)</script>'))
+
+    def test_signature_over_max_length_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature(('a' * 159) + ':b'))
+
+    def test_empty_signature_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature(''))
+
+    def test_non_string_signature_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature(None))
+        self.assertFalse(learning_module.is_valid_signature(123))
+
+    def test_valid_event_id_accepted(self):
+        self.assertTrue(learning_module.is_valid_event_id('a1b2c3d4-e5f6-7890-abcd-ef1234567890'))
+
+    def test_empty_event_id_rejected(self):
+        self.assertFalse(learning_module.is_valid_event_id(''))
+
+    def test_event_id_over_max_length_rejected(self):
+        self.assertFalse(learning_module.is_valid_event_id('x' * 65))
+
+
+class RecordSignalIdempotencyTests(TestCase):
+    """The durable-idempotency contract: (user, event_id) uniqueness, not
+    the cache debounce, is what prevents a retried request from creating
+    a second learning event or moving the evidence count."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='learner', email='learner@example.com', password='StrongPass123')
+
+    def test_first_call_creates_a_row(self):
+        signal, created = learning_module.record_signal(
+            self.user, 'evt-1', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        self.assertTrue(created)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+        self.assertEqual(signal.event_id, 'evt-1')
+
+    def test_duplicate_post_retry_produces_exactly_one_stored_signal(self):
+        for _ in range(5):
+            learning_module.record_signal(
+                self.user, 'evt-retry', 'outlook-classic:button-rounded-corners-need-vml',
+                RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+            )
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 1)
+
+    def test_retries_across_separate_calls_still_deduplicate_and_report_created_false(self):
+        _signal1, created1 = learning_module.record_signal(
+            self.user, 'evt-dup', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        _signal2, created2 = learning_module.record_signal(
+            self.user, 'evt-dup', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+
+    def test_three_genuinely_separate_event_ids_count_as_three(self):
+        for i in range(3):
+            learning_module.record_signal(
+                self.user, f'evt-{i}', 'outlook-classic:button-rounded-corners-need-vml',
+                RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+            )
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 3)
+
+    def test_same_event_id_different_user_is_a_distinct_row(self):
+        User = get_user_model()
+        other = User.objects.create_user(username='learner2', email='learner2@example.com', password='StrongPass123')
+        learning_module.record_signal(
+            self.user, 'shared-evt-id', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        learning_module.record_signal(
+            other, 'shared-evt-id', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.REJECTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        self.assertEqual(LearnedRepairSignal.objects.count(), 2)
+
+    def test_concurrent_race_on_the_same_event_id_still_yields_exactly_one_row(self):
+        """Simulates two requests racing for the SAME (user, event_id):
+        the first get_or_create() call is forced to raise IntegrityError
+        (as a real DB would on the loser of a race against the unique
+        constraint) -- record_signal must catch it and return the
+        winner's already-persisted row, never propagate the error."""
+        learning_module.record_signal(
+            self.user, 'evt-race', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        with patch.object(LearnedRepairSignal.objects, 'get_or_create', side_effect=IntegrityError('race')):
+            signal, created = learning_module.record_signal(
+                self.user, 'evt-race', 'outlook-classic:button-rounded-corners-need-vml',
+                RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+            )
+        self.assertFalse(created)
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.event_id, 'evt-race')
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+
+    def test_database_level_unique_constraint_actually_exists(self):
+        """Defense-in-depth proof that the constraint itself (not just
+        application logic) prevents a duplicate row, independent of
+        record_signal()'s own get_or_create wrapper."""
+        LearnedRepairSignal.objects.create(
+            user=self.user, event_id='evt-constraint', signature='outlook-classic:button-rounded-corners-need-vml',
+            outcome=RepairSignalOutcome.ACCEPTED, source=RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        with self.assertRaises(IntegrityError):
+            LearnedRepairSignal.objects.create(
+                user=self.user, event_id='evt-constraint', signature='outlook-classic:button-rounded-corners-need-vml',
+                outcome=RepairSignalOutcome.REJECTED, source=RepairSignalSource.AI_ENGINEER_REPAIR,
+            )
+
+
+class ComputeRankingTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='ranker', email='ranker@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='ranker2', email='ranker2@example.com', password='StrongPass123')
+
+    def _record(self, user, signature, outcome, event_id):
+        learning_module.record_signal(user, event_id, signature, outcome, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+
+    def test_zero_events_produce_empty_ranking(self):
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_one_event_produces_no_ranking_change(self):
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e1')
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_two_events_produce_no_ranking_change(self):
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e1')
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e2')
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_exactly_min_evidence_threshold_produces_a_ranking_entry(self):
+        for i in range(learning_module.MIN_EVIDENCE_THRESHOLD):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'e{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertIn('outlook-classic:x', ranking)
+        self.assertEqual(ranking['outlook-classic:x']['evidenceCount'], learning_module.MIN_EVIDENCE_THRESHOLD)
+
+    def test_laplace_smoothed_score_formula(self):
+        # 3 accepted, 0 rejected -> (3+1)/(3+0+2) = 4/5 = 0.8
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'acc{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertAlmostEqual(ranking['outlook-classic:x']['score'], 0.8)
+        self.assertEqual(ranking['outlook-classic:x']['accepted'], 3)
+        self.assertEqual(ranking['outlook-classic:x']['rejected'], 0)
+
+    def test_mixed_accept_reject_score_regresses_toward_neutral(self):
+        # 2 accepted, 2 rejected -> (2+1)/(4+2) = 3/6 = 0.5 (neutral)
+        for i in range(2):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'acc{i}')
+        for i in range(2):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.REJECTED, f'rej{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertAlmostEqual(ranking['outlook-classic:x']['score'], 0.5)
+
+    def test_mostly_rejected_score_is_below_neutral(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.REJECTED, f'rej{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertLess(ranking['outlook-classic:x']['score'], 0.5)
+
+    def test_events_outside_ranking_window_are_excluded(self):
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e1')
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e2')
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e3')
+        # Backdate all three past the ranking window via a queryset
+        # .update() (bypasses auto_now_add, which only fires on .save()).
+        old_date = timezone.now() - timedelta(days=learning_module.RANKING_WINDOW_DAYS + 1)
+        LearnedRepairSignal.objects.filter(user=self.user).update(created_at=old_date)
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_events_just_inside_the_window_still_count(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'e{i}')
+        recent_date = timezone.now() - timedelta(days=learning_module.RANKING_WINDOW_DAYS - 1)
+        LearnedRepairSignal.objects.filter(user=self.user).update(created_at=recent_date)
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertIn('outlook-classic:x', ranking)
+
+    def test_user_b_never_sees_user_a_ranking(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'e{i}')
+        self.assertEqual(learning_module.compute_ranking(self.other_user), {})
+
+    def test_multiple_signatures_ranked_independently(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:a', RepairSignalOutcome.ACCEPTED, f'a{i}')
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:b', RepairSignalOutcome.REJECTED, f'b{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertGreater(ranking['outlook-classic:a']['score'], 0.5)
+        self.assertLess(ranking['outlook-classic:b']['score'], 0.5)
+
+
+class ClearSignalsForUserTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='clearer', email='clearer@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='clearer2', email='clearer2@example.com', password='StrongPass123')
+        learning_module.record_signal(self.user, 'e1', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+        learning_module.record_signal(self.other_user, 'e2', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+
+    def test_clear_removes_only_this_users_rows(self):
+        deleted = learning_module.clear_signals_for_user(self.user)
+        self.assertEqual(deleted, 1)
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 0)
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.other_user).count(), 1)
+
+    def test_account_deletion_cascades(self):
+        self.user.delete()
+        self.assertEqual(LearnedRepairSignal.objects.filter(signature='outlook-classic:x').count(), 1)  # only other_user's remains
+
+
+class LearningSignalViewTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='view.learner', email='view.learner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='view.learner2', email='view.learner2@example.com', password='StrongPass123')
+        self.signals_url = '/api/v1/email-builder/learning/signals/'
+        self.ranking_url = '/api/v1/email-builder/learning/signals/ranking/'
+        _cache.clear()
+
+    def _post_json(self, data):
+        return self.client.post(self.signals_url, data=json.dumps(data), content_type='application/json')
+
+    def _valid_payload(self, **overrides):
+        payload = {
+            'event_id': 'evt-view-1', 'signature': 'outlook-classic:button-rounded-corners-need-vml',
+            'outcome': 'accepted', 'source': 'validation_center_single',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_unauthenticated_post_rejected(self):
+        response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 0)
+
+    def test_authenticated_post_creates_a_signal(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['success'])
+        self.assertTrue(body['created'])
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+        self.assertEqual(LearnedRepairSignal.objects.first().user, self.user)
+
+    def test_duplicate_post_via_endpoint_does_not_create_a_second_row(self):
+        self.client.force_login(self.user)
+        self._post_json(self._valid_payload())
+        response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['created'])
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+
+    def test_malformed_signature_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(signature='<script>alert(1)</script>'))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 0)
+
+    def test_empty_event_id_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(event_id=''))
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_outcome_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(outcome='maybe'))
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_source_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(source='not-a-real-source'))
+        self.assertEqual(response.status_code, 400)
+
+    def test_rate_limit_enforced(self):
+        self.client.force_login(self.user)
+        with patch('emailbuilder.views._learning_rate_limited', return_value=True):
+            response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 429)
+
+    def test_unauthenticated_ranking_get_rejected(self):
+        response = self.client.get(self.ranking_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_ranking_get_returns_empty_map_with_no_signals(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.ranking_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['signatures'], {})
+
+    def test_ranking_get_reflects_recorded_signals_once_threshold_met(self):
+        self.client.force_login(self.user)
+        for i in range(3):
+            self._post_json(self._valid_payload(event_id=f'evt-{i}'))
+        response = self.client.get(self.ranking_url)
+        signatures = response.json()['signatures']
+        self.assertIn('outlook-classic:button-rounded-corners-need-vml', signatures)
+        self.assertEqual(signatures['outlook-classic:button-rounded-corners-need-vml']['evidenceCount'], 3)
+
+    def test_ranking_endpoint_failure_falls_back_to_empty_map(self):
+        self.client.force_login(self.user)
+        with patch('emailbuilder.views.learning.compute_ranking', side_effect=RuntimeError('boom')):
+            response = self.client.get(self.ranking_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['signatures'], {})
+
+    def test_user_b_ranking_is_unaffected_by_user_a_signals(self):
+        self.client.force_login(self.user)
+        for i in range(3):
+            self._post_json(self._valid_payload(event_id=f'evt-{i}'))
+        self.client.logout()
+        self.client.force_login(self.other_user)
+        response = self.client.get(self.ranking_url)
+        self.assertEqual(response.json()['signatures'], {})
+
+    def test_unauthenticated_delete_rejected(self):
+        response = self.client.delete(self.signals_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_clears_current_users_signals_and_restores_empty_ranking(self):
+        self.client.force_login(self.user)
+        for i in range(3):
+            self._post_json(self._valid_payload(event_id=f'evt-{i}'))
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 3)
+        delete_response = self.client.delete(self.signals_url)
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.json()['deleted'], 3)
+        ranking_response = self.client.get(self.ranking_url)
+        self.assertEqual(ranking_response.json()['signatures'], {})
+
+    def test_delete_never_touches_another_users_signals(self):
+        self.client.force_login(self.other_user)
+        self._post_json(self._valid_payload(event_id='other-users-evt'))
+        self.client.logout()
+        self.client.force_login(self.user)
+        self.client.delete(self.signals_url)
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.other_user).count(), 1)
+
+    def test_no_provider_call_is_involved_in_recording_or_ranking(self):
+        """Sanity guard -- posting a signal and fetching ranking must never
+        import/construct an OpenAI or local-AI provider. Patched to raise
+        if either provider class is ever instantiated during this test."""
+        self.client.force_login(self.user)
+        with patch('emailbuilder.ai_command_openai.OpenAIEmailCommandProvider.__init__', side_effect=AssertionError('must not be called')):
+            with patch('emailbuilder.ai_command_local.LocalEmailCommandProvider.__init__', side_effect=AssertionError('must not be called')):
+                post_response = self._post_json(self._valid_payload())
+                get_response = self.client.get(self.ranking_url)
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(get_response.status_code, 200)
+
+
+class LearningSignalModelCascadeTests(TestCase):
+    def test_deleting_user_cascades_to_their_signals_via_the_view_path(self):
+        User = get_user_model()
+        user = User.objects.create_user(username='cascade.user', email='cascade.user@example.com', password='StrongPass123')
+        learning_module.record_signal(user, 'evt-cascade', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+        user.delete()
+        self.assertEqual(LearnedRepairSignal.objects.count(), 0)
+
+
+class LearningDoesNotTouchKnowledgeOrValidationTests(TestCase):
+    """Structural proof of the core invariant: nothing in learning.py can
+    reach KnowledgeRule content/confidence, and recording/ranking signals
+    never touches EmailDocument/validation machinery at all."""
+
+    def test_learning_module_has_no_import_of_knowledge_rules_or_edm(self):
+        # Checks actual imports (module dependencies), never a naive text
+        # grep of the source -- the module's own docstring legitimately
+        # MENTIONS EmailDocument/EmailAsset by name when explaining why
+        # this feature follows the same per-user ownership convention;
+        # that's documentation, not a dependency.
+        module_names = {getattr(value, '__module__', None) for value in vars(learning_module).values()}
+        self.assertNotIn('emailbuilder.knowledge.rules', module_names)
+        self.assertNotIn('emailbuilder.edm', module_names)
+        self.assertFalse(hasattr(learning_module, 'validate_edm'))
+        self.assertFalse(hasattr(learning_module, 'find_rule'))
+        self.assertFalse(hasattr(learning_module, 'EmailDocument'))
+
+    def test_recording_and_ranking_never_touch_emaildocument_table(self):
+        User = get_user_model()
+        user = User.objects.create_user(username='isolation.user', email='isolation.user@example.com', password='StrongPass123')
+        before_count = EmailDocument.objects.count()
+        for i in range(3):
+            learning_module.record_signal(user, f'evt-{i}', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+        learning_module.compute_ranking(user)
+        self.assertEqual(EmailDocument.objects.count(), before_count)

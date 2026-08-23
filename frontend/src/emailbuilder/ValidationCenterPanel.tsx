@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { renderEmailDocument } from './htmlRenderer';
 import { validateEmail, type ValidationIssue } from './emailValidation';
+import { signatureForIssueId } from './repairEngine';
+import {
+  fetchRepairRanking, newLearningEventId, rankWithinTiers, recordRepairSignal,
+  type RepairRanking,
+} from './learningSignals';
 import type { EmailDocumentContent } from './edm';
 import type { EmailPlatform } from './types';
 import './ValidationCenterPanel.css';
@@ -67,6 +72,21 @@ export function ValidationCenterPanel({
   const [applyingFixId, setApplyingFixId] = useState<string | null>(null);
   const [applyingAll, setApplyingAll] = useState(false);
   const [revalidateNonce, setRevalidateNonce] = useState(0);
+  // Sub-phase 8 — advisory-only display ranking, fetched independently of
+  // validation (validateEmail stays 100% pure/client-side). Empty on
+  // mount, on any fetch failure, and until this user has recorded enough
+  // signals — every one of those cases reproduces the exact pre-Sub-
+  // phase-8 issue order, since rankWithinTiers no-ops on an empty map.
+  const [ranking, setRanking] = useState<RepairRanking>({});
+
+  function refreshRanking() {
+    fetchRepairRanking().then(setRanking);
+  }
+
+  useEffect(() => {
+    refreshRanking();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fetch once on mount only
+  }, []);
 
   // Rendering/validating a corrupted document (e.g. a module missing its
   // props after a partial write) must not crash the whole Email Builder —
@@ -108,6 +128,20 @@ export function ValidationCenterPanel({
 
   const safeIssues = report?.issues.filter((issue) => issue.fixType === 'safe') ?? [];
 
+  // Advisory reordering only: issues never move across a severity+fixType
+  // tier (an error never displaces above/below where errors sort, a
+  // manual-fix issue never jumps ahead of a safe-fix one) — ranking only
+  // decides order AMONG issues that were already adjacent candidates.
+  const rankedIssues = useMemo(() => {
+    if (!report) return [];
+    return rankWithinTiers(
+      report.issues,
+      ranking,
+      (issue) => `${issue.severity}:${issue.fixType}`,
+      (issue) => signatureForIssueId(issue.id),
+    );
+  }, [report, ranking]);
+
   function applySafeFix(safeFix: NonNullable<ValidationIssue['safeFix']>) {
     if ('documentPatch' in safeFix) {
       onApplyDocumentFix(safeFix.documentPatch);
@@ -118,10 +152,19 @@ export function ValidationCenterPanel({
     }
   }
 
-  function handleFixOne(issue: ValidationIssue) {
+  async function handleFixOne(issue: ValidationIssue) {
     if (issue.fixType === 'safe' && issue.safeFix) {
       setApplyingFixId(issue.id);
       applySafeFix(issue.safeFix);
+      // Explicit accept: the user clicked "Fix" on this exact issue — the
+      // one genuine outcome-recording gesture this panel has (there is no
+      // reject affordance here; "Go to module" below is navigation, not a
+      // decision, so it records nothing).
+      await recordRepairSignal({
+        eventId: newLearningEventId(), signature: signatureForIssueId(issue.id),
+        outcome: 'accepted', source: 'validation_center_single',
+      });
+      refreshRanking();
       setTimeout(() => setApplyingFixId(null), 300);
     } else if (issue.fixType === 'manual' && issue.moduleId) {
       onNavigateToModule(issue.moduleId);
@@ -131,8 +174,18 @@ export function ValidationCenterPanel({
   async function handleFixAllSafe() {
     setApplyingAll(true);
     for (const issue of safeIssues) {
-      if (issue.safeFix) applySafeFix(issue.safeFix);
+      if (issue.safeFix) {
+        applySafeFix(issue.safeFix);
+        // Each issue in the batch is its own decision with its own
+        // event_id — "Fix All" is N accepts, not one, so evidence counts
+        // accumulate the same way N individual Fix clicks would.
+        await recordRepairSignal({
+          eventId: newLearningEventId(), signature: signatureForIssueId(issue.id),
+          outcome: 'accepted', source: 'validation_center_bulk',
+        });
+      }
     }
+    refreshRanking();
     setTimeout(() => setApplyingAll(false), 300);
   }
 
@@ -219,7 +272,7 @@ export function ValidationCenterPanel({
             </div>
           ) : (
             <ul className="validation-center-panel__issue-list">
-              {report.issues.map((issue) => (
+              {rankedIssues.map((issue) => (
                 <li key={issue.id} className="validation-center-panel__issue-card">
                   <span
                     className={`mdaiw-icon mdaiw-icon--${issue.severity === 'error' ? 'error-circle' : 'warning'} validation-center-panel__issue-icon validation-center-panel__issue-icon--${issue.severity}`}
@@ -228,6 +281,11 @@ export function ValidationCenterPanel({
                   <div className="validation-center-panel__issue-text">
                     <p className="validation-center-panel__issue-title">{issue.title}</p>
                     <p className="validation-center-panel__issue-detail">{issue.detail}</p>
+                    {ranking[signatureForIssueId(issue.id)] && (
+                      <p className="validation-center-panel__issue-ranked-note">
+                        Ranked using your past decisions on this type of fix.
+                      </p>
+                    )}
                   </div>
                   {issue.fixType !== 'none' && (
                     <button

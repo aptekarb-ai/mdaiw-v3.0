@@ -10,5 +10,11 @@ router.register('assets', views.EmailAssetViewSet, basename='email-asset')
 
 urlpatterns = [
     path('ai-command/', views.EmailAICommandView.as_view(), name='email-ai-command'),
+    # Feature 14 V3 Sub-phase 8 — ranking must be its own GET path (not a
+    # method branch on the signals collection) so it's cacheable/
+    # bookmarkable independently and never collides with a future
+    # GET-list-of-signals endpoint this feature deliberately does not add.
+    path('learning/signals/ranking/', views.LearningRankingView.as_view(), name='email-learning-ranking'),
+    path('learning/signals/', views.LearningSignalView.as_view(), name='email-learning-signals'),
     path('', include(router.urls)),
 ]

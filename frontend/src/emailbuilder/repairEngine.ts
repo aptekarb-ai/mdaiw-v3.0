@@ -50,6 +50,18 @@ export function affectedClientLabel(issueId: string): string {
   return 'All email clients';
 }
 
+// ValidationIssue ids follow `<category>:<rule-slug>:<instanceId>` (some
+// rules have no per-instance suffix at all and are already stable). The
+// trailing instanceId segment is per-document/per-module and must never be
+// persisted as a learning signature (Sub-phase 8) — only the first two
+// segments identify a stable, cross-document issue type. Keep this the one
+// place that derives a signature from an issue id so both panels agree.
+export function signatureForIssueId(issueId: string): string {
+  const parts = issueId.split(':');
+  if (parts.length <= 2) return issueId;
+  return parts.slice(0, 2).join(':');
+}
+
 // Every ValidationIssue with fixType === 'safe' is a genuine repair
 // candidate — nothing here invents a fix for a 'manual' or 'none' issue
 // (those have no deterministic, safe, automatic remedy; item 4 explicitly
