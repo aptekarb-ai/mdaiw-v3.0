@@ -207,22 +207,38 @@ describe('AppSidebar AI Email Builder navigation', () => {
     expect(screen.getByRole('link', { name: 'Email Dashboard' })).toBeInTheDocument();
   });
 
-  it('renders the not-yet-implemented children as disabled, non-navigable entries', async () => {
+  // Module-4 Navigation Completion, Phase A — only Templates (Phase B
+  // scope) remains a disabled "Coming soon" placeholder; the other five
+  // now route to real destinations.
+  it('renders Templates as the only remaining disabled, non-navigable entry', async () => {
     const user = userEvent.setup();
     mockAuthenticated();
     renderSidebarAt('/dashboard');
 
     await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
 
-    const futureLabels = [
-      'My Emails', 'Templates', 'Module Library',
-      'Assets / Brand Kit', 'Preview & Validation', 'AI Engineer',
+    expect(screen.queryByRole('link', { name: 'Templates' })).not.toBeInTheDocument();
+    const entry = screen.getByText('Templates').closest('span');
+    expect(entry).toHaveAttribute('aria-disabled', 'true');
+    expect(entry).toHaveAttribute('title', 'Coming soon');
+  });
+
+  it('renders the five Phase-A items as real, enabled links to their routes', async () => {
+    const user = userEvent.setup();
+    mockAuthenticated();
+    renderSidebarAt('/dashboard');
+
+    await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
+
+    const expected: [string, string][] = [
+      ['My Emails', '/email-builder/emails'],
+      ['Module Library', '/email-builder/modules'],
+      ['Assets / Brand Kit', '/email-builder/assets'],
+      ['Preview & Validation', '/email-builder/validation'],
+      ['AI Engineer', '/email-builder/ai-engineer'],
     ];
-    for (const label of futureLabels) {
-      expect(screen.queryByRole('link', { name: label })).not.toBeInTheDocument();
-      const entry = screen.getByText(label).closest('span');
-      expect(entry).toHaveAttribute('aria-disabled', 'true');
-      expect(entry).toHaveAttribute('title', 'Coming soon');
+    for (const [label, href] of expected) {
+      expect(screen.getByRole('link', { name: label })).toHaveAttribute('href', href);
     }
   });
 
@@ -358,7 +374,7 @@ describe('AppSidebar collapsed icon-only rail', () => {
     );
   });
 
-  it('renders disabled future children inside the flyout as non-navigable', async () => {
+  it('renders the disabled Templates child inside the flyout as non-navigable', async () => {
     const user = userEvent.setup();
     mockAuthenticated();
     renderSidebarAt('/dashboard');
@@ -369,8 +385,8 @@ describe('AppSidebar collapsed icon-only rail', () => {
     expect(screen.getByRole('link', { name: 'Create Email' })).toHaveAttribute(
       'href', '/email-builder/create',
     );
-    expect(screen.queryByRole('link', { name: 'My Emails' })).not.toBeInTheDocument();
-    const entry = screen.getByText('My Emails').closest('span');
+    expect(screen.queryByRole('link', { name: 'Templates' })).not.toBeInTheDocument();
+    const entry = screen.getByText('Templates').closest('span');
     expect(entry).toHaveAttribute('aria-disabled', 'true');
     expect(entry).toHaveAttribute('title', 'Coming soon');
   });

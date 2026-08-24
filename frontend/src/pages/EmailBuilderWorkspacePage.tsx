@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { getEmailDocument, updateEmailDocument } from '../api/client';
 import type { EmailDocument as EmailDocumentRecord } from '../emailbuilder/types';
 import { normalizeContent } from '../emailbuilder/edmMigration';
@@ -37,8 +37,17 @@ const ZOOM_MAX = 150;
 const ZOOM_STEP = 25;
 const ZOOM_DEFAULT = 100;
 
+// Module-4 Navigation Completion, Phase A — the standalone Preview &
+// Validation / AI Engineer / Module Library entry points deep-link here
+// with one of `?tab=`, `?insertModuleType=`, `?insertSavedModuleId=`.
+// Only these three exact values are honored for `tab` — anything else is
+// ignored (falls back to the normal 'visual' default) rather than trusting
+// an arbitrary query string as an EditorMode.
+const DEEP_LINK_TABS: ReadonlySet<string> = new Set(['preview', 'validate', 'ai']);
+
 export function EmailBuilderWorkspacePage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loadStatus, setLoadStatus] = useState<LoadStatus>('loading');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [document, setDocument] = useState<EmailDocumentRecord | null>(null);
@@ -104,6 +113,46 @@ export function EmailBuilderWorkspacePage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per id; builder is a stable-callback hook instance
   }, [id]);
+
+  // Module-4 Navigation Completion, Phase A — one-shot deep-link handling
+  // for the standalone entry points. Applies at most once per page load
+  // (deepLinkAppliedRef), through the SAME existing setEditorMode/
+  // builder.addModule/builder.addSavedModule calls a normal in-builder
+  // interaction would use — no second tab-selection or insertion path.
+  // The query params are stripped immediately after being applied so a
+  // refresh doesn't re-select the tab or re-insert the module.
+  const deepLinkAppliedRef = useRef(false);
+  useEffect(() => {
+    if (loadStatus !== 'ready' || deepLinkAppliedRef.current) return;
+    const tabParam = searchParams.get('tab');
+    const insertModuleType = searchParams.get('insertModuleType');
+    const insertSavedModuleId = searchParams.get('insertSavedModuleId');
+    if (!tabParam && !insertModuleType && !insertSavedModuleId) return;
+
+    // Saved-module insertion needs the saved-modules list loaded first —
+    // wait rather than silently dropping the deep link.
+    if (insertSavedModuleId && savedModulesState.loading) return;
+
+    deepLinkAppliedRef.current = true;
+
+    if (tabParam && DEEP_LINK_TABS.has(tabParam)) {
+      setEditorMode(tabParam as EditorMode);
+    }
+    if (insertModuleType) {
+      builder.addModule(insertModuleType as EmailModuleType);
+    }
+    if (insertSavedModuleId) {
+      const match = savedModulesState.savedModules.find((saved) => String(saved.id) === insertSavedModuleId);
+      if (match) builder.addSavedModule(match);
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('tab');
+    next.delete('insertModuleType');
+    next.delete('insertSavedModuleId');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder/savedModulesState are stable-callback hook instances; searchParams/setSearchParams intentionally re-checked each render until applied
+  }, [loadStatus, searchParams, savedModulesState.loading]);
 
   // Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave) —
   // revision/snapshot-safe save orchestration. Three refs, all scoped to

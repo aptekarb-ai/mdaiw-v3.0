@@ -19,6 +19,10 @@ import { LandingPageValidatorPage } from './pages/LandingPageValidatorPage';
 import { EmailBuilderDashboardPage } from './pages/EmailBuilderDashboardPage';
 import { CreateEmailPage } from './pages/CreateEmailPage';
 import { EmailBuilderWorkspacePage } from './pages/EmailBuilderWorkspacePage';
+import { ModuleLibraryPage } from './pages/ModuleLibraryPage';
+import { AssetManagerPage } from './pages/AssetManagerPage';
+import { PreviewValidationEntryPage } from './pages/PreviewValidationEntryPage';
+import { AIEngineerEntryPage } from './pages/AIEngineerEntryPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -62,6 +66,16 @@ function App() {
                 <Route path="/module-3/validator" element={<LandingPageValidatorPage />} />
                 <Route path="/email-builder" element={<EmailBuilderDashboardPage />} />
                 <Route path="/email-builder/create" element={<CreateEmailPage />} />
+                {/* Module-4 Navigation Completion, Phase A — same component
+                    as "/email-builder": My Emails IS the dashboard's
+                    Recent Emails list, not a second implementation. A
+                    distinct path exists only so the sidebar can give it
+                    its own unambiguous active-nav state. */}
+                <Route path="/email-builder/emails" element={<EmailBuilderDashboardPage />} />
+                <Route path="/email-builder/modules" element={<ModuleLibraryPage />} />
+                <Route path="/email-builder/assets" element={<AssetManagerPage />} />
+                <Route path="/email-builder/validation" element={<PreviewValidationEntryPage />} />
+                <Route path="/email-builder/ai-engineer" element={<AIEngineerEntryPage />} />
                 <Route path="/email-builder/builder/:id" element={<EmailBuilderWorkspacePage />} />
                 {MODULE_3_PLACEHOLDER_ROUTES.map((path) => (
                   <Route key={path} path={path} element={<ModulePlaceholderPage />} />

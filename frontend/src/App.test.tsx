@@ -46,6 +46,11 @@ describe('App routing', () => {
   it.each([
     '/module-3/builder', '/module-3/generator', '/email-builder',
     '/email-builder/create', '/email-builder/builder/1',
+    // Module-4 Navigation Completion, Phase A — confirms each new route
+    // is actually registered (reaches ProtectedRoute) rather than falling
+    // through to the catch-all "*" redirect to "/".
+    '/email-builder/emails', '/email-builder/modules', '/email-builder/assets',
+    '/email-builder/validation', '/email-builder/ai-engineer',
   ])(
     'redirects unauthenticated access to %s to /login',
     async (path) => {

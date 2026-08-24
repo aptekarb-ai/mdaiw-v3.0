@@ -64,12 +64,16 @@ const APP_NAV: NavEntry[] = [
     children: [
       { to: '/email-builder', label: 'Email Dashboard', icon: 'dashboard' },
       { to: '/email-builder/create', label: 'Create Email', icon: 'file' },
-      { to: '/email-builder/emails', label: 'My Emails', icon: 'email', disabled: true },
+      // Module-4 Navigation Completion, Phase A — these five now route to
+      // real destinations. Templates stays disabled: Phase B scope, not
+      // yet built (see the Module-4 Navigation + Entry-Point Completion
+      // Audit).
+      { to: '/email-builder/emails', label: 'My Emails', icon: 'email' },
       { to: '/email-builder/templates', label: 'Templates', icon: 'landing-page', disabled: true },
-      { to: '/email-builder/modules', label: 'Module Library', icon: 'department', disabled: true },
-      { to: '/email-builder/assets', label: 'Assets / Brand Kit', icon: 'camera', disabled: true },
-      { to: '/email-builder/validation', label: 'Preview & Validation', icon: 'eye', disabled: true },
-      { to: '/email-builder/ai-engineer', label: 'AI Engineer', icon: 'ai-assistants', disabled: true },
+      { to: '/email-builder/modules', label: 'Module Library', icon: 'department' },
+      { to: '/email-builder/assets', label: 'Assets / Brand Kit', icon: 'camera' },
+      { to: '/email-builder/validation', label: 'Preview & Validation', icon: 'eye' },
+      { to: '/email-builder/ai-engineer', label: 'AI Engineer', icon: 'ai-assistants' },
     ],
   },
   { to: '/personal-finance', label: 'Personal Finance', icon: 'finance' },
