@@ -2,11 +2,13 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from .ai_command import MAX_MESSAGE_LENGTH
+from . import learning
 from . import module_capabilities
 from .custom_css_security import validate_custom_css_security
 from .edm import UNSAFE_URL_PREFIXES, EdmValidationError, validate_edm, validate_module_instance
 from .models import (
-    MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, SavedEmailModule,
+    MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, RepairSignalOutcome,
+    RepairSignalSource, SavedEmailModule,
 )
 from .validators import validate_asset_image
 
@@ -221,3 +223,30 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     selected_module = SelectedModuleContextSerializer(required=False, allow_null=True, default=None)
     platform = serializers.CharField(required=False, allow_null=True, default=None, max_length=20)
     width = serializers.IntegerField(required=False, allow_null=True, default=None)
+
+
+class LearningSignalRequestSerializer(serializers.Serializer):
+    """Feature 14 V3 Sub-phase 8 — the durable-idempotency POST contract.
+    `event_id` is opaque (any non-empty string up to
+    learning.MAX_EVENT_ID_LENGTH) — its UNIQUENESS per user, not its
+    format, is what the view's get_or_create() relies on.
+    `signature`'s format is bounded (learning.is_valid_signature) but
+    deliberately not checked against a second hand-maintained manifest of
+    every real frontend issue signature — see learning.py's own
+    docstring on why that's proportionate for a per-user, display-order-
+    only feature."""
+
+    event_id = serializers.CharField(max_length=learning.MAX_EVENT_ID_LENGTH, trim_whitespace=True, allow_blank=False)
+    signature = serializers.CharField(max_length=learning.MAX_SIGNATURE_LENGTH, trim_whitespace=True, allow_blank=False)
+    outcome = serializers.ChoiceField(choices=RepairSignalOutcome.choices)
+    source = serializers.ChoiceField(choices=RepairSignalSource.choices)
+
+    def validate_event_id(self, value):
+        if not learning.is_valid_event_id(value):
+            raise serializers.ValidationError('Invalid event id.')
+        return value
+
+    def validate_signature(self, value):
+        if not learning.is_valid_signature(value):
+            raise serializers.ValidationError('Invalid signature format.')
+        return value

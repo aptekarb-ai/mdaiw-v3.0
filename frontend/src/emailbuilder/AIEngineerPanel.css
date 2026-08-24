@@ -191,6 +191,18 @@
   color: var(--color-warning);
 }
 
+/* Sub-phase 7 — the composition engine's ordered module-list preview,
+   shown inside the same proposal card every other action type uses. */
+.ai-engineer-panel__composition-list {
+  margin: var(--space-2) 0;
+  padding-left: var(--space-5);
+  font-size: 12px;
+  color: var(--color-text-dark);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 /* Sub-phase 4, item 4 — the Repair Engine's multi-issue proposal card. */
 .ai-engineer-panel__repair-list {
   margin: 0 0 var(--space-3);
@@ -390,6 +402,38 @@
   padding: 0;
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ai-engineer-panel__learning-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.ai-engineer-panel__learning-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__learning-confirm {
+  margin-bottom: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-bg);
+}
+
+.ai-engineer-panel__learning-confirm p {
+  margin: 0 0 var(--space-3);
+  font-size: 13px;
+  color: var(--color-text-dark);
+}
+
+.ai-engineer-panel__learning-confirm-actions {
+  display: flex;
   gap: var(--space-3);
 }
 

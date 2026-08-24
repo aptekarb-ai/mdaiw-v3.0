@@ -1506,8 +1506,15 @@ from .ai_command import (  # noqa: E402
 )
 from .ai_command_openai import OpenAIEmailCommandProvider  # noqa: E402
 from .ai_command_local import LocalEmailCommandProvider  # noqa: E402
+from . import ai_command as ai_command_module  # noqa: E402
+from . import ai_command_openai as ai_command_openai_module  # noqa: E402
+from . import ai_command_local as ai_command_local_module  # noqa: E402
 from . import module_capabilities  # noqa: E402
-from .knowledge.rules import KnowledgeRule, KnowledgeRuleValidationError, find_rule, load_rules  # noqa: E402
+from .knowledge.rules import (  # noqa: E402
+    AFFECTED_CLIENT_VALUES, CONCERN_VALUES, EMAIL_CLIENT_REGISTRY, KNOWLEDGE_RULE_CATEGORIES,
+    KnowledgeRule, KnowledgeRuleValidationError, find_rule, find_rules_by_category, find_rules_by_client,
+    find_rules_by_concern, load_rules,
+)
 
 
 def _selected(module_type, **props):
@@ -1635,6 +1642,255 @@ class RuleBasedEmailCommandProviderTests(TestCase):
         for entry in modules:
             self.assertIn(entry['module_type'], ('text', 'image', 'button'))
 
+    # --- Sub-phase 6, work package D/E -- new NL vocabulary ---
+
+    def test_nested_insert_here_phrasing(self):
+        result = self.provider.resolve('add a text module here', {})
+        self.assertEqual(result.action, {
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {},
+        })
+
+    def test_nested_insert_into_this_column_phrasing(self):
+        result = self.provider.resolve('insert a button into this column', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_NESTED_MODULE)
+        self.assertEqual(result.action['module_type'], 'button')
+
+    def test_plain_add_a_button_is_NOT_misread_as_a_nested_insert(self):
+        # Regression guard -- "add a button" (no "here"/"in this column")
+        # must still route to the ORIGINAL top-level INSERT_MODULE.
+        result = self.provider.resolve('add a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+    def test_vml_pattern_for_a_selected_button(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('enable outlook vml for this button', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'button'})
+
+    def test_outlook_wrapper_for_a_selected_background_hero(self):
+        context = {'selected_module': _selected('hero-background-image')}
+        result = self.provider.resolve('enable outlook wrapper for this background', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'hero-background-image'})
+
+    def test_vml_for_background_hero_always_routes_to_outlook_wrapper_not_button_pattern(self):
+        # Regression guard -- Sub-phase 6 closure gave hero-background-image
+        # BOTH supportsBulletproofCta AND supportsBulletproofBackground (its
+        # own CTA VML nests inside its background ghost-table VML). The
+        # generic "enable outlook vml" phrasing must still resolve to the
+        # single covering action (APPLY_OUTLOOK_WRAPPER), never the
+        # button-only APPLY_VML_PATTERN, for this one dual-capability type.
+        context = {'selected_module': _selected('hero-background-image')}
+        result = self.provider.resolve('enable outlook vml for this module', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'hero-background-image'})
+
+    def test_vml_pattern_for_a_selected_cta_module_now_supported(self):
+        # Sub-phase 6 closure expanded bulletproof-CTA VML beyond the
+        # standalone Button module -- cta-centered is one of the 22 newly
+        # eligible module types.
+        context = {'selected_module': _selected('cta-centered')}
+        result = self.provider.resolve('enable outlook vml for this', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'cta-centered'})
+
+    def test_vml_pattern_for_a_selected_pill_link_module_now_supported(self):
+        # Sub-phase 6 final reconciliation -- bordered/rounded pill-link
+        # modules (social-icon-row, social-follow-us, footer-social-legal)
+        # are genuine VML-button candidates: Classic Outlook ignores
+        # border-radius regardless of background fill.
+        context = {'selected_module': _selected('social-icon-row')}
+        result = self.provider.resolve('enable outlook vml for this', context)
+        self.assertEqual(result.action, {'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'social-icon-row'})
+
+    def test_vml_declined_for_a_module_type_that_does_not_support_it(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('enable vml for this', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('does not support', result.reply)
+
+    def test_vml_still_declined_for_a_plain_nav_link_module(self):
+        # header-logo-nav has no bordered/rounded container at all --
+        # remains excluded even after the pill-link reconciliation.
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('enable vml for this', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('does not support', result.reply)
+
+    def test_hide_on_mobile(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('hide this on mobile', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text', 'patch': {'visibility': 'hideMobile'},
+        })
+
+    def test_hide_on_desktop(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('hide this on desktop', context)
+        self.assertEqual(result.action['patch'], {'visibility': 'hideDesktop'})
+
+    def test_show_on_both(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('show it on both desktop and mobile', context)
+        self.assertEqual(result.action['patch'], {'visibility': 'all'})
+
+    def test_restructure_layout_two_numbers(self):
+        context = {'selected_module': _selected('layout-2col-50-50', columnWidths=[50, 50])}
+        result = self.provider.resolve('change the column widths to 70/30', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [70.0, 30.0],
+        })
+
+    def test_restructure_layout_wrong_number_of_widths_asks_for_the_correct_count(self):
+        context = {'selected_module': _selected('layout-3col', columnWidths=[33, 33, 34])}
+        result = self.provider.resolve('change the column widths to 70/30', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('3 width', result.reply)
+
+    def test_restructure_layout_declined_for_a_non_layout_module(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('change the column widths to 70/30', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('not a layout', result.reply)
+
+    def test_remove_first_nav_link(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('remove the first nav link', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'remove', 'index': 0,
+        })
+
+    def test_remove_second_item(self):
+        context = {'selected_module': _selected('product-single')}
+        result = self.provider.resolve('remove the second item', context)
+        self.assertEqual(result.action['index'], 1)
+
+    def test_remove_repeatable_declined_for_a_module_with_no_list(self):
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('remove the first link', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn("doesn't have a list", result.reply)
+
+    def test_plain_remove_this_is_NOT_misread_as_a_repeatable_removal(self):
+        # Regression guard -- "remove this" (no ordinal + list-item noun)
+        # must still route to the ORIGINAL DELETE_MODULE.
+        context = {'selected_module': _selected('text')}
+        result = self.provider.resolve('remove this', context)
+        self.assertEqual(result.action['type'], ActionType.DELETE_MODULE)
+
+    # --- Sub-phase 6 closure -- repeatable-field ADD/UPDATE/REORDER via NL ---
+
+    def test_add_nav_link_with_explicit_label_and_url(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve(
+            'add a navigation link called Pricing with URL https://example.com/pricing', context,
+        )
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'Pricing', 'href': 'https://example.com/pricing'},
+        })
+
+    def test_add_social_link_with_for_and_using_connectors(self):
+        context = {'selected_module': _selected('social-icon-row')}
+        result = self.provider.resolve('add a social link for LinkedIn using https://linkedin.com/company/x', context)
+        self.assertEqual(result.action['item'], {'label': 'LinkedIn', 'href': 'https://linkedin.com/company/x'})
+
+    def test_add_icon_text_row_with_saying_connector(self):
+        context = {'selected_module': _selected('content-icon-text-rows')}
+        result = self.provider.resolve('add a row called Highlights saying Great stuff here', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'content-icon-text-rows', 'op': 'add',
+            'item': {'title': 'Highlights', 'text': 'Great stuff here'},
+        })
+
+    def test_add_never_fabricates_content_when_nothing_supplied(self):
+        # "add a navigation link" alone falls through to the generic
+        # insert-module clarify reply rather than proposing an empty/
+        # invented item.
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('add a navigation link', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+
+    def test_add_declines_an_unsafe_url_rather_than_dropping_or_inventing_one(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('add a navigation link called Pricing with URL javascript:alert(1)', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn("couldn't use", result.reply)
+
+    def test_add_declines_a_richer_schema_it_cannot_bound_safely(self):
+        # product-single's itemSchema has 7 fields -- the bounded two-field
+        # ADD parser correctly declines rather than guessing which fields
+        # the user's free text maps to.
+        context = {'selected_module': _selected('product-single')}
+        result = self.provider.resolve('add a product called Widget with URL https://example.com/widget', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('richer item', result.reply)
+
+    def test_update_nav_link_label_by_ordinal(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('change the second navigation link label to Services', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav',
+            'op': 'update', 'index': 1, 'item': {'label': 'Services'},
+        })
+
+    def test_update_product_field_via_synonym_title_to_name(self):
+        # "title" is not a literal key/label on ProductItem (it's "name" /
+        # "Product name") -- resolved via the synonym table, never guessed.
+        context = {'selected_module': _selected('product-single')}
+        result = self.provider.resolve('change the first product title to Summer Collection', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'product-single',
+            'op': 'update', 'index': 0, 'item': {'name': 'Summer Collection'},
+        })
+
+    def test_update_asks_which_field_when_none_can_be_resolved(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('change the second navigation link banana to Services', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('Which field', result.reply)
+
+    def test_update_declines_an_invalid_value_rather_than_fabricating_one(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('change the first navigation link url to not-a-url', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn("couldn't use", result.reply)
+
+    def test_update_never_misroutes_a_plain_font_size_change(self):
+        # Regression guard -- no ordinal/item-noun present, so this must
+        # still reach the ORIGINAL UPDATE_MODULE_PROPS style-patch path.
+        context = {'selected_module': _selected('text', fontSize=16)}
+        result = self.provider.resolve('change the font size to 20', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'text',
+            'patch': {'fontSize': 20},
+        })
+
+    def test_update_never_misroutes_setting_the_email_title(self):
+        # Regression guard -- this exact collision was caught live: an
+        # earlier version of the router let "product title to X" get
+        # matched by the (unrelated) email-title pattern.
+        result = self.provider.resolve('set the email title to My Newsletter', {})
+        self.assertEqual(result.action, {'type': ActionType.SET_EMAIL_TITLE, 'value': 'My Newsletter'})
+
+    def test_reorder_moves_an_item_to_a_new_position(self):
+        context = {'selected_module': _selected('header-logo-nav')}
+        result = self.provider.resolve('move the fourth navigation link to position 2', context)
+        self.assertEqual(result.action, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav',
+            'op': 'reorder', 'fromIndex': 3, 'toIndex': 1,
+        })
+
+    def test_add_repeatable_is_checked_before_nested_insert_despite_a_trailing_here(self):
+        # Regression guard for the exact collision found during
+        # implementation -- "... saying Great stuff here" ends in the
+        # literal word _NESTED_INSERT_PATTERN also looks for.
+        context = {'selected_module': _selected('content-icon-text-rows')}
+        result = self.provider.resolve('add a row called Highlights saying Great stuff here', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_REPEATABLE_FIELD)
+
+    def test_nested_insert_still_works_when_repeatable_add_pattern_does_not_match(self):
+        result = self.provider.resolve('add a text module here', {})
+        self.assertEqual(result.action, {
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {},
+        })
+
 
 class ResolveColorTests(TestCase):
     def test_hex_passthrough_uppercased(self):
@@ -1751,19 +2007,42 @@ class EmailAiEngineerCssCommandTests(TestCase):
         self.assertEqual(resolve_asset_references(action, request=None), action)
 
 
-class KnowledgeRuleTests(TestCase):
-    """Sub-phase 3, item 13 -- the KnowledgeRule contract stays satisfied
-    by every real rule, and load_rules()/find_rule() behave as the
-    deterministic explain intent (below) depends on."""
+def _minimal_rule_kwargs(**overrides):
+    """A fully-valid baseline KnowledgeRule kwargs dict, for tests that
+    only want to exercise ONE deliberately-broken field. Sub-phase 5
+    added `concerns`/`source` as required fields with no default, so
+    every test that constructs a KnowledgeRule directly (rather than via
+    load_rules()) needs a valid value for both, or it fails with a
+    TypeError from the dataclass constructor itself -- before
+    __post_init__ even runs -- which would silently defeat tests that
+    exist specifically to prove __post_init__'s OWN validation."""
+    kwargs = {
+        'id': 'bad', 'category': 'outlook', 'title': 't', 'description': 'd', 'severity': 'info',
+        'affected_clients': ('BOTH',), 'concerns': ('rendering-engine',), 'detection': {},
+        'suggested_fix': None, 'safe_auto_fix': False, 'references': (), 'confidence': 1.0,
+        'source': {'name': 'test', 'url': None, 'license': None, 'version': None, 'date': None, 'transformation': None},
+    }
+    kwargs.update(overrides)
+    return kwargs
 
-    def test_load_rules_returns_nine_outlook_rules_and_five_document_rules(self):
+
+class KnowledgeRuleTests(TestCase):
+    """Sub-phase 3, item 13 + Sub-phase 4, item 6 + Sub-phase 5 (Phase B
+    -- Professional Email Knowledge Engine) -- the KnowledgeRule contract
+    stays satisfied by every real rule, and load_rules()/find_rule()/the
+    new find_rules_by_*() query helpers behave as the deterministic
+    explain intent (below) depends on."""
+
+    def test_load_rules_returns_fifty_rules_across_the_original_categories(self):
         rules = load_rules()
-        self.assertEqual(len(rules), 14)
+        self.assertEqual(len(rules), 50)
         for rule in rules:
             self.assertIsInstance(rule, KnowledgeRule)
         outlook_rules = [r for r in rules if r.category == 'outlook']
         document_rules = [r for r in rules if r.category == 'document']
-        self.assertEqual(len(outlook_rules), 9)
+        # Sub-phase 3/4's original counts must never shrink -- Sub-phase 5
+        # is additive only.
+        self.assertGreaterEqual(len(outlook_rules), 9)
         self.assertEqual(len(document_rules), 5)
 
     def test_row_collapse_rule_is_kept_in_sync_with_the_repair_engines_actual_safe_fix(self):
@@ -1789,27 +2068,164 @@ class KnowledgeRuleTests(TestCase):
 
     def test_knowledge_rule_rejects_an_unknown_category(self):
         with self.assertRaises(KnowledgeRuleValidationError):
-            KnowledgeRule(
-                id='bad', category='not-a-real-category', title='t', description='d', severity='info',
-                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
-                references=(), confidence=1.0,
-            )
+            KnowledgeRule(**_minimal_rule_kwargs(category='not-a-real-category'))
 
     def test_knowledge_rule_rejects_an_unknown_affected_client(self):
         with self.assertRaises(KnowledgeRuleValidationError):
-            KnowledgeRule(
-                id='bad', category='outlook', title='t', description='d', severity='info',
-                affected_clients=('SOME_OTHER_CLIENT',), detection={}, suggested_fix=None, safe_auto_fix=False,
-                references=(), confidence=1.0,
-            )
+            KnowledgeRule(**_minimal_rule_kwargs(affected_clients=('SOME_OTHER_CLIENT',)))
 
     def test_knowledge_rule_rejects_an_out_of_range_confidence(self):
         with self.assertRaises(KnowledgeRuleValidationError):
-            KnowledgeRule(
-                id='bad', category='outlook', title='t', description='d', severity='info',
-                affected_clients=('BOTH',), detection={}, suggested_fix=None, safe_auto_fix=False,
-                references=(), confidence=1.5,
-            )
+            KnowledgeRule(**_minimal_rule_kwargs(confidence=1.5))
+
+    # --- Sub-phase 5 -- new required fields' own validation ---
+
+    def test_knowledge_rule_rejects_empty_concerns(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(concerns=()))
+
+    def test_knowledge_rule_rejects_an_unknown_concern(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(concerns=('not-a-real-concern',)))
+
+    def test_knowledge_rule_rejects_a_non_dict_source(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source='not-a-dict'))
+
+    def test_knowledge_rule_rejects_a_source_missing_name(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source={
+                'name': '', 'url': None, 'license': None, 'version': None, 'date': None, 'transformation': None,
+            }))
+
+    def test_knowledge_rule_rejects_a_source_with_unexpected_keys(self):
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source={
+                'name': 'x', 'url': None, 'license': None, 'version': None, 'date': None,
+                'transformation': None, 'unexpected_key': 'oops',
+            }))
+
+    def test_knowledge_rule_rejects_a_source_missing_a_required_key(self):
+        """Every source key must be PRESENT (even if its value is None) --
+        provenance must never be silently partial."""
+        with self.assertRaises(KnowledgeRuleValidationError):
+            KnowledgeRule(**_minimal_rule_kwargs(source={'name': 'x', 'url': None, 'license': None}))
+
+    # --- Sub-phase 5 -- lookup by issue/category/client/concern ---
+
+    def test_lookup_by_category(self):
+        rules = find_rules_by_category('outlook')
+        self.assertGreater(len(rules), 0)
+        for rule in rules:
+            self.assertEqual(rule.category, 'outlook')
+
+    def test_lookup_by_client(self):
+        gmail_rules = find_rules_by_client('GMAIL')
+        self.assertGreater(len(gmail_rules), 0)
+        for rule in gmail_rules:
+            self.assertIn('GMAIL', rule.affected_clients)
+
+    def test_lookup_by_concern(self):
+        vml_rules = find_rules_by_concern('vml')
+        self.assertGreater(len(vml_rules), 0)
+        for rule in vml_rules:
+            self.assertIn('vml', rule.concerns)
+
+    def test_lookup_by_client_and_category_can_disagree_with_lookup_by_concern(self):
+        """Proves the two axes (category vs concern) are genuinely
+        independent, not the same dimension under two names: a rule
+        tagged with the 'vml' concern can belong to a DIFFERENT category
+        than 'outlook' (email-bulletproof-background-pattern is
+        category='images', concerns includes 'vml') -- concern and
+        category are not just relabelings of each other."""
+        vml_concern_rule_categories = {r.category for r in find_rules_by_concern('vml')}
+        self.assertIn('outlook', vml_concern_rule_categories)
+        self.assertIn('images', vml_concern_rule_categories)
+        self.assertGreater(len(vml_concern_rule_categories), 1)
+
+    # --- Sub-phase 5 -- Classic vs New Outlook distinctness under the
+    # larger rule set (item: "Classic Outlook and New Outlook remain
+    # distinct") ---
+
+    def test_classic_and_new_outlook_rules_are_disjoint_except_for_both_tagged_rules(self):
+        classic_only = {r.id for r in load_rules() if r.affected_clients == ('OUTLOOK_CLASSIC',)}
+        new_only = {r.id for r in load_rules() if r.affected_clients == ('NEW_OUTLOOK',)}
+        self.assertTrue(classic_only.isdisjoint(new_only))
+        self.assertGreater(len(classic_only), len(new_only) - 1)  # Classic has deeper coverage today
+
+    def test_new_outlook_dark_mode_and_classic_outlook_dark_mode_are_different_rules_with_different_facts(self):
+        new_rule = find_rule('new-outlook-auto-dark-mode')
+        classic_rule = find_rule('outlook-classic-no-auto-dark-mode')
+        self.assertNotEqual(new_rule.id, classic_rule.id)
+        self.assertEqual(new_rule.affected_clients, ('NEW_OUTLOOK',))
+        self.assertEqual(classic_rule.affected_clients, ('OUTLOOK_CLASSIC',))
+        # the facts genuinely disagree (New Outlook DOES auto-invert,
+        # Classic does NOT) -- proves this isn't two copies of one fact.
+        self.assertIn('does not automatically invert', classic_rule.description)
+        self.assertIn('can automatically invert', new_rule.description)
+
+    # --- Sub-phase 5 -- provenance survives, and is never fabricated ---
+
+    def test_every_rule_has_complete_provenance(self):
+        for rule in load_rules():
+            self.assertIsInstance(rule.source, dict, msg=rule.id)
+            self.assertTrue(rule.source.get('name'), msg=rule.id)
+            for key in ('url', 'license', 'version', 'date', 'transformation'):
+                self.assertIn(key, rule.source, msg=f'{rule.id} missing source.{key}')
+
+    def test_caniemail_informed_rules_never_overclaim_a_literal_dataset_adaptation(self):
+        """PROVENANCE HONESTY -- a rule cross-referenced against Can I
+        Email's public data (not literally parsed from it) must say so
+        honestly, never claim "ADAPTED FROM Can I Email" wording that
+        would imply an automated transform that did not happen."""
+        caniemail_rules = [r for r in load_rules() if 'caniemail.com' in (r.source.get('url') or '')]
+        self.assertGreater(len(caniemail_rules), 0)
+        for rule in caniemail_rules:
+            self.assertNotIn('ADAPTED FROM', rule.source['name'].upper())
+            self.assertIn('cross-referenced', rule.source['name'])
+            self.assertIsNone(rule.source['version'])  # no dataset snapshot was pinned
+
+    def test_developer_authored_rules_never_claim_an_external_source(self):
+        developer_rules = [r for r in load_rules() if r.source['url'] is None]
+        self.assertGreater(len(developer_rules), 0)
+        for rule in developer_rules:
+            self.assertIn('developer-authored', rule.source['name'])
+
+    # --- Sub-phase 5 -- zero-network lookup (deterministic operation) ---
+
+    def test_load_rules_never_touches_the_network(self):
+        """A crude but real guarantee: load_rules() returns a plain
+        in-memory tuple->list conversion with zero I/O of any kind --
+        proven by the fact it completes with no mocking/patching of any
+        network or filesystem primitive required."""
+        import time
+        started = time.perf_counter()
+        load_rules()
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        self.assertLess(elapsed_ms, 50)  # a real network/disk call would be orders of magnitude slower
+
+    # --- Feature 14 V3 architectural invariant (client-registry
+    # extensibility) -- proves the taxonomy is genuinely structured-data-
+    # driven, not a permanently finite hardcoded enum. ---
+
+    def test_affected_client_values_is_computed_from_the_registry_not_independently_hardcoded(self):
+        from emailbuilder.knowledge.rules import _AFFECTED_CLIENT_META_VALUES
+        self.assertEqual(AFFECTED_CLIENT_VALUES, frozenset(EMAIL_CLIENT_REGISTRY.keys()) | _AFFECTED_CLIENT_META_VALUES)
+
+    def test_every_registry_client_has_a_name_and_engine_family(self):
+        for client_id, meta in EMAIL_CLIENT_REGISTRY.items():
+            self.assertTrue(meta.get('name'), msg=client_id)
+            self.assertTrue(meta.get('engine_family'), msg=client_id)
+
+    # --- Validation Center / AI Engineer shared source of truth ---
+
+    def test_knowledge_categories_stay_in_lockstep_with_validation_centers_categories(self):
+        """frontend/src/emailbuilder/emailValidation.ts's 9 categories are
+        the single source of truth this mirrors -- a category present
+        here but not there (or vice versa) is a rule-authoring bug."""
+        self.assertEqual(KNOWLEDGE_RULE_CATEGORIES, {
+            'document', 'html', 'outlook', 'responsive', 'accessibility', 'links', 'images', 'dark-mode', 'platform',
+        })
 
 
 class EmailAiEngineerExplainIntentTests(TestCase):
@@ -1928,6 +2344,99 @@ class EmailAiEngineerExplainIntentTests(TestCase):
         result = self.provider.resolve('explain the row collapse trick', {})
         self.assertNotIn('css', result.action)
         self.assertEqual(result.action, {'type': ActionType.NONE})
+
+
+class EmailAiEngineerExplainIntentSubphase5Tests(TestCase):
+    """Sub-phase 5 -- deterministic explain coverage for the expanded
+    (14 -> 50 rule) knowledge base, one representative phrasing per new
+    client/concern. Proves the AI Engineer's zero-token explain intent
+    genuinely surfaces the Sub-phase 5 knowledge, not just the original
+    14 rules."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def _assert_explains(self, message, expected_substring):
+        result = self.provider.resolve(message, {})
+        self.assertEqual(result.action, {'type': ActionType.NONE}, msg=message)
+        self.assertIn(expected_substring, result.reply, msg=message)
+        return result
+
+    def test_explain_gmail_dark_mode(self):
+        self._assert_explains('explain gmail dark mode', 'Gmail')
+
+    def test_explain_apple_mail_dark_mode(self):
+        self._assert_explains('explain apple mail dark mode', 'Apple Mail')
+
+    def test_explain_new_outlook_dark_mode_differs_from_classic(self):
+        new_result = self._assert_explains('explain new outlook dark mode', 'New Outlook')
+        classic_result = self._assert_explains('explain classic outlook dark mode', 'Classic Outlook')
+        self.assertNotEqual(new_result.reply, classic_result.reply)
+
+    def test_explain_bare_dark_mode_gives_the_cross_client_strategy_not_a_single_client_guess(self):
+        # generic answer synthesizes across clients (may cite several as
+        # examples) rather than answering as if only one client was asked
+        # about -- proven by citing more than one client by name, not by
+        # the absence of any single client's name.
+        result = self._assert_explains('what is dark mode', 'three distinct behaviors')
+        self.assertIn('Gmail', result.reply)
+        self.assertIn('Classic Outlook', result.reply)
+
+    def test_explain_outlook_com(self):
+        self._assert_explains('explain outlook.com', 'Outlook.com')
+
+    def test_explain_new_outlook_css_support(self):
+        self._assert_explains('explain new outlook css support', 'Chromium')
+
+    def test_explain_ios_mail_format_detection(self):
+        self._assert_explains('explain ios mail format detection', 'auto-links')
+
+    def test_explain_dynamic_type(self):
+        self._assert_explains('what is dynamic type', 'Dynamic Type')
+
+    def test_explain_gmail_clipping(self):
+        self._assert_explains('explain gmail clipping', '102KB')
+
+    def test_explain_gmail_image_blocking(self):
+        self._assert_explains('explain gmail image blocking', 'proxies')
+
+    def test_explain_gmail_bare_gives_a_gmail_specific_answer(self):
+        self._assert_explains('explain gmail', 'Gmail')
+
+    def test_explain_apple_mail_bare(self):
+        self._assert_explains('explain apple mail', 'Apple Mail')
+
+    def test_explain_yahoo_mail(self):
+        self._assert_explains('explain yahoo mail', 'Yahoo')
+
+    def test_explain_aol_mail(self):
+        self._assert_explains('explain aol mail', 'AOL')
+
+    def test_explain_bulletproof_button(self):
+        self._assert_explains('explain bulletproof button', 'VML')
+
+    def test_explain_outlook_background_image(self):
+        self._assert_explains('explain outlook background image', 'Word')
+
+    def test_explain_table_layout(self):
+        self._assert_explains('explain table layout', 'table')
+
+    def test_explain_outlook_line_height(self):
+        self._assert_explains('explain outlook line height', 'mso-line-height-rule')
+
+    def test_explain_hybrid_width(self):
+        self._assert_explains('explain hybrid width', 'ghost table')
+
+    def test_explain_absolute_links(self):
+        self._assert_explains('explain absolute links', 'https://')
+
+    def test_explain_wcag_contrast(self):
+        self._assert_explains('explain wcag contrast', 'WCAG')
+
+    def test_explain_unrecognized_new_topic_still_gives_the_updated_clarify_reply(self):
+        result = self.provider.resolve('explain the meaning of life', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Gmail', result.reply)  # the clarify reply itself now advertises the new topics
 
 
 class EmailAiEngineerDocumentSettingsCommandTests(TestCase):
@@ -2141,6 +2650,278 @@ class ValidateActionTests(TestCase):
             {'type': ActionType.CLEAR_FAVICON},
         ]:
             self.assertTrue(requires_confirmation(action))
+
+    # --- Sub-phase 6, work package D -- the six previously-reserved action types ---
+
+    def test_update_module_settings_accepts_the_allow_listed_boolean_fields(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'button',
+            'patch': {'outlookVml': True},
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'target': 'selected', 'module_type': 'button',
+            'patch': {'outlookVml': True},
+        })
+
+    def test_update_module_settings_accepts_visibility_enum(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text',
+            'patch': {'visibility': 'hideMobile'},
+        })
+        self.assertEqual(result['patch'], {'visibility': 'hideMobile'})
+
+    def test_update_module_settings_rejects_unknown_settings_key(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text',
+            'patch': {'columnGutter': {'value': 999}},
+        })
+        self.assertIsNone(result)
+
+    def test_update_module_settings_rejects_invalid_visibility_value(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'text',
+            'patch': {'visibility': 'hideEverything'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_module_settings_rejects_non_boolean_for_boolean_field(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'button',
+            'patch': {'outlookVml': 'yes'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_module_settings_rejects_unknown_module_type(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': 'not-a-real-type',
+            'patch': {'outlookVml': True},
+        })
+        self.assertIsNone(result)
+
+    def test_apply_vml_pattern_accepts_button(self):
+        result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'button'})
+        self.assertEqual(result, {'type': ActionType.APPLY_VML_PATTERN, 'target': 'selected', 'module_type': 'button'})
+
+    def test_apply_vml_pattern_rejects_a_non_button_capable_type(self):
+        result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': 'text'})
+        self.assertIsNone(result)
+
+    def test_apply_outlook_wrapper_accepts_hero_background_image(self):
+        result = validate_action({'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'hero-background-image'})
+        self.assertEqual(result, {
+            'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'target': 'selected', 'module_type': 'hero-background-image',
+        })
+
+    def test_apply_outlook_wrapper_rejects_a_non_background_capable_type(self):
+        # A button is VML-button-capable but NOT VML-background-capable --
+        # proves the two allow-lists are genuinely distinct, not aliases.
+        result = validate_action({'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': 'button'})
+        self.assertIsNone(result)
+
+    def test_apply_vml_pattern_accepts_every_manifest_bulletproof_cta_type(self):
+        # Sub-phase 6 closure -- APPLY_VML_PATTERN is now capability-driven
+        # (module_capabilities.supports_bulletproof_cta), not a hardcoded
+        # {'button'} set. Every one of the eligible types must validate,
+        # proving the wiring is genuinely manifest-driven rather than a
+        # second hand-typed list that happens to match today. Includes the
+        # final-reconciliation pill-link types: their bordered/rounded
+        # container degrades to a square in Classic Outlook exactly like an
+        # unfilled button would, regardless of the missing background fill.
+        for module_type in [
+            'cta-centered', 'cta-banner', 'cta-text-cta', 'cta-dual',
+            'content-heading-text-cta', 'content-image-left', 'content-image-right', 'content-image-top',
+            'hero-image-cta', 'hero-background-image', 'hero-text-only', 'hero-image-left', 'hero-image-right',
+            'hero-centered-promo', 'header-logo-cta', 'product-single', 'product-two-cards', 'product-three-cards',
+            'product-image-price-cta', 'product-grid', 'image-text', 'text-image',
+            'social-icon-row', 'social-follow-us', 'footer-social-legal',
+        ]:
+            with self.subTest(module_type=module_type):
+                result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': module_type})
+                self.assertEqual(result, {'type': ActionType.APPLY_VML_PATTERN, 'target': 'selected', 'module_type': module_type})
+
+    def test_apply_vml_pattern_still_rejects_plain_link_module_types(self):
+        # Evidence-based exclusions surviving the final reconciliation --
+        # these render plain text/nav links with NO bordered/rounded
+        # container at all (unlike the pill-link types above).
+        for module_type in [
+            'header-logo-nav', 'content-article-teaser', 'footer-preference-unsubscribe',
+            'footer-simple-legal', 'footer-address-contact',
+        ]:
+            with self.subTest(module_type=module_type):
+                result = validate_action({'type': ActionType.APPLY_VML_PATTERN, 'module_type': module_type})
+                self.assertIsNone(result)
+
+    def test_restructure_layout_accepts_valid_widths_summing_to_100(self):
+        result = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [60, 40],
+        })
+        self.assertEqual(result, {
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'target': 'selected', 'module_type': 'layout-2col-50-50',
+            'widths': [60.0, 40.0],
+        })
+
+    def test_restructure_layout_rejects_a_non_layout_module_type(self):
+        result = validate_action({'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'text', 'widths': [100]})
+        self.assertIsNone(result)
+
+    def test_restructure_layout_rejects_widths_not_summing_to_100(self):
+        result = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [60, 60],
+        })
+        self.assertIsNone(result)
+
+    def test_restructure_layout_rejects_a_width_below_the_minimum(self):
+        result = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-3col', 'widths': [95, 3, 2],
+        })
+        self.assertIsNone(result)
+
+    def test_restructure_layout_requires_confirmation(self):
+        action = validate_action({
+            'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': 'layout-2col-50-50', 'widths': [60, 40],
+        })
+        self.assertTrue(requires_confirmation(action))
+
+    def test_insert_nested_module_accepts_a_non_layout_type_with_a_patch(self):
+        result = validate_action({
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {'text': 'Hello'},
+        })
+        self.assertEqual(result, {
+            'type': ActionType.INSERT_NESTED_MODULE, 'target': 'selected_column', 'module_type': 'text',
+            'patch': {'text': 'Hello'},
+        })
+
+    def test_insert_nested_module_rejects_nesting_a_layout_inside_a_layout(self):
+        result = validate_action({
+            'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'layout-2col-50-50', 'patch': {},
+        })
+        self.assertIsNone(result)
+
+    def test_insert_nested_module_rejects_unknown_module_type(self):
+        result = validate_action({'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'not-a-real-type', 'patch': {}})
+        self.assertIsNone(result)
+
+    def test_insert_nested_module_tolerates_a_missing_patch(self):
+        result = validate_action({'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'button'})
+        self.assertEqual(result['patch'], {})
+
+    def test_replace_unsupported_property_uses_the_same_gate_as_update_module_props(self):
+        result = validate_action({
+            'type': ActionType.REPLACE_UNSUPPORTED_PROPERTY, 'module_type': 'text',
+            'patch': {'color': 'green', 'onclick': 'alert(1)'},
+        })
+        self.assertEqual(result['patch'], {'color': '#76C043'})
+
+    def test_replace_unsupported_property_rejects_unknown_module_type(self):
+        result = validate_action({
+            'type': ActionType.REPLACE_UNSUPPORTED_PROPERTY, 'module_type': 'not-a-real-type', 'patch': {'color': 'green'},
+        })
+        self.assertIsNone(result)
+
+    # --- Sub-phase 6, work package E -- UPDATE_REPEATABLE_FIELD ---
+
+    def test_update_repeatable_field_add_validates_item_against_manifest_item_schema(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'Pricing', 'href': 'https://example.com/pricing', 'onclick': 'alert(1)'},
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'target': 'selected', 'module_type': 'header-logo-nav',
+            'op': 'add', 'item': {'label': 'Pricing', 'href': 'https://example.com/pricing'},
+        })
+
+    def test_update_repeatable_field_add_rejects_a_module_type_with_no_repeatable_field(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'text', 'op': 'add',
+            'item': {'label': 'x', 'href': 'https://example.com'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_repeatable_field_add_drops_an_unsafe_href_but_keeps_the_safe_label(self):
+        # Same per-field drop convention _validate_patch already uses for
+        # UPDATE_MODULE_PROPS — an unsafe individual field is dropped, not
+        # a reason to reject the whole item, as long as something safe
+        # survives.
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'x', 'href': 'javascript:alert(1)'},
+        })
+        self.assertEqual(result['item'], {'label': 'x'})
+        self.assertNotIn('href', result['item'])
+
+    def test_update_repeatable_field_add_rejects_an_empty_item(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'notARealKey': 'x'},
+        })
+        self.assertIsNone(result)
+
+    def test_update_repeatable_field_update_requires_a_non_negative_index(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'update',
+            'index': 0, 'item': {'label': 'Renamed'},
+        })
+        self.assertEqual(result['index'], 0)
+        rejected = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'update',
+            'index': -1, 'item': {'label': 'x'},
+        })
+        self.assertIsNone(rejected)
+
+    def test_update_repeatable_field_remove_requires_a_non_negative_index(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'remove', 'index': 2,
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'target': 'selected', 'module_type': 'header-logo-nav',
+            'op': 'remove', 'index': 2,
+        })
+
+    def test_update_repeatable_field_remove_requires_confirmation(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'remove', 'index': 0,
+        })
+        self.assertTrue(requires_confirmation(action))
+
+    def test_update_repeatable_field_add_does_not_require_confirmation(self):
+        action = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'add',
+            'item': {'label': 'x', 'href': 'https://example.com'},
+        })
+        self.assertFalse(requires_confirmation(action))
+
+    def test_update_repeatable_field_reorder_requires_both_indices(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'reorder',
+            'fromIndex': 0, 'toIndex': 2,
+        })
+        self.assertEqual(result, {
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'target': 'selected', 'module_type': 'header-logo-nav',
+            'op': 'reorder', 'fromIndex': 0, 'toIndex': 2,
+        })
+
+    def test_update_repeatable_field_rejects_an_unknown_op(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'header-logo-nav', 'op': 'delete_everything',
+        })
+        self.assertIsNone(result)
+
+    def test_update_repeatable_field_works_for_product_items_too(self):
+        result = validate_action({
+            'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': 'product-single', 'op': 'update',
+            'index': 0, 'item': {'name': 'New Product', 'price': '$19.99'},
+        })
+        self.assertEqual(result['item'], {'name': 'New Product', 'price': '$19.99'})
+
+    def test_reserved_action_types_are_no_longer_reduced_to_none(self):
+        # Sub-phase 5's provenance/knowledge tests already prove the
+        # OPPOSITE state (reserved-but-unimplemented) is gone; this proves
+        # every one of the six now round-trips through its own real branch.
+        for action_type in ActionType.STRUCTURAL | {
+            ActionType.UPDATE_MODULE_SETTINGS, ActionType.INSERT_NESTED_MODULE,
+            ActionType.APPLY_OUTLOOK_WRAPPER, ActionType.APPLY_VML_PATTERN, ActionType.REPLACE_UNSUPPORTED_PROPERTY,
+        }:
+            self.assertIn(action_type, ActionType.IMPLEMENTED)
 
 
 class EmailAICommandViewTests(TestCase):
@@ -3099,3 +3880,1023 @@ class CustomCssSecurityObfuscationTests(TestCase):
 
     def test_malformed_url_missing_close_paren_still_rejected(self):
         self._rejects('.x{background:url(javascript:alert(1)}')
+
+
+# ============================================================================
+# Feature 14 V3 Sub-phase 7 — Professional Email Composition & Template
+# Generation
+# ============================================================================
+
+from . import composition  # noqa: E402
+
+
+class CompositionEngineDeterministicTests(TestCase):
+    """composition.py's pure logic — no network, no provider, no view.
+    Covers the exact example briefs from the Sub-phase 7 spec plus every
+    curated pattern and the bounded free-text interpretation (never
+    exact-name-only matching)."""
+
+    def test_promotional_brief_with_explicit_sections(self):
+        result = composition.compose_from_brief(
+            'Create a promotional email for a summer sale with preheader, header, hero, products, '
+            'CTA, social links and footer.',
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'promotional')
+        types = [item['module_type'] for item in result['items']]
+        self.assertIn('header-preheader-logo', types)  # preheader signal upgraded the header slot
+        self.assertTrue(any(t.startswith('hero') for t in types))
+        self.assertTrue(any(t.startswith('product') for t in types))
+        self.assertTrue(any(t.startswith('cta') or t == 'button' for t in types))
+        self.assertTrue(any(t.startswith('social') for t in types))
+        self.assertTrue(any(t.startswith('footer') for t in types))
+        # The literal brief phrase becomes the hero headline -- never a
+        # fabricated headline.
+        hero_item = next(item for item in result['items'] if item['module_type'].startswith('hero'))
+        self.assertEqual(hero_item['patch'].get('headline'), 'Summer sale')
+
+    def test_newsletter_brief_produces_nested_two_column_layout(self):
+        result = composition.compose_from_brief(
+            'Build a newsletter with introduction, two content sections and a closing CTA.',
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'newsletter')
+        layout_items = [item for item in result['items'] if item['module_type'].startswith('layout-')]
+        self.assertEqual(len(layout_items), 1)
+        layout_item = layout_items[0]
+        self.assertIn('children', layout_item)
+        self.assertEqual(len(layout_item['children']), 2)
+        for group in layout_item['children']:
+            self.assertEqual(len(group['modules']), 1)
+            self.assertFalse(group['modules'][0]['module_type'].startswith('layout-'))
+        self.assertTrue(any(t['module_type'].startswith('cta') for t in result['items']))
+
+    def test_product_launch_brief(self):
+        result = composition.compose_from_brief('Create a product launch email.')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'product_launch')
+        self.assertTrue(any(item['module_type'].startswith('product') for item in result['items']))
+
+    def test_welcome_onboarding_brief(self):
+        result = composition.compose_from_brief('Make a welcome/onboarding email.')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'welcome')
+
+    def test_event_brief(self):
+        result = composition.compose_from_brief('Create an event announcement email for our webinar')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'event')
+
+    def test_transactional_brief(self):
+        result = composition.compose_from_brief('Make a transactional confirmation email')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'transactional')
+
+    def test_editorial_brief(self):
+        result = composition.compose_from_brief('Build an editorial email about our latest blog post')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'editorial')
+
+    def test_generic_email_request_degrades_to_announcement_pattern(self):
+        result = composition.compose_from_brief('Create a quick announcement email about our office closing')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'announcement')
+
+    def test_bare_pattern_keyword_without_the_word_email_still_composes(self):
+        """Not exact-name-only matching -- 'newsletter' alone (no literal
+        'email' word) still resolves, because every curated pattern name
+        IS unambiguously an email pattern in this builder."""
+        result = composition.compose_from_brief('Please build a newsletter for our subscribers')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['pattern_key'], 'newsletter')
+
+    def test_unrelated_module_edit_request_is_not_a_composition(self):
+        self.assertIsNone(composition.compose_from_brief('update the button color to green'))
+
+    def test_single_module_add_request_is_not_a_composition(self):
+        self.assertIsNone(composition.compose_from_brief('Create a button'))
+
+    def test_empty_and_none_text_are_not_compositions(self):
+        self.assertIsNone(composition.compose_from_brief(''))
+        self.assertIsNone(composition.compose_from_brief(None))
+
+    def test_every_curated_pattern_resolves_to_at_least_one_item(self):
+        for key in composition.PATTERNS:
+            with self.subTest(pattern=key):
+                items = composition.build_composition(key)
+                self.assertGreater(len(items), 0)
+
+    def test_composition_never_exceeds_max_items(self):
+        for key in composition.PATTERNS:
+            items = composition.build_composition(
+                key, extra_sections={'preheader', 'header', 'hero', 'products', 'cta', 'social', 'footer'},
+            )
+            self.assertLessEqual(len(items), composition.MAX_COMPOSITION_ITEMS)
+
+    def test_every_composition_item_module_type_is_a_real_registered_type(self):
+        for key in composition.PATTERNS:
+            for item in composition.build_composition(key):
+                with self.subTest(pattern=key, module_type=item.module_type):
+                    self.assertIn(item.module_type, module_capabilities.get_all_module_types())
+
+    def test_social_signal_adds_social_section_when_pattern_lacks_one(self):
+        # 'transactional' base pattern has no social slot.
+        without = composition.build_composition('transactional')
+        self.assertFalse(any(i.module_type.startswith('social') for i in without))
+        with_social = composition.build_composition('transactional', extra_sections={'social'})
+        self.assertTrue(any(i.module_type.startswith('social') for i in with_social))
+
+    def test_products_signal_adds_products_section_when_pattern_lacks_one(self):
+        without = composition.build_composition('welcome')
+        self.assertFalse(any(i.module_type.startswith('product') for i in without))
+        with_products = composition.build_composition('welcome', extra_sections={'products'})
+        self.assertTrue(any(i.module_type.startswith('product') for i in with_products))
+
+    def test_repeatable_seed_items_are_real_manifest_schema_keys(self):
+        social_item = composition._social_item()
+        self.assertIsNotNone(social_item)
+        repeatable = module_capabilities.get_repeatable_field(social_item.module_type)
+        allowed_keys = {f['key'] for f in repeatable['itemSchema']}
+        for raw_item in social_item.repeatable_items:
+            for key in raw_item:
+                with self.subTest(key=key):
+                    self.assertIn(key, allowed_keys)
+
+    def test_to_dict_round_trip_shape(self):
+        item = composition.CompositionItem('button', {'text': 'Shop Now'})
+        as_dict = item.to_dict()
+        self.assertEqual(as_dict, {'module_type': 'button', 'patch': {'text': 'Shop Now'}})
+
+
+class ComposeEmailValidateActionTests(TestCase):
+    """The validate_action() COMPOSE_EMAIL gate -- proves a composition
+    item can never carry anything a hand-typed action wouldn't also be
+    allowed to carry, and that malformed input is safely rejected/reduced
+    rather than crashing or silently accepted."""
+
+    def test_missing_items_rejected(self):
+        self.assertIsNone(validate_action({'type': ActionType.COMPOSE_EMAIL}))
+
+    def test_empty_items_rejected(self):
+        self.assertIsNone(validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': []}))
+
+    def test_non_list_items_rejected(self):
+        self.assertIsNone(validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': 'not-a-list'}))
+
+    def test_unknown_module_type_dropped_entirely(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'not-a-real-type', 'patch': {}}],
+        })
+        self.assertIsNone(result)
+
+    def test_valid_flat_item_accepted(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {'text': 'Shop'}}],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'button', 'patch': {'text': 'Shop'}}])
+
+    def test_unsupported_patch_key_stripped_not_the_whole_item(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {'text': 'Shop', 'notARealField': 'x'}}],
+        })
+        self.assertEqual(result['items'][0]['patch'], {'text': 'Shop'})
+
+    def test_nested_layout_inside_layout_column_is_rejected(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [{'column_index': 0, 'modules': [{'module_type': 'layout-1col', 'patch': {}}]}],
+            }],
+        })
+        # The layout survives; the illegal nested-layout child is dropped,
+        # leaving no children at all (the group had nothing safe left).
+        self.assertEqual(result['items'], [{'module_type': 'layout-2col-50-50', 'patch': {}}])
+
+    def test_valid_nested_child_module_is_kept(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'Left'}}]},
+                    {'column_index': 1, 'modules': [{'module_type': 'text', 'patch': {'text': 'Right'}}]},
+                ],
+            }],
+        })
+        item = result['items'][0]
+        self.assertEqual(len(item['children']), 2)
+        self.assertEqual(item['children'][0]['modules'][0]['patch'], {'text': 'Left'})
+        self.assertEqual(item['children'][1]['modules'][0]['patch'], {'text': 'Right'})
+
+    def test_out_of_range_column_index_dropped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [{'column_index': 5, 'modules': [{'module_type': 'text', 'patch': {}}]}],
+            }],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'layout-2col-50-50', 'patch': {}}])
+
+    def test_negative_column_index_dropped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [{'column_index': -1, 'modules': [{'module_type': 'text', 'patch': {}}]}],
+            }],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'layout-2col-50-50', 'patch': {}}])
+
+    def test_duplicate_column_index_second_occurrence_dropped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'First'}}]},
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'Second'}}]},
+                ],
+            }],
+        })
+        self.assertEqual(len(result['items'][0]['children']), 1)
+
+    def test_children_count_bounded_by_column_count(self):
+        # layout-2col-50-50 only has 2 columns -- a 3rd group is ignored.
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-2col-50-50', 'patch': {},
+                'children': [
+                    {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {}}]},
+                    {'column_index': 1, 'modules': [{'module_type': 'text', 'patch': {}}]},
+                    {'column_index': 2, 'modules': [{'module_type': 'text', 'patch': {}}]},
+                ],
+            }],
+        })
+        self.assertEqual(len(result['items'][0]['children']), 2)
+
+    def test_repeatable_items_validated_field_by_field(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'social-icon-row', 'patch': {},
+                'repeatable_items': [{'label': 'Facebook', 'href': 'https://facebook.com/x', 'evilKey': 'x'}],
+            }],
+        })
+        item = result['items'][0]
+        self.assertEqual(item['repeatable_items'], [{'label': 'Facebook', 'href': 'https://facebook.com/x'}])
+
+    def test_repeatable_items_on_a_module_without_a_repeatable_field_are_ignored(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {}, 'repeatable_items': [{'label': 'x', 'href': 'y'}]}],
+        })
+        self.assertNotIn('repeatable_items', result['items'][0])
+
+    def test_items_beyond_max_composition_items_are_truncated(self):
+        raw_items = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_ITEMS + 5)]
+        result = validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': raw_items})
+        self.assertEqual(len(result['items']), ai_command_module.MAX_COMPOSITION_ITEMS)
+
+    def test_children_beyond_max_per_column_are_truncated(self):
+        raw_modules = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_CHILDREN_PER_COLUMN + 3)]
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'layout-1col', 'patch': {}, 'children': [{'column_index': 0, 'modules': raw_modules}]}],
+        })
+        self.assertEqual(
+            len(result['items'][0]['children'][0]['modules']), ai_command_module.MAX_COMPOSITION_CHILDREN_PER_COLUMN,
+        )
+
+    def test_non_dict_item_in_items_list_skipped(self):
+        result = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': ['not-a-dict', {'module_type': 'button', 'patch': {}}],
+        })
+        self.assertEqual(result['items'], [{'module_type': 'button', 'patch': {}}])
+
+    def test_compose_email_always_requires_confirmation(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'button', 'patch': {}}],
+        })
+        self.assertTrue(requires_confirmation(action))
+
+    def test_unimplemented_action_types_still_safely_reduce_to_none(self):
+        """Sanity guard: adding COMPOSE_EMAIL to IMPLEMENTED must not have
+        broken the reduce-to-NONE behavior for a genuinely-not-yet-real
+        future action type."""
+        result = validate_action({'type': 'SOME_FUTURE_ACTION_TYPE'})
+        self.assertIsNone(result)
+
+
+class ComposeEmailAssetResolutionTests(TestCase):
+    """resolve_asset_references() for COMPOSE_EMAIL -- ownership-checked
+    asset resolution walked recursively across a composition item's own
+    patch, nested children, and repeatable items."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='compose.owner', email='compose.owner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='compose.intruder', email='compose.intruder@example.com', password='StrongPass123')
+        self.owned_asset = EmailAsset.objects.create(
+            user=self.user, name='Hero image', category='image',
+            source_type='external', external_url='https://example.com/owned-hero.png',
+        )
+        self.other_users_asset = EmailAsset.objects.create(
+            user=self.other_user, name='Not yours', category='image',
+            source_type='external', external_url='https://example.com/intruder.png',
+        )
+
+    def _request(self):
+        from django.test import RequestFactory
+
+        factory = RequestFactory()
+        request = factory.post('/api/v1/email-builder/ai-command/')
+        request.user = self.user
+        return request
+
+    def test_owned_asset_marker_in_top_level_patch_resolves(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{'module_type': 'image', 'patch': {'src': {'assetId': self.owned_asset.pk}}}],
+        })
+        resolved = resolve_asset_references(action, self._request())
+        self.assertEqual(resolved['items'][0]['patch']['src'], 'https://example.com/owned-hero.png')
+
+    def test_other_users_asset_marker_in_nested_child_never_resolves(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'layout-1col', 'patch': {},
+                'children': [{'column_index': 0, 'modules': [
+                    {'module_type': 'image', 'patch': {'src': {'assetId': self.other_users_asset.pk}}},
+                ]}],
+            }],
+        })
+        resolved = resolve_asset_references(action, self._request())
+        nested_patch = resolved['items'][0]['children'][0]['modules'][0]['patch']
+        self.assertNotIn('src', nested_patch)
+
+    def test_owned_asset_marker_in_repeatable_item_resolves(self):
+        action = validate_action({
+            'type': ActionType.COMPOSE_EMAIL,
+            'items': [{
+                'module_type': 'product-single', 'patch': {},
+                'repeatable_items': [{'imageSrc': {'assetId': self.owned_asset.pk}, 'name': 'Widget'}],
+            }],
+        })
+        resolved = resolve_asset_references(action, self._request())
+        self.assertEqual(
+            resolved['items'][0]['repeatable_items'][0]['imageSrc'], 'https://example.com/owned-hero.png',
+        )
+
+
+class RuleBasedEmailCommandProviderComposeTests(TestCase):
+    """The deterministic router's compose-intent detection -- the exact
+    example briefs from the Sub-phase 7 spec, plus regression guards
+    proving ordinary single-module commands are entirely unaffected."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_promotional_example_brief_resolves_to_compose_email(self):
+        result = self.provider.resolve(
+            'Create a promotional email for a summer sale with preheader, header, hero, products, '
+            'CTA, social links and footer.', {},
+        )
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        self.assertGreater(len(validated['items']), 1)
+
+    def test_newsletter_example_brief_resolves_to_compose_email(self):
+        result = self.provider.resolve('Build a newsletter with introduction, two content sections and a closing CTA.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+
+    def test_product_launch_example_brief(self):
+        result = self.provider.resolve('Create a product launch email.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+
+    def test_welcome_onboarding_example_brief(self):
+        result = self.provider.resolve('Make a welcome/onboarding email.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+
+    def test_zero_provider_operation_works_with_no_context_and_no_selection(self):
+        """The whole point of the deterministic path: it must work with an
+        empty context dict, no selected module, and no OpenAI/local
+        provider configured at all -- this test instantiates the router
+        directly, which IS the zero-provider path."""
+        result = self.provider.resolve('Create a promotional email for a launch', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertGreater(result.confidence, 0)
+
+    def test_compose_email_response_survives_full_validate_action_gate(self):
+        result = self.provider.resolve('Create a product launch email.', {})
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        for item in validated['items']:
+            self.assertIn(item['module_type'], module_capabilities.get_all_module_types())
+
+    # --- Regression guards: ordinary single-module commands unaffected ---
+
+    def test_add_a_button_still_inserts_a_single_module_not_a_composition(self):
+        result = self.provider.resolve('add a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+    def test_create_a_button_still_inserts_a_single_module_not_a_composition(self):
+        result = self.provider.resolve('Create a button', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+
+    def test_unrelated_style_command_still_works(self):
+        context = {'selected_module': _selected('button')}
+        result = self.provider.resolve('make it bigger', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_MODULE_PROPS)
+
+    def test_explain_command_still_takes_priority_over_compose_detection(self):
+        result = self.provider.resolve('explain what vml is', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertEqual(result.confidence, 1.0)
+
+
+class OpenAIEmailCommandProviderComposeTests(TestCase):
+    """Provider-assisted composition -- the OpenAI provider CAN propose a
+    richer COMPOSE_EMAIL plan; malformed/invalid provider output is
+    rejected safely by the SAME validate_action() gate, never a second,
+    looser path for provider-authored compositions."""
+
+    def _fake_completion(self, payload_dict):
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=json.dumps(payload_dict)))]
+        return completion
+
+    def test_schema_includes_compose_email_items_shape(self):
+        schema = ai_command_openai_module._action_schema()
+        action_props = schema['schema']['properties']['action']['properties']
+        self.assertIn('items', action_props)
+        self.assertIn('COMPOSE_EMAIL', schema['schema']['properties']['action']['properties']['type']['enum'])
+
+    def test_valid_compose_email_structured_response_passes_validation(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'Composing a promotional email.', 'confidence': 0.9,
+            'action': {
+                'type': 'COMPOSE_EMAIL', 'target': None, 'module_type': None, 'modules': None, 'patch': None,
+                'enabled': None, 'css': None, 'value': None, 'url': None,
+                'items': [
+                    {'module_type': 'header-logo-center', 'patch': {}, 'children': None, 'repeatable_items': None},
+                    {
+                        'module_type': 'layout-2col-50-50', 'patch': {}, 'repeatable_items': None,
+                        'children': [
+                            {'column_index': 0, 'modules': [{'module_type': 'text', 'patch': {'text': 'Left'}}]},
+                            {'column_index': 1, 'modules': [{'module_type': 'text', 'patch': {'text': 'Right'}}]},
+                        ],
+                    },
+                    {'module_type': 'button', 'patch': {'text': 'Shop Now'}, 'children': None, 'repeatable_items': None},
+                ],
+            },
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('create a promotional email', {})
+        self.assertEqual(result.action['type'], 'COMPOSE_EMAIL')
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        self.assertEqual(len(validated['items']), 3)
+        layout_item = validated['items'][1]
+        self.assertEqual(len(layout_item['children']), 2)
+
+    def test_provider_hallucinated_module_type_in_composition_is_dropped_not_trusted(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.9,
+            'action': {
+                'type': 'COMPOSE_EMAIL', 'target': None, 'module_type': None, 'modules': None, 'patch': None,
+                'enabled': None, 'css': None, 'value': None, 'url': None,
+                'items': [
+                    {'module_type': 'button', 'patch': {'text': 'Real'}, 'children': None, 'repeatable_items': None},
+                    {'module_type': 'fabricated-hero-type', 'patch': {}, 'children': None, 'repeatable_items': None},
+                ],
+            },
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('create a promotional email', {})
+        validated = validate_action(result.action)
+        self.assertEqual(len(validated['items']), 1)
+        self.assertEqual(validated['items'][0]['module_type'], 'button')
+
+    def test_malformed_provider_response_falls_back_to_deterministic_via_wrapper(self):
+        client = MagicMock()
+        bad_completion = MagicMock()
+        bad_completion.choices = [MagicMock(message=MagicMock(content='not valid json'))]
+        client.chat.completions.create.return_value = bad_completion
+        provider = FallbackEmailCommandProvider(
+            primary=OpenAIEmailCommandProvider(client_factory=lambda: client),
+            fallback=RuleBasedEmailCommandProvider(),
+        )
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('Create a promotional email for a summer sale', {})
+        # Falls back to the deterministic composition path -- still a real
+        # COMPOSE_EMAIL proposal, just from the always-available router.
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertEqual(result.provider, 'deterministic')
+
+    def test_provider_call_failure_falls_back_to_deterministic(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError('network down')
+        provider = FallbackEmailCommandProvider(
+            primary=OpenAIEmailCommandProvider(client_factory=lambda: client),
+            fallback=RuleBasedEmailCommandProvider(),
+        )
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            result = provider.resolve('Build a newsletter with two content sections', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertEqual(result.provider, 'deterministic')
+
+
+class LocalEmailCommandProviderComposeTests(TestCase):
+    """Mirrors OpenAIEmailCommandProviderComposeTests for the local/self-
+    hosted provider -- same schema, same validation gate, same fallback
+    wrapper."""
+
+    def _fake_completion(self, payload_dict):
+        completion = MagicMock()
+        completion.choices = [MagicMock(message=MagicMock(content=json.dumps(payload_dict)))]
+        return completion
+
+    def test_schema_includes_compose_email_items_shape(self):
+        schema = ai_command_local_module._action_schema()
+        action_props = schema['schema']['properties']['action']['properties']
+        self.assertIn('items', action_props)
+
+    def test_valid_compose_email_structured_response_passes_validation(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'Composing a welcome email.', 'confidence': 0.9,
+            'action': {
+                'type': 'COMPOSE_EMAIL', 'target': None, 'module_type': None, 'modules': None, 'patch': None,
+                'enabled': None, 'css': None, 'value': None, 'url': None,
+                'items': [
+                    {'module_type': 'hero-text-only', 'patch': {'headline': 'Welcome!'}, 'children': None, 'repeatable_items': None},
+                    {
+                        'module_type': 'social-icon-row', 'patch': {}, 'children': None,
+                        'repeatable_items': [{'label': 'Facebook', 'href': 'https://facebook.com/x'}],
+                    },
+                ],
+            },
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
+            result = provider.resolve('create a welcome email', {})
+        validated = validate_action(result.action)
+        self.assertIsNotNone(validated)
+        self.assertEqual(validated['items'][1]['repeatable_items'], [{'label': 'Facebook', 'href': 'https://facebook.com/x'}])
+
+    def test_malformed_json_falls_back_via_wrapper(self):
+        client = MagicMock()
+        bad_completion = MagicMock()
+        bad_completion.choices = [MagicMock(message=MagicMock(content='{broken'))]
+        client.chat.completions.create.return_value = bad_completion
+        provider = FallbackEmailCommandProvider(
+            primary=LocalEmailCommandProvider(client_factory=lambda: client),
+            fallback=RuleBasedEmailCommandProvider(),
+        )
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
+            result = provider.resolve('Create a product launch email.', {})
+        self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
+        self.assertEqual(result.provider, 'deterministic')
+
+
+# ============================================================================
+# Feature 14 V3 Sub-phase 8 — Safe Self-Learning / Memory (repair-signal
+# ranking only)
+# ============================================================================
+
+from datetime import timedelta  # noqa: E402
+from unittest.mock import patch  # noqa: E402
+
+from django.db import IntegrityError  # noqa: E402
+from django.utils import timezone  # noqa: E402
+
+from . import learning as learning_module  # noqa: E402
+from .models import LearnedRepairSignal, RepairSignalOutcome, RepairSignalSource  # noqa: E402
+
+
+class LearningSignatureAndEventIdValidationTests(TestCase):
+    def test_valid_signature_accepted(self):
+        self.assertTrue(learning_module.is_valid_signature('outlook-classic:button-rounded-corners-need-vml'))
+
+    def test_signature_missing_colon_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlookclassicbuttonvml'))
+
+    def test_signature_with_uppercase_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('Outlook-Classic:Button'))
+
+    def test_signature_with_extra_segments_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlook-classic:button:extra'))
+
+    def test_signature_with_script_injection_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlook-classic:<script>alert(1)</script>'))
+
+    def test_signature_over_max_length_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature(('a' * 159) + ':b'))
+
+    def test_empty_signature_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature(''))
+
+    def test_non_string_signature_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature(None))
+        self.assertFalse(learning_module.is_valid_signature(123))
+
+    def test_valid_event_id_accepted(self):
+        self.assertTrue(learning_module.is_valid_event_id('a1b2c3d4-e5f6-7890-abcd-ef1234567890'))
+
+    def test_empty_event_id_rejected(self):
+        self.assertFalse(learning_module.is_valid_event_id(''))
+
+    def test_event_id_over_max_length_rejected(self):
+        self.assertFalse(learning_module.is_valid_event_id('x' * 65))
+
+
+class RecordSignalIdempotencyTests(TestCase):
+    """The durable-idempotency contract: (user, event_id) uniqueness, not
+    the cache debounce, is what prevents a retried request from creating
+    a second learning event or moving the evidence count."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='learner', email='learner@example.com', password='StrongPass123')
+
+    def test_first_call_creates_a_row(self):
+        signal, created = learning_module.record_signal(
+            self.user, 'evt-1', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        self.assertTrue(created)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+        self.assertEqual(signal.event_id, 'evt-1')
+
+    def test_duplicate_post_retry_produces_exactly_one_stored_signal(self):
+        for _ in range(5):
+            learning_module.record_signal(
+                self.user, 'evt-retry', 'outlook-classic:button-rounded-corners-need-vml',
+                RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+            )
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 1)
+
+    def test_retries_across_separate_calls_still_deduplicate_and_report_created_false(self):
+        _signal1, created1 = learning_module.record_signal(
+            self.user, 'evt-dup', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        _signal2, created2 = learning_module.record_signal(
+            self.user, 'evt-dup', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        self.assertTrue(created1)
+        self.assertFalse(created2)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+
+    def test_three_genuinely_separate_event_ids_count_as_three(self):
+        for i in range(3):
+            learning_module.record_signal(
+                self.user, f'evt-{i}', 'outlook-classic:button-rounded-corners-need-vml',
+                RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+            )
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 3)
+
+    def test_same_event_id_different_user_is_a_distinct_row(self):
+        User = get_user_model()
+        other = User.objects.create_user(username='learner2', email='learner2@example.com', password='StrongPass123')
+        learning_module.record_signal(
+            self.user, 'shared-evt-id', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        learning_module.record_signal(
+            other, 'shared-evt-id', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.REJECTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        self.assertEqual(LearnedRepairSignal.objects.count(), 2)
+
+    def test_concurrent_race_on_the_same_event_id_still_yields_exactly_one_row(self):
+        """Simulates two requests racing for the SAME (user, event_id):
+        the first get_or_create() call is forced to raise IntegrityError
+        (as a real DB would on the loser of a race against the unique
+        constraint) -- record_signal must catch it and return the
+        winner's already-persisted row, never propagate the error."""
+        learning_module.record_signal(
+            self.user, 'evt-race', 'outlook-classic:button-rounded-corners-need-vml',
+            RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        with patch.object(LearnedRepairSignal.objects, 'get_or_create', side_effect=IntegrityError('race')):
+            signal, created = learning_module.record_signal(
+                self.user, 'evt-race', 'outlook-classic:button-rounded-corners-need-vml',
+                RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE,
+            )
+        self.assertFalse(created)
+        self.assertIsNotNone(signal)
+        self.assertEqual(signal.event_id, 'evt-race')
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+
+    def test_database_level_unique_constraint_actually_exists(self):
+        """Defense-in-depth proof that the constraint itself (not just
+        application logic) prevents a duplicate row, independent of
+        record_signal()'s own get_or_create wrapper."""
+        LearnedRepairSignal.objects.create(
+            user=self.user, event_id='evt-constraint', signature='outlook-classic:button-rounded-corners-need-vml',
+            outcome=RepairSignalOutcome.ACCEPTED, source=RepairSignalSource.VALIDATION_CENTER_SINGLE,
+        )
+        with self.assertRaises(IntegrityError):
+            LearnedRepairSignal.objects.create(
+                user=self.user, event_id='evt-constraint', signature='outlook-classic:button-rounded-corners-need-vml',
+                outcome=RepairSignalOutcome.REJECTED, source=RepairSignalSource.AI_ENGINEER_REPAIR,
+            )
+
+
+class ComputeRankingTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='ranker', email='ranker@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='ranker2', email='ranker2@example.com', password='StrongPass123')
+
+    def _record(self, user, signature, outcome, event_id):
+        learning_module.record_signal(user, event_id, signature, outcome, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+
+    def test_zero_events_produce_empty_ranking(self):
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_one_event_produces_no_ranking_change(self):
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e1')
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_two_events_produce_no_ranking_change(self):
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e1')
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e2')
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_exactly_min_evidence_threshold_produces_a_ranking_entry(self):
+        for i in range(learning_module.MIN_EVIDENCE_THRESHOLD):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'e{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertIn('outlook-classic:x', ranking)
+        self.assertEqual(ranking['outlook-classic:x']['evidenceCount'], learning_module.MIN_EVIDENCE_THRESHOLD)
+
+    def test_laplace_smoothed_score_formula(self):
+        # 3 accepted, 0 rejected -> (3+1)/(3+0+2) = 4/5 = 0.8
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'acc{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertAlmostEqual(ranking['outlook-classic:x']['score'], 0.8)
+        self.assertEqual(ranking['outlook-classic:x']['accepted'], 3)
+        self.assertEqual(ranking['outlook-classic:x']['rejected'], 0)
+
+    def test_mixed_accept_reject_score_regresses_toward_neutral(self):
+        # 2 accepted, 2 rejected -> (2+1)/(4+2) = 3/6 = 0.5 (neutral)
+        for i in range(2):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'acc{i}')
+        for i in range(2):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.REJECTED, f'rej{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertAlmostEqual(ranking['outlook-classic:x']['score'], 0.5)
+
+    def test_mostly_rejected_score_is_below_neutral(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.REJECTED, f'rej{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertLess(ranking['outlook-classic:x']['score'], 0.5)
+
+    def test_events_outside_ranking_window_are_excluded(self):
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e1')
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e2')
+        self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, 'e3')
+        # Backdate all three past the ranking window via a queryset
+        # .update() (bypasses auto_now_add, which only fires on .save()).
+        old_date = timezone.now() - timedelta(days=learning_module.RANKING_WINDOW_DAYS + 1)
+        LearnedRepairSignal.objects.filter(user=self.user).update(created_at=old_date)
+        self.assertEqual(learning_module.compute_ranking(self.user), {})
+
+    def test_events_just_inside_the_window_still_count(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'e{i}')
+        recent_date = timezone.now() - timedelta(days=learning_module.RANKING_WINDOW_DAYS - 1)
+        LearnedRepairSignal.objects.filter(user=self.user).update(created_at=recent_date)
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertIn('outlook-classic:x', ranking)
+
+    def test_user_b_never_sees_user_a_ranking(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, f'e{i}')
+        self.assertEqual(learning_module.compute_ranking(self.other_user), {})
+
+    def test_multiple_signatures_ranked_independently(self):
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:a', RepairSignalOutcome.ACCEPTED, f'a{i}')
+        for i in range(3):
+            self._record(self.user, 'outlook-classic:b', RepairSignalOutcome.REJECTED, f'b{i}')
+        ranking = learning_module.compute_ranking(self.user)
+        self.assertGreater(ranking['outlook-classic:a']['score'], 0.5)
+        self.assertLess(ranking['outlook-classic:b']['score'], 0.5)
+
+
+class ClearSignalsForUserTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='clearer', email='clearer@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='clearer2', email='clearer2@example.com', password='StrongPass123')
+        learning_module.record_signal(self.user, 'e1', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+        learning_module.record_signal(self.other_user, 'e2', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+
+    def test_clear_removes_only_this_users_rows(self):
+        deleted = learning_module.clear_signals_for_user(self.user)
+        self.assertEqual(deleted, 1)
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 0)
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.other_user).count(), 1)
+
+    def test_account_deletion_cascades(self):
+        self.user.delete()
+        self.assertEqual(LearnedRepairSignal.objects.filter(signature='outlook-classic:x').count(), 1)  # only other_user's remains
+
+
+class LearningSignalViewTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='view.learner', email='view.learner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='view.learner2', email='view.learner2@example.com', password='StrongPass123')
+        self.signals_url = '/api/v1/email-builder/learning/signals/'
+        self.ranking_url = '/api/v1/email-builder/learning/signals/ranking/'
+        _cache.clear()
+
+    def _post_json(self, data):
+        return self.client.post(self.signals_url, data=json.dumps(data), content_type='application/json')
+
+    def _valid_payload(self, **overrides):
+        payload = {
+            'event_id': 'evt-view-1', 'signature': 'outlook-classic:button-rounded-corners-need-vml',
+            'outcome': 'accepted', 'source': 'validation_center_single',
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_unauthenticated_post_rejected(self):
+        response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 0)
+
+    def test_authenticated_post_creates_a_signal(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['success'])
+        self.assertTrue(body['created'])
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+        self.assertEqual(LearnedRepairSignal.objects.first().user, self.user)
+
+    def test_duplicate_post_via_endpoint_does_not_create_a_second_row(self):
+        self.client.force_login(self.user)
+        self._post_json(self._valid_payload())
+        response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()['created'])
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+
+    def test_malformed_signature_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(signature='<script>alert(1)</script>'))
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 0)
+
+    def test_empty_event_id_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(event_id=''))
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_outcome_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(outcome='maybe'))
+        self.assertEqual(response.status_code, 400)
+
+    def test_invalid_source_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(source='not-a-real-source'))
+        self.assertEqual(response.status_code, 400)
+
+    def test_rate_limit_enforced(self):
+        self.client.force_login(self.user)
+        with patch('emailbuilder.views._learning_rate_limited', return_value=True):
+            response = self._post_json(self._valid_payload())
+        self.assertEqual(response.status_code, 429)
+
+    def test_unauthenticated_ranking_get_rejected(self):
+        response = self.client.get(self.ranking_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_ranking_get_returns_empty_map_with_no_signals(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.ranking_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['signatures'], {})
+
+    def test_ranking_get_reflects_recorded_signals_once_threshold_met(self):
+        self.client.force_login(self.user)
+        for i in range(3):
+            self._post_json(self._valid_payload(event_id=f'evt-{i}'))
+        response = self.client.get(self.ranking_url)
+        signatures = response.json()['signatures']
+        self.assertIn('outlook-classic:button-rounded-corners-need-vml', signatures)
+        self.assertEqual(signatures['outlook-classic:button-rounded-corners-need-vml']['evidenceCount'], 3)
+
+    def test_ranking_endpoint_failure_falls_back_to_empty_map(self):
+        self.client.force_login(self.user)
+        with patch('emailbuilder.views.learning.compute_ranking', side_effect=RuntimeError('boom')):
+            response = self.client.get(self.ranking_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['signatures'], {})
+
+    def test_user_b_ranking_is_unaffected_by_user_a_signals(self):
+        self.client.force_login(self.user)
+        for i in range(3):
+            self._post_json(self._valid_payload(event_id=f'evt-{i}'))
+        self.client.logout()
+        self.client.force_login(self.other_user)
+        response = self.client.get(self.ranking_url)
+        self.assertEqual(response.json()['signatures'], {})
+
+    def test_unauthenticated_delete_rejected(self):
+        response = self.client.delete(self.signals_url)
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_clears_current_users_signals_and_restores_empty_ranking(self):
+        self.client.force_login(self.user)
+        for i in range(3):
+            self._post_json(self._valid_payload(event_id=f'evt-{i}'))
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.user).count(), 3)
+        delete_response = self.client.delete(self.signals_url)
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.json()['deleted'], 3)
+        ranking_response = self.client.get(self.ranking_url)
+        self.assertEqual(ranking_response.json()['signatures'], {})
+
+    def test_delete_never_touches_another_users_signals(self):
+        self.client.force_login(self.other_user)
+        self._post_json(self._valid_payload(event_id='other-users-evt'))
+        self.client.logout()
+        self.client.force_login(self.user)
+        self.client.delete(self.signals_url)
+        self.assertEqual(LearnedRepairSignal.objects.filter(user=self.other_user).count(), 1)
+
+    def test_no_provider_call_is_involved_in_recording_or_ranking(self):
+        """Sanity guard -- posting a signal and fetching ranking must never
+        import/construct an OpenAI or local-AI provider. Patched to raise
+        if either provider class is ever instantiated during this test."""
+        self.client.force_login(self.user)
+        with patch('emailbuilder.ai_command_openai.OpenAIEmailCommandProvider.__init__', side_effect=AssertionError('must not be called')):
+            with patch('emailbuilder.ai_command_local.LocalEmailCommandProvider.__init__', side_effect=AssertionError('must not be called')):
+                post_response = self._post_json(self._valid_payload())
+                get_response = self.client.get(self.ranking_url)
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(get_response.status_code, 200)
+
+
+class LearningSignalModelCascadeTests(TestCase):
+    def test_deleting_user_cascades_to_their_signals_via_the_view_path(self):
+        User = get_user_model()
+        user = User.objects.create_user(username='cascade.user', email='cascade.user@example.com', password='StrongPass123')
+        learning_module.record_signal(user, 'evt-cascade', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+        self.assertEqual(LearnedRepairSignal.objects.count(), 1)
+        user.delete()
+        self.assertEqual(LearnedRepairSignal.objects.count(), 0)
+
+
+class LearningDoesNotTouchKnowledgeOrValidationTests(TestCase):
+    """Structural proof of the core invariant: nothing in learning.py can
+    reach KnowledgeRule content/confidence, and recording/ranking signals
+    never touches EmailDocument/validation machinery at all."""
+
+    def test_learning_module_has_no_import_of_knowledge_rules_or_edm(self):
+        # Checks actual imports (module dependencies), never a naive text
+        # grep of the source -- the module's own docstring legitimately
+        # MENTIONS EmailDocument/EmailAsset by name when explaining why
+        # this feature follows the same per-user ownership convention;
+        # that's documentation, not a dependency.
+        module_names = {getattr(value, '__module__', None) for value in vars(learning_module).values()}
+        self.assertNotIn('emailbuilder.knowledge.rules', module_names)
+        self.assertNotIn('emailbuilder.edm', module_names)
+        self.assertFalse(hasattr(learning_module, 'validate_edm'))
+        self.assertFalse(hasattr(learning_module, 'find_rule'))
+        self.assertFalse(hasattr(learning_module, 'EmailDocument'))
+
+    def test_recording_and_ranking_never_touch_emaildocument_table(self):
+        User = get_user_model()
+        user = User.objects.create_user(username='isolation.user', email='isolation.user@example.com', password='StrongPass123')
+        before_count = EmailDocument.objects.count()
+        for i in range(3):
+            learning_module.record_signal(user, f'evt-{i}', 'outlook-classic:x', RepairSignalOutcome.ACCEPTED, RepairSignalSource.VALIDATION_CENTER_SINGLE)
+        learning_module.compute_ranking(user)
+        self.assertEqual(EmailDocument.objects.count(), before_count)

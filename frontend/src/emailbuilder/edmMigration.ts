@@ -181,6 +181,15 @@ function normalizeMobileColumnGap(raw: unknown): EmailModuleSettings['mobileColu
   return isDimensionValue(raw) ? raw : undefined;
 }
 
+// Sub-phase 6 — same "independent of desktop/mobile-vs-legacy-flat shape"
+// convention as visibility/mobileColumnGap above. undefined (not false)
+// when absent/invalid, so the conditional spread below omits the key
+// entirely rather than persisting an explicit `false` on every module
+// that never opted in.
+function normalizeOutlookVml(raw: unknown): EmailModuleSettings['outlookVml'] {
+  return typeof raw === 'boolean' ? raw : undefined;
+}
+
 function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const settings = (rawSettings ?? {}) as Record<string, unknown>;
   const columnGutter = normalizeColumnGutter(settings.columnGutter);
@@ -191,6 +200,7 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   // shape" convention as columnGutter/mobileColumnOrder above.
   const visibility = normalizeVisibility(settings.visibility);
   const mobileColumnGap = normalizeMobileColumnGap(settings.mobileColumnGap);
+  const outlookVml = normalizeOutlookVml(settings.outlookVml);
 
   if ('desktop' in settings) {
     // Already the current shape — still backfill any field an even-older
@@ -211,6 +221,7 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
       ...(mobileColumnOrder ? { mobileColumnOrder } : {}),
       ...(visibility ? { visibility } : {}),
       ...(mobileColumnGap ? { mobileColumnGap } : {}),
+      ...(outlookVml !== undefined ? { outlookVml } : {}),
     };
   }
 
@@ -230,6 +241,7 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
     ...(mobileColumnOrder ? { mobileColumnOrder } : {}),
     ...(visibility ? { visibility } : {}),
     ...(mobileColumnGap ? { mobileColumnGap } : {}),
+    ...(outlookVml !== undefined ? { outlookVml } : {}),
   };
 }
 

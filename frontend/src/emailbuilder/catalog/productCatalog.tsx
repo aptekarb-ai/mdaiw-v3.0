@@ -6,6 +6,7 @@ import {
   GENERIC_ONLY, ImagePreview, cell, createResponsiveSettings, moduleTable, textLine, type ModuleDefinition,
   type RepeatableFieldConfig,
 } from '../registryCore';
+import { renderVmlButton } from '../vml';
 
 const DEFAULT_CTA_BG = '#0082AD';
 const DEFAULT_CTA_TEXT = '#FFFFFF';
@@ -19,6 +20,15 @@ function productItemsField(count: number): RepeatableFieldConfig<ProductItem> {
     createItem: () => defaultItem(count),
     minItems: count,
     maxItems: count,
+    itemSchema: [
+      { key: 'imageSrc', label: 'Image URL', kind: 'url', valueType: 'image_asset', group: 'content' },
+      { key: 'imageAlt', label: 'Alt text', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'name', label: 'Product name', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'price', label: 'Price', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'description', label: 'Description', kind: 'textarea', valueType: 'text', group: 'content' },
+      { key: 'ctaText', label: 'Button text', kind: 'text', valueType: 'text', group: 'content' },
+      { key: 'ctaHref', label: 'Button link', kind: 'url', valueType: 'url', group: 'content' },
+    ],
     renderItemFields: (item, update) => (
       <>
         <label className="properties-panel__field">
@@ -71,7 +81,26 @@ function chunk<T>(items: T[], size: number): T[][] {
   return rows;
 }
 
-function productCardHtml(item: ProductItem, widthPercent: number, textAlign: string, ctaBg: string, ctaText: string): string {
+// Sub-phase 6 closure — same shared VML bulletproof-button pairing as
+// every other CTA-rendering module, applied per-item so a multi-product
+// module (grid/two-cards/three-cards) gets independent VML for each
+// product's own CTA.
+function productCtaHtml(item: ProductItem, ctaBg: string, ctaText: string, paddingH: number, paddingV: number, fontSize: number, outlookVml: boolean): string {
+  const plainHtml = `<a href="${escapeAttribute(sanitizeUrl(item.ctaHref))}" style="display:inline-block; padding:${paddingV}px ${paddingH}px; background-color:${ctaBg}; color:${ctaText}; font-family:Arial,Helvetica,sans-serif; font-size:${fontSize}px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(item.ctaText)}</a>`;
+  if (!outlookVml) return plainHtml;
+  return renderVmlButton({
+    href: item.ctaHref,
+    text: item.ctaText,
+    backgroundColor: ctaBg,
+    textColor: ctaText,
+    fontSize,
+    borderRadius: 6,
+    paddingHorizontal: paddingH,
+    paddingVertical: paddingV,
+  }, plainHtml);
+}
+
+function productCardHtml(item: ProductItem, widthPercent: number, textAlign: string, ctaBg: string, ctaText: string, outlookVml: boolean): string {
   const descriptionHtml = item.description
     ? textLine(escapeHtml(item.description), 'font-family:Arial,Helvetica,sans-serif; font-size:12px; color:#66777D;', 8)
     : '';
@@ -80,12 +109,12 @@ function productCardHtml(item: ProductItem, widthPercent: number, textAlign: str
     + textLine(escapeHtml(item.name), 'padding-top:12px; font-family:Arial,Helvetica,sans-serif; font-size:14px; font-weight:bold; color:#333333;', 4)
     + textLine(escapeHtml(item.price), 'font-family:Arial,Helvetica,sans-serif; font-size:14px; color:#0082AD; font-weight:bold;', 10)
     + descriptionHtml
-    + `<a href="${escapeAttribute(sanitizeUrl(item.ctaHref))}" style="display:inline-block; padding:8px 16px; background-color:${ctaBg}; color:${ctaText}; font-family:Arial,Helvetica,sans-serif; font-size:12px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(item.ctaText)}</a>`,
+    + productCtaHtml(item, ctaBg, ctaText, 16, 8, 12, outlookVml),
     `width:${widthPercent}%; vertical-align:top; padding:0 8px; text-align:${textAlign};`,
   );
 }
 
-function productRowHtml(item: ProductItem, textAlign: string, ctaBg: string, ctaText: string): string {
+function productRowHtml(item: ProductItem, textAlign: string, ctaBg: string, ctaText: string, outlookVml: boolean): string {
   const imgCell = cell(
     `<img src="${escapeAttribute(sanitizeUrl(item.imageSrc))}" alt="${escapeAttribute(item.imageAlt)}" width="160" style="display:block; width:160px; max-width:100%; height:auto; border:0;" />`,
     'width:40%; vertical-align:top;',
@@ -97,7 +126,7 @@ function productRowHtml(item: ProductItem, textAlign: string, ctaBg: string, cta
     textLine(escapeHtml(item.name), `text-align:${textAlign}; font-family:Arial,Helvetica,sans-serif; font-size:16px; font-weight:bold; color:#333333;`, 6)
     + textLine(escapeHtml(item.price), `text-align:${textAlign}; font-family:Arial,Helvetica,sans-serif; font-size:16px; color:#0082AD; font-weight:bold;`, 12)
     + descriptionHtml
-    + `<a href="${escapeAttribute(sanitizeUrl(item.ctaHref))}" style="display:inline-block; padding:10px 18px; background-color:${ctaBg}; color:${ctaText}; font-family:Arial,Helvetica,sans-serif; font-size:13px; font-weight:bold; text-decoration:none; border-radius:6px;">${escapeHtml(item.ctaText)}</a>`,
+    + productCtaHtml(item, ctaBg, ctaText, 18, 10, 13, outlookVml),
     `width:60%; vertical-align:top; text-align:${textAlign};`,
   );
   return `<tr>${imgCell}${infoCell}</tr>`;
@@ -148,6 +177,9 @@ function productDefinition(variant: ProductVariant): ModuleDefinition<ProductGri
     imagePosition: variant.layout === 'row' ? 'left' : 'top',
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 closure — every product item renders a real filled CTA
+    // button (see productCtaHtml above).
+    supportsBulletproofCta: true,
     editableFields: [
       { key: 'textAlign', label: 'Text alignment', kind: 'align', group: 'style' },
       { key: 'ctaBackgroundColor', label: 'Button background color', kind: 'color', group: 'style' },
@@ -198,15 +230,16 @@ function productDefinition(variant: ProductVariant): ModuleDefinition<ProductGri
       const textAlign = props.textAlign ?? 'left';
       const ctaBg = props.ctaBackgroundColor || DEFAULT_CTA_BG;
       const ctaText = props.ctaTextColor || DEFAULT_CTA_TEXT;
+      const outlookVml = settings.outlookVml === true;
 
       if (variant.layout === 'row') {
-        const row = productRowHtml(props.items[0], textAlign, ctaBg, ctaText);
+        const row = productRowHtml(props.items[0], textAlign, ctaBg, ctaText, outlookVml);
         return moduleTable(`<tr><td style="${containerStyle}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${row}</table></td></tr>`);
       }
 
       const widthPercent = Math.floor(100 / variant.perRow);
       const rowsHtml = chunk(props.items, variant.perRow)
-        .map((row) => `<tr>${row.map((item) => productCardHtml(item, widthPercent, textAlign, ctaBg, ctaText)).join('')}</tr>`)
+        .map((row) => `<tr>${row.map((item) => productCardHtml(item, widthPercent, textAlign, ctaBg, ctaText, outlookVml)).join('')}</tr>`)
         .join('');
       return moduleTable(`<tr><td style="${containerStyle}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${rowsHtml}</table></td></tr>`);
     },

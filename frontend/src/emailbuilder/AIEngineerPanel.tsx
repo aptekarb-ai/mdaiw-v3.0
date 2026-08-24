@@ -10,7 +10,8 @@ import { detectCustomCssWarnings } from './emailCss';
 import { renderEmailDocument } from './htmlRenderer';
 import { validateEmail } from './emailValidation';
 import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
-import type { RepairCandidate } from './repairEngine';
+import { signatureForIssueId, type RepairCandidate } from './repairEngine';
+import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import type { EmailDocumentContent, EmailModule } from './edm';
 import type { EmailPlatform } from './types';
 import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
@@ -157,6 +158,25 @@ function cssProposalDetails(
   }
 }
 
+// Sub-phase 7 — one readable line per top-level composition item, so the
+// proposal card shows enough for the user to understand what will be
+// created BEFORE Apply (master-prompt "proposal-before-apply" contract),
+// without needing the full module registry client-side just to render a
+// human label — the raw module_type string plus nested/list-item counts
+// is honest and sufficient (Applying still shows the real result on the
+// canvas immediately after).
+function compositionSummaryLines(action: AICommandAction): string[] | null {
+  if (action.type !== 'COMPOSE_EMAIL') return null;
+  return action.items.map((item, index) => {
+    const nestedCount = item.children?.reduce((sum, group) => sum + group.modules.length, 0) ?? 0;
+    const listItemCount = item.repeatable_items?.length ?? 0;
+    let line = `${index + 1}. ${item.module_type}`;
+    if (nestedCount > 0) line += ` — ${nestedCount} nested module${nestedCount === 1 ? '' : 's'}`;
+    if (listItemCount > 0) line += ` — ${listItemCount} list item${listItemCount === 1 ? '' : 's'}`;
+    return line;
+  });
+}
+
 const HISTORY_STATUS_LABEL: Record<AIActionHistoryEntry['status'], string> = {
   applied: 'Applied',
   cancelled: 'Cancelled',
@@ -195,6 +215,13 @@ export function AIEngineerPanel({
   // ordinary Apply click every proposal already requires.
   const [strongConfirmChecked, setStrongConfirmChecked] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
+  // Sub-phase 8 — "Clear learned preferences." Confirmed (this deletes
+  // real rows), separate from the action History list above (that's this
+  // session's chat/repair log; this clears the durable per-user ranking
+  // data across ALL sessions).
+  const [showClearLearningConfirm, setShowClearLearningConfirm] = useState(false);
+  const [clearingLearning, setClearingLearning] = useState(false);
+  const [clearLearningNotice, setClearLearningNotice] = useState<string | null>(null);
 
   const speech = useSpeechRecognition();
 
@@ -404,6 +431,18 @@ export function AIEngineerPanel({
       provider: 'deterministic',
       requiresConfirmation: true,
     }]);
+    if (applied) {
+      // Each candidate is its own decision with its own event_id, even
+      // though the batch commits as one undo step — three candidates
+      // accepted together are three separate learning events, matching
+      // three separate ACCEPTED clicks on individual candidates.
+      for (const candidate of pendingRepair.candidates) {
+        void recordRepairSignal({
+          eventId: newLearningEventId(), signature: signatureForIssueId(candidate.issueId),
+          outcome: 'accepted', source: 'ai_engineer_repair',
+        });
+      }
+    }
     setPendingRepair(null);
     setResolving(false);
   }
@@ -421,7 +460,25 @@ export function AIEngineerPanel({
       provider: 'deterministic',
       requiresConfirmation: true,
     }]);
+    for (const candidate of pendingRepair.candidates) {
+      void recordRepairSignal({
+        eventId: newLearningEventId(), signature: signatureForIssueId(candidate.issueId),
+        outcome: 'rejected', source: 'ai_engineer_repair',
+      });
+    }
     setPendingRepair(null);
+  }
+
+  async function handleClearLearnedPreferences() {
+    setClearingLearning(true);
+    const succeeded = await clearLearnedRepairSignals();
+    setClearingLearning(false);
+    setShowClearLearningConfirm(false);
+    setClearLearningNotice(
+      succeeded
+        ? 'Learned preferences cleared. Recommendation ordering has been reset.'
+        : 'Could not clear learned preferences. Please try again.',
+    );
   }
 
   function handleMicClick() {
@@ -472,8 +529,11 @@ export function AIEngineerPanel({
                   Ask the AI Engineer to add a module, change the selected module&apos;s color/text/size/
                   alignment, delete or duplicate it, restyle every module of one type, enable/disable Email
                   Reset CSS and set/remove Custom CSS, change the title/subject/favicon, diagnose Outlook
-                  compatibility ("check this email for Classic Outlook issues"), or repair safe issues
-                  ("repair all safe issues"). Type a command or press the microphone.
+                  compatibility ("check this email for Classic Outlook issues"), repair safe issues
+                  ("repair all safe issues"), or compose a whole email from a brief ("create a promotional
+                  email for a summer sale with hero, products, CTA, social links and footer", "build a
+                  newsletter with two content sections", "make a welcome email"). Type a command or press
+                  the microphone.
                 </p>
               </div>
             )}
@@ -490,6 +550,7 @@ export function AIEngineerPanel({
               const cssDetails = cssProposalDetails(
                 pending.action, resetCssEnabled, customCssEnabled, customCss, emailTitle, emailSubject, faviconUrl,
               );
+              const compositionLines = compositionSummaryLines(pending.action);
               const applyBlocked = resolving || (pending.requiresStrongConfirmation && !strongConfirmChecked);
               return (
                 <div
@@ -529,6 +590,15 @@ export function AIEngineerPanel({
                         </ul>
                       )}
                     </div>
+                  )}
+
+                  {compositionLines && (
+                    <ol className="ai-engineer-panel__composition-list">
+                      {compositionLines.map((line, index) => (
+                        // eslint-disable-next-line react/no-array-index-key -- the list is a fixed, freshly-built plan snapshot for this one proposal, re-rendered whole on every change
+                        <li key={index}>{line}</li>
+                      ))}
+                    </ol>
                   )}
 
                   {pending.requiresStrongConfirmation && (
@@ -672,6 +742,46 @@ export function AIEngineerPanel({
         </div>
       ) : (
         <div className="ai-engineer-panel__history">
+          <div className="ai-engineer-panel__learning-controls">
+            <button
+              type="button"
+              className="button button--outline"
+              onClick={() => setShowClearLearningConfirm(true)}
+            >
+              Clear learned preferences
+            </button>
+            {clearLearningNotice && (
+              <p className="ai-engineer-panel__learning-notice" role="status">{clearLearningNotice}</p>
+            )}
+          </div>
+
+          {showClearLearningConfirm && (
+            <div className="ai-engineer-panel__learning-confirm" role="alertdialog" aria-modal="true" aria-label="Clear learned preferences">
+              <p>
+                Clear learned preferences? This resets recommendation ordering only and does not affect
+                email content, validation rules, or safety rules.
+              </p>
+              <div className="ai-engineer-panel__learning-confirm-actions">
+                <button
+                  type="button"
+                  className="button button--outline"
+                  onClick={() => setShowClearLearningConfirm(false)}
+                  disabled={clearingLearning}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="button button--primary"
+                  onClick={handleClearLearnedPreferences}
+                  disabled={clearingLearning}
+                >
+                  {clearingLearning ? 'Clearing…' : 'Clear'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {history.length === 0 ? (
             <div className="ai-engineer-panel__empty" role="status">
               <span className="mdaiw-icon mdaiw-icon--check-circle" aria-hidden="true" />

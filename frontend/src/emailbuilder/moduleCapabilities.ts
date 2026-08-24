@@ -19,7 +19,11 @@ import type { EmailModuleType, ModuleCategory } from './edm';
 import type { SchemaField, SchemaFieldValueType } from './registryCore';
 import { isLayoutModuleType } from './layoutModel';
 
-export const MODULE_CAPABILITY_MANIFEST_VERSION = 1;
+// Bumped in Sub-phase 6 (work package E) — `repeatableField` grew from a
+// boolean to a real {path, label, itemSchema, minItems, maxItems} object.
+// Bumped again in the Sub-phase 6 closure round — added
+// supportsBulletproofCta/supportsBulletproofBackground (see below).
+export const MODULE_CAPABILITY_MANIFEST_VERSION = 3;
 
 export interface ModuleCapabilityField {
   key: string;
@@ -46,10 +50,37 @@ export interface ModuleCapability {
   editableFields: ModuleCapabilityField[];
   // True when the module has a repeatable list field (nav links, product
   // items, social platform links, feature/icon-text rows). Feature 14 V2
-  // Phase A deliberately does NOT expose item-level editing through
-  // editableFields for these — see the approved Phase A decision to defer
-  // composite/repeatable-field AI editing rather than approximate it.
+  // Phase A deliberately did NOT expose item-level editing through
+  // editableFields for these; Sub-phase 6, work package E, adds a
+  // dedicated `repeatableField` manifest entry (below) instead of folding
+  // it into editableFields, since add/update/remove/reorder on an array
+  // of objects is not a flat scalar-leaf patch.
   hasRepeatableField: boolean;
+  // Sub-phase 6, work package E — null when hasRepeatableField is false.
+  // `itemSchema` mirrors ModuleCapabilityField exactly (same shape
+  // editableFields already uses) so ai_command.py's
+  // UPDATE_REPEATABLE_FIELD validates each item field-by-field through
+  // the SAME _validate_field_value dispatcher UPDATE_MODULE_PROPS uses —
+  // never a second, parallel item-validation scheme.
+  repeatableField: {
+    path: string;
+    label: string;
+    itemSchema: ModuleCapabilityField[];
+    minItems: number;
+    maxItems: number;
+  } | null;
+  // Sub-phase 6 closure — true when this module renders a genuine
+  // clickable CTA/button (a filled or outline button, not a plain text/
+  // nav/social link) and so is a candidate for the shared VML
+  // bulletproof-button pairing (vml.ts::renderVmlButton) when the
+  // document's Classic Outlook VML mode is enabled. Read directly off
+  // each catalog definition's own `supportsBulletproofCta` field — never
+  // a hardcoded module-type list.
+  supportsBulletproofCta: boolean;
+  // True only for the one module (Background Image Hero) that also has a
+  // real VML "ghost table" background-image fallback
+  // (vml.ts::renderVmlBackground).
+  supportsBulletproofBackground: boolean;
 }
 
 export interface ModuleCapabilityManifest {
@@ -108,6 +139,15 @@ export function buildModuleCapabilityManifest(): ModuleCapabilityManifest {
       columnCount: definition.columnCount,
       editableFields: (definition.editableFields ?? []).map(toCapabilityField),
       hasRepeatableField: Boolean(definition.repeatableField),
+      repeatableField: definition.repeatableField ? {
+        path: definition.repeatableField.path,
+        label: definition.repeatableField.label,
+        itemSchema: definition.repeatableField.itemSchema.map(toCapabilityField),
+        minItems: definition.repeatableField.minItems ?? 0,
+        maxItems: definition.repeatableField.maxItems ?? 20,
+      } : null,
+      supportsBulletproofCta: definition.supportsBulletproofCta === true,
+      supportsBulletproofBackground: definition.supportsBulletproofBackground === true,
     }))
     .sort((a, b) => a.type.localeCompare(b.type));
 

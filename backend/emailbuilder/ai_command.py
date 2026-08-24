@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass
 
 from . import module_capabilities
+from .composition import compose_from_brief
 from .custom_css_security import MAX_CUSTOM_CSS_LENGTH, validate_custom_css_security
 from .knowledge.rules import find_rule
 
@@ -75,6 +76,51 @@ COLOR_WORDS = {
 }
 _HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 _UNSAFE_URL_PREFIXES = ('javascript:', 'data:', 'vbscript:')
+
+# Sub-phase 6 closure — mirrors frontend/src/emailbuilder/vml.ts's
+# supportsVmlButtonPattern/supportsVmlBackgroundPattern. These are now
+# THIN WRAPPERS over the module-capability manifest's own
+# supportsBulletproofCta/supportsBulletproofBackground flags (see
+# module_capabilities.supports_bulletproof_cta/_background) — never a
+# second, hand-maintained module-type list here. Covered by
+# EmailAiEngineerVmlActionTests's cross-check against vml.ts's own values.
+def _is_vml_button_module(module_type):
+    return module_capabilities.supports_bulletproof_cta(module_type)
+
+
+def _is_vml_background_module(module_type):
+    return module_capabilities.supports_bulletproof_background(module_type)
+
+# Sub-phase 6, work package D — the bounded, explicit allow-list of
+# EmailModuleSettings keys the AI may ever patch via UPDATE_MODULE_SETTINGS.
+# Deliberately NOT the whole settings object (padding/outerSpacing/
+# columnGutter are left to the manual Properties panel for now) — same
+# "small, explicit, never arbitrary" posture _validate_patch already
+# enforces for props via the capability manifest.
+_SETTINGS_BOOLEAN_FIELDS = frozenset({'outlookVml', 'mobileStack'})
+_SETTINGS_ENUM_FIELDS = {'visibility': frozenset({'all', 'hideMobile', 'hideDesktop'})}
+
+
+def _validate_settings_patch(patch):
+    if not isinstance(patch, dict):
+        return None
+    safe = {}
+    for key, value in patch.items():
+        if key in _SETTINGS_BOOLEAN_FIELDS:
+            if isinstance(value, bool):
+                safe[key] = value
+            continue
+        allowed_values = _SETTINGS_ENUM_FIELDS.get(key)
+        if allowed_values is not None and value in allowed_values:
+            safe[key] = value
+    return safe or None
+
+
+# Sub-phase 6 — mirrors layoutModel.ts's MIN_COLUMN_WIDTH_PERCENT, so a
+# structural RESTRUCTURE_LAYOUT proposal can never even be VALIDATED with
+# an unusably thin column, let alone applied.
+MIN_COLUMN_WIDTH_PERCENT = 10
+COLUMN_WIDTH_TOTAL_TOLERANCE = 0.5
 
 
 class ActionType:
@@ -118,19 +164,57 @@ class ActionType:
     APPLY_VML_PATTERN = 'APPLY_VML_PATTERN'
     REPLACE_UNSUPPORTED_PROPERTY = 'REPLACE_UNSUPPORTED_PROPERTY'
 
+    # Sub-phase 6, work package E — structured add/update/remove/reorder
+    # editing for a module's repeatable/composite field (nav links, social
+    # links, product cards, feature/icon-text rows), validated item-by-item
+    # against the manifest's repeatableField.itemSchema. Not part of the
+    # original six reserved names (there was no reserved name for this),
+    # but follows the exact same "named, validated, routes through an
+    # existing mutator" contract.
+    UPDATE_REPEATABLE_FIELD = 'UPDATE_REPEATABLE_FIELD'
+
+    # Sub-phase 7 — the composition engine's one action type: an ORDERED
+    # list of composition items (see composition.py's CompositionItem),
+    # each an existing registered module type + validated patch, with
+    # optional one-level-nested children (layout columns) or seeded
+    # repeatable-field items. Never a second mutation system — the
+    # frontend applies this through ONE new batch mutator
+    # (useEmailBuilderState.ts's addComposedModules) built from the SAME
+    # createModule/createDefaultColumns/repeatableField primitives every
+    # other insert path already uses.
+    COMPOSE_EMAIL = 'COMPOSE_EMAIL'
+
     values = frozenset({
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE, NONE,
         INSERT_NESTED_MODULE, UPDATE_MODULE_SETTINGS, RESTRUCTURE_LAYOUT,
-        APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY,
+        APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
         SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
+        COMPOSE_EMAIL,
     })
 
     IMPLEMENTED = frozenset({
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
         SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
+        # Sub-phase 6, work package D — the six actions reserved (named but
+        # not implemented) in Phase A now have real validate_action()
+        # branches below, each routing to an EXISTING frontend mutator
+        # (updateModuleSettings/insertNestedModule/updateColumnWidths/
+        # updateModuleProps) — never a parallel mutation system.
+        UPDATE_MODULE_SETTINGS, INSERT_NESTED_MODULE, RESTRUCTURE_LAYOUT,
+        APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
+        COMPOSE_EMAIL,
     })
+
+    # Sub-phase 6 — structural tree changes always require confirmation
+    # (master prompt item 8: "Structural actions always require an
+    # explicit proposal and confirmation"), same posture as
+    # requires_confirmation()'s existing DELETE_MODULE/APPLY_GLOBAL_STYLE
+    # rules below. Sub-phase 7 — a full composition is the largest
+    # structural change this file can propose, so it always requires
+    # confirmation too (see requires_confirmation() below).
+    STRUCTURAL = frozenset({RESTRUCTURE_LAYOUT, COMPOSE_EMAIL})
 
     # Document-level actions never carry a `moduleId`/`module_type` —
     # views.py's resolve_asset_references and the frontend's EDM-mutation
@@ -272,6 +356,94 @@ def _validate_patch(module_type, patch):
     return safe or None
 
 
+# Sub-phase 7 — composition plan bounds. Mirrors composition.py's own
+# MAX_COMPOSITION_ITEMS/MAX_COMPOSITION_CHILDREN_PER_COLUMN constants (not
+# imported from there — composition.py imports FROM this module for
+# _validate_patch/_validate_field_value, so importing the reverse
+# direction here would be circular; these two small integers are
+# duplicated rather than restructuring either module's import shape for
+# it — see composition.py's own module docstring on the deferred-import
+# pattern this pair already uses elsewhere).
+MAX_COMPOSITION_ITEMS = 14
+MAX_COMPOSITION_CHILDREN_PER_COLUMN = 6
+
+
+def _validate_composition_item(entry, allow_layout):
+    """One composition-plan node -> a safe, normalized node, or None.
+    Recurses exactly ONE level (children's own `allow_layout=False` mirrors
+    INSERT_NESTED_MODULE's "never nest a layout inside a layout column"
+    rule), and validates every patch/repeatable-item value through the
+    EXACT SAME manifest-driven gates every other action type uses
+    (_validate_patch/_validate_field_value) — a composition item can never
+    carry a value a hand-typed UPDATE_MODULE_PROPS action wouldn't also be
+    allowed to carry."""
+    if not isinstance(entry, dict):
+        return None
+    module_type = entry.get('module_type')
+    if module_type not in module_capabilities.get_all_module_types():
+        return None
+    capability = module_capabilities.get_module_capability(module_type) or {}
+    is_layout = bool(capability.get('isLayout'))
+    if is_layout and not allow_layout:
+        return None
+
+    patch = _validate_patch(module_type, entry.get('patch') or {}) or {}
+    result = {'module_type': module_type, 'patch': patch}
+
+    if is_layout:
+        raw_children = entry.get('children')
+        column_count = capability.get('columnCount') or 0
+        children = []
+        if isinstance(raw_children, list) and column_count:
+            seen_columns = set()
+            for group in raw_children[:column_count]:
+                if not isinstance(group, dict):
+                    continue
+                column_index = group.get('column_index')
+                if not isinstance(column_index, int) or isinstance(column_index, bool):
+                    continue
+                if not (0 <= column_index < column_count) or column_index in seen_columns:
+                    continue
+                raw_modules = group.get('modules')
+                if not isinstance(raw_modules, list):
+                    continue
+                safe_modules = []
+                for child_entry in raw_modules[:MAX_COMPOSITION_CHILDREN_PER_COLUMN]:
+                    validated_child = _validate_composition_item(child_entry, allow_layout=False)
+                    if validated_child is not None:
+                        safe_modules.append(validated_child)
+                if safe_modules:
+                    seen_columns.add(column_index)
+                    children.append({'column_index': column_index, 'modules': safe_modules})
+        if children:
+            result['children'] = children
+        return result
+
+    repeatable = module_capabilities.get_repeatable_field(module_type)
+    if repeatable:
+        raw_items = entry.get('repeatable_items')
+        if isinstance(raw_items, list) and raw_items:
+            fields_by_key = {field['key']: field for field in repeatable['itemSchema']}
+            max_items = repeatable.get('maxItems') or 20
+            safe_items = []
+            for raw_item in raw_items[:max_items]:
+                if not isinstance(raw_item, dict):
+                    continue
+                safe_item = {}
+                for key, value in raw_item.items():
+                    field = fields_by_key.get(key)
+                    if not field:
+                        continue
+                    validated = _validate_field_value(field, value)
+                    if validated is not None:
+                        safe_item[key] = validated
+                if safe_item:
+                    safe_items.append(safe_item)
+            if safe_items:
+                result['repeatable_items'] = safe_items
+    return result
+
+
 def validate_action(action):
     """The shared allow-list gate every provider's output passes through
     (see module docstring) — returns a safe action dict, or None. A
@@ -310,7 +482,13 @@ def validate_action(action):
             return None
         return {'type': ActionType.INSERT_MODULE, 'modules': safe_modules}
 
-    if action_type in (ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE):
+    # REPLACE_UNSUPPORTED_PROPERTY reuses the EXACT SAME manifest-driven
+    # single-field-patch gate as UPDATE_MODULE_PROPS — the safest possible
+    # property-replacement mechanism already exists (_validate_patch);
+    # duplicating it under a new name would be the parallel mutation
+    # system the module docstring forbids. The two action types differ
+    # only in intent/NL-routing/UI copy, never in validation.
+    if action_type in (ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY):
         module_type = action.get('module_type')
         if module_type not in module_capabilities.get_all_module_types():
             return None
@@ -318,6 +496,133 @@ def validate_action(action):
         if patch is None:
             return None
         return {'type': action_type, 'target': 'selected', 'module_type': module_type, 'patch': patch}
+
+    if action_type == ActionType.UPDATE_MODULE_SETTINGS:
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return None
+        patch = _validate_settings_patch(action.get('patch'))
+        if patch is None:
+            return None
+        return {'type': action_type, 'target': 'selected', 'module_type': module_type, 'patch': patch}
+
+    # APPLY_VML_PATTERN (buttons) / APPLY_OUTLOOK_WRAPPER (background-image
+    # modules) — each a narrow, single-purpose alias that always means
+    # "enable the already-implemented VML fallback for this module" (see
+    # vml.ts). Disabling it again is available through the general
+    # UPDATE_MODULE_SETTINGS action instead of a mirrored "disable" variant
+    # here.
+    if action_type == ActionType.APPLY_VML_PATTERN:
+        module_type = action.get('module_type')
+        if not _is_vml_button_module(module_type):
+            return None
+        return {'type': action_type, 'target': 'selected', 'module_type': module_type}
+
+    if action_type == ActionType.APPLY_OUTLOOK_WRAPPER:
+        module_type = action.get('module_type')
+        if not _is_vml_background_module(module_type):
+            return None
+        return {'type': action_type, 'target': 'selected', 'module_type': module_type}
+
+    if action_type == ActionType.RESTRUCTURE_LAYOUT:
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return None
+        capability = module_capabilities.get_module_capability(module_type)
+        if not capability or not capability.get('isLayout'):
+            return None
+        raw_widths = action.get('widths')
+        if not isinstance(raw_widths, list) or not raw_widths:
+            return None
+        try:
+            widths = [float(w) for w in raw_widths]
+        except (TypeError, ValueError):
+            return None
+        if any(w < MIN_COLUMN_WIDTH_PERCENT for w in widths):
+            return None
+        if abs(sum(widths) - 100) > COLUMN_WIDTH_TOTAL_TOLERANCE:
+            return None
+        return {'type': action_type, 'target': 'selected', 'module_type': module_type, 'widths': widths}
+
+    if action_type == ActionType.INSERT_NESTED_MODULE:
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return None
+        # One-level nesting only — never permit inserting a layout module
+        # inside a layout column (mirrors layoutModel.ts's own
+        # LAYOUT_COLUMN_COUNTS-derived constraint; isLayout comes from the
+        # SAME manifest UPDATE_MODULE_PROPS already trusts).
+        capability = module_capabilities.get_module_capability(module_type)
+        if capability and capability.get('isLayout'):
+            return None
+        patch = _validate_patch(module_type, action.get('patch') or {}) or {}
+        return {'type': action_type, 'target': 'selected_column', 'module_type': module_type, 'patch': patch}
+
+    if action_type == ActionType.UPDATE_REPEATABLE_FIELD:
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return None
+        repeatable = module_capabilities.get_repeatable_field(module_type)
+        if not repeatable:
+            return None
+        op = action.get('op')
+        if op not in ('add', 'update', 'remove', 'reorder'):
+            return None
+        result = {'type': action_type, 'target': 'selected', 'module_type': module_type, 'op': op}
+
+        if op in ('add', 'update'):
+            fields_by_key = {field['key']: field for field in repeatable['itemSchema']}
+            raw_item = action.get('item')
+            if not isinstance(raw_item, dict):
+                return None
+            safe_item = {}
+            for key, value in raw_item.items():
+                field = fields_by_key.get(key)
+                if not field:
+                    continue
+                validated = _validate_field_value(field, value)
+                if validated is not None:
+                    safe_item[key] = validated
+            if not safe_item:
+                return None
+            result['item'] = safe_item
+            if op == 'update':
+                index = action.get('index')
+                if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                    return None
+                result['index'] = index
+            return result
+
+        if op == 'remove':
+            index = action.get('index')
+            if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+                return None
+            result['index'] = index
+            return result
+
+        # op == 'reorder'
+        from_index = action.get('fromIndex')
+        to_index = action.get('toIndex')
+        if not isinstance(from_index, int) or isinstance(from_index, bool) or from_index < 0:
+            return None
+        if not isinstance(to_index, int) or isinstance(to_index, bool) or to_index < 0:
+            return None
+        result['fromIndex'] = from_index
+        result['toIndex'] = to_index
+        return result
+
+    if action_type == ActionType.COMPOSE_EMAIL:
+        raw_items = action.get('items')
+        if not isinstance(raw_items, list) or not raw_items:
+            return None
+        safe_items = []
+        for entry in raw_items[:MAX_COMPOSITION_ITEMS]:
+            validated = _validate_composition_item(entry, allow_layout=True)
+            if validated is not None:
+                safe_items.append(validated)
+        if not safe_items:
+            return None
+        return {'type': ActionType.COMPOSE_EMAIL, 'items': safe_items}
 
     if action_type in (ActionType.SET_RESET_CSS_ENABLED, ActionType.SET_CUSTOM_CSS_ENABLED):
         enabled = action.get('enabled')
@@ -386,15 +691,50 @@ def resolve_asset_references(action, request):
         return action
 
     action_type = action.get('type')
-    if action_type in (ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE):
+    if action_type in (
+        ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE,
+        ActionType.REPLACE_UNSUPPORTED_PROPERTY, ActionType.INSERT_NESTED_MODULE,
+    ):
         module_type = action.get('module_type')
         patch = action.get('patch') or {}
         if not _patch_has_asset_marker(module_type, patch):
             return action
         resolved_patch = _resolve_patch_assets(module_type, patch, request)
         if not resolved_patch:
+            # INSERT_NESTED_MODULE's patch is optional (a bare insert with
+            # no seeded props is still a valid, complete action) — unlike
+            # UPDATE_MODULE_PROPS/REPLACE_UNSUPPORTED_PROPERTY, where an
+            # empty patch means the action does nothing.
+            if action_type == ActionType.INSERT_NESTED_MODULE:
+                return {**action, 'patch': {}}
             return {'type': ActionType.NONE}
         return {**action, 'patch': resolved_patch}
+
+    if action_type == ActionType.UPDATE_REPEATABLE_FIELD and action.get('op') in ('add', 'update'):
+        module_type = action.get('module_type')
+        item = action.get('item') or {}
+        repeatable = module_capabilities.get_repeatable_field(module_type)
+        if not repeatable:
+            return action
+        fields_by_key = {field['key']: field for field in repeatable['itemSchema']}
+        has_asset_marker = any(
+            fields_by_key.get(key, {}).get('valueType') == 'image_asset' and isinstance(value, dict)
+            for key, value in item.items()
+        )
+        if not has_asset_marker:
+            return action
+        resolved_item = {}
+        for key, value in item.items():
+            field = fields_by_key.get(key)
+            if field and field.get('valueType') == 'image_asset' and isinstance(value, dict):
+                url = _resolve_asset_marker(value, request)
+                if url is not None:
+                    resolved_item[key] = url
+                continue
+            resolved_item[key] = value
+        if not resolved_item:
+            return {'type': ActionType.NONE}
+        return {**action, 'item': resolved_item}
 
     if action_type == ActionType.INSERT_MODULE:
         resolved_modules = []
@@ -405,7 +745,51 @@ def resolve_asset_references(action, request):
             resolved_modules.append({'module_type': module_type, 'patch': resolved_patch})
         return {**action, 'modules': resolved_modules}
 
+    if action_type == ActionType.COMPOSE_EMAIL:
+        resolved_items = [_resolve_composition_item_assets(item, request) for item in action.get('items', [])]
+        return {**action, 'items': resolved_items}
+
     return action
+
+
+def _resolve_composition_item_assets(item, request):
+    """Recursive per-request asset resolution for one already-validated
+    composition item (see _validate_composition_item) — same ownership-
+    checked resolution as every other action type, just walked across the
+    item's own one level of nested children/repeatable items."""
+    module_type = item.get('module_type')
+    patch = item.get('patch') or {}
+    resolved_patch = _resolve_patch_assets(module_type, patch, request) if _patch_has_asset_marker(module_type, patch) else patch
+    result = {**item, 'patch': resolved_patch}
+
+    if 'children' in item:
+        result['children'] = [
+            {
+                'column_index': group['column_index'],
+                'modules': [_resolve_composition_item_assets(child, request) for child in group['modules']],
+            }
+            for group in item['children']
+        ]
+
+    if 'repeatable_items' in item:
+        repeatable = module_capabilities.get_repeatable_field(module_type)
+        fields_by_key = {field['key']: field for field in (repeatable['itemSchema'] if repeatable else [])}
+        resolved_items = []
+        for raw_item in item['repeatable_items']:
+            resolved_item = {}
+            for key, value in raw_item.items():
+                field = fields_by_key.get(key)
+                if field and field.get('valueType') == 'image_asset' and isinstance(value, dict):
+                    url = _resolve_asset_marker(value, request)
+                    if url is not None:
+                        resolved_item[key] = url
+                    continue
+                resolved_item[key] = value
+            if resolved_item:
+                resolved_items.append(resolved_item)
+        result['repeatable_items'] = resolved_items
+
+    return result
 
 
 def _resolve_patch_assets(module_type, patch, request):
@@ -459,6 +843,10 @@ def requires_confirmation(action):
         return len(action.get('modules') or []) > 1
     if action_type in ActionType.DOCUMENT_SCOPE:
         return True
+    if action_type in ActionType.STRUCTURAL:
+        return True
+    if action_type == ActionType.UPDATE_REPEATABLE_FIELD and action.get('op') == 'remove':
+        return True
     return False
 
 
@@ -504,6 +892,141 @@ _INSERT_PATTERN = re.compile(r'\b(add|insert|create)\b', re.IGNORECASE)
 _DELETE_PATTERN = re.compile(r'\b(delete|remove)\b.*\b(this|it|the selected)\b', re.IGNORECASE)
 _DUPLICATE_PATTERN = re.compile(r'\b(duplicate|copy)\b.*\b(this|it)\b', re.IGNORECASE)
 _GLOBAL_PATTERN = re.compile(r'\b(all|every|each)\b', re.IGNORECASE)
+
+# Sub-phase 6, work package D/E — checked BEFORE the generic
+# _INSERT_PATTERN/_DELETE_PATTERN below (same "specific before generic"
+# discipline the CSS/title/subject/favicon blocks already use), since
+# "add a text module here" and "remove the first nav link" would
+# otherwise be misread by those broader patterns.
+_NESTED_INSERT_PATTERN = re.compile(
+    r'\b(add|insert|create)\b.*\b(here|in this column|into this column|in the column|to this column)\b',
+    re.IGNORECASE,
+)
+_ORDINAL_WORDS = {
+    'first': 0, '1st': 0, 'second': 1, '2nd': 1, 'third': 2, '3rd': 2, 'fourth': 3, '4th': 3, 'fifth': 4, '5th': 4,
+}
+
+
+def _ordinal_to_index(token):
+    """'second'/'2nd'/'2' -> 1 (0-based). None if unparseable."""
+    token = token.lower()
+    index = _ORDINAL_WORDS.get(token)
+    if index is not None:
+        return index
+    try:
+        return int(token) - 1
+    except ValueError:
+        return None
+
+
+# Sub-phase 6 closure — a repeatable item's noun, matched with a loose
+# non-greedy gap (".*?") to the ordinal on one side, so an adjective the
+# user naturally includes ("navigation link", "social link", "product
+# card") never breaks the match — a tightly-anchored "ordinal
+# immediately-followed-by-noun" pattern would silently fail on exactly
+# the phrasings item 9's own examples use.
+_REPEATABLE_ITEM_NOUN = r'(?:link|item|row|card|product)'
+_ORDINAL_GROUP = r'(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|\d+)(?:st|nd|rd|th)?'
+_REMOVE_REPEATABLE_PATTERN = re.compile(
+    rf"\bremove\b.*\b{_ORDINAL_GROUP}\b.*?\b{_REPEATABLE_ITEM_NOUN}\b",
+    re.IGNORECASE,
+)
+# Sub-phase 6 closure — "change/update/set the <ordinal> <noun> <field
+# words> to <value>". The field-words segment is matched generically
+# against the module's OWN manifest itemSchema (see _match_repeatable_field
+# below) — never a hardcoded per-module field list.
+_UPDATE_REPEATABLE_PATTERN = re.compile(
+    rf"\b(?:change|update|set)\b.*\b{_ORDINAL_GROUP}\b.*?\b{_REPEATABLE_ITEM_NOUN}\b(.+?)\bto\b\s*(.+)$",
+    re.IGNORECASE,
+)
+# Sub-phase 6 closure — "move the <ordinal> <noun> to (position) <N>".
+_REORDER_REPEATABLE_PATTERN = re.compile(
+    rf"\bmove\b.*\b{_ORDINAL_GROUP}\b.*?\b{_REPEATABLE_ITEM_NOUN}\b.*?\bto\b\s*(?:position|slot|spot)?\s*(\d+)\b",
+    re.IGNORECASE,
+)
+# Sub-phase 6 closure — "add a <noun> called/named/titled/for <identifier>
+# with/using (url/text) <content>". Bounded to two-field item schemas
+# (see _build_repeatable_add_item) — never invents a value for a field the
+# user didn't supply.
+_ADD_REPEATABLE_PATTERN = re.compile(
+    rf"\badd\b.*?\b{_REPEATABLE_ITEM_NOUN}\b"
+    r".*?\b(?:called|named|titled|for)\s+(.+?)\s+(?:with|using|saying)\s+(?:url\s+|text\s+)?(.+)$",
+    re.IGNORECASE,
+)
+
+# Sub-phase 6 closure — maps a common spoken/typed word to the itemSchema
+# KEY it most likely refers to. Only ever consulted when that exact key
+# is actually present on the CURRENT module's manifest itemSchema (see
+# _match_repeatable_field) — this is a vocabulary hint, not a per-module
+# allow-list; a future manifest field named differently is still reachable
+# by its own literal key/label, this dict only widens recognition for
+# common phrasing on top of that.
+_REPEATABLE_FIELD_SYNONYMS = {
+    'title': 'name', 'name': 'name', 'heading': 'title',
+    'link': 'href', 'url': 'href', 'website': 'href',
+    'label': 'label', 'platform': 'label',
+    'text': 'text', 'description': 'description', 'desc': 'description',
+    'price': 'price', 'cost': 'price',
+    'button text': 'ctaText', 'button': 'ctaText', 'cta': 'ctaText',
+    'button link': 'ctaHref', 'button url': 'ctaHref', 'cta link': 'ctaHref',
+    'image': 'imageSrc', 'photo': 'imageSrc', 'picture': 'imageSrc',
+    'alt text': 'imageAlt', 'alt': 'imageAlt',
+}
+
+
+def _match_repeatable_field(item_schema, phrase_lower):
+    """Resolves a free-text field reference ("label", "product title",
+    "button link") against ONE module's real itemSchema — manifest-driven,
+    never a hardcoded per-module field list. Tries, in order: (1) a schema
+    field's own key appearing as a whole word, (2) a schema field's own
+    label appearing as a substring, (3) the synonym table above, gated on
+    the synonym's target key actually existing in this schema. Returns
+    None (never guesses) if nothing matches."""
+    fields_by_key = {field['key']: field for field in item_schema}
+    for field in item_schema:
+        if re.search(rf"\b{re.escape(field['key'].lower())}\b", phrase_lower):
+            return field
+    for field in item_schema:
+        if field['label'].lower() in phrase_lower:
+            return field
+    for word, target_key in _REPEATABLE_FIELD_SYNONYMS.items():
+        if word in phrase_lower and target_key in fields_by_key:
+            return fields_by_key[target_key]
+    return None
+
+
+def _build_repeatable_add_item(item_schema, identifier_text, content_text):
+    """Builds a {key: raw_value} dict for a two-field repeatable item from
+    the user's own supplied identifier/content text — NEVER invents a
+    value. Only supports item schemas with exactly two fields (every
+    family registered today — nav/social/footer-social links, icon/text
+    rows); a richer schema (e.g. product cards) returns None rather than
+    guessing which of several fields the user meant, and product cards
+    are fixed-count anyway (see handleApplyAiAction's maxItems guard)."""
+    if len(item_schema) != 2:
+        return None
+    url_fields = [f for f in item_schema if f.get('valueType') == 'url']
+    text_fields = [f for f in item_schema if f.get('valueType') == 'text']
+    if len(url_fields) == 1 and len(text_fields) == 1:
+        # e.g. NavLink/SocialPlatformLink: one label (text) + one href (url).
+        return {text_fields[0]['key']: identifier_text, url_fields[0]['key']: content_text}
+    if len(text_fields) == 2:
+        # e.g. IconTextRow: title + text — the identifier goes to whichever
+        # field looks like a title/heading/label, the content to the other.
+        title_field = next(
+            (f for f in text_fields if f['key'].lower() in ('title', 'label', 'name', 'heading')), text_fields[0],
+        )
+        other_field = next((f for f in text_fields if f is not title_field), None)
+        if other_field is None:
+            return None
+        return {title_field['key']: identifier_text, other_field['key']: content_text}
+    return None
+_VML_PATTERN = re.compile(r'\bvml\b|\boutlook\s+(?:wrapper|fallback)\b', re.IGNORECASE)
+_HIDE_MOBILE_PATTERN = re.compile(r'\bhide\b.*\bmobile\b|\bmobile\b.*\bhide\b', re.IGNORECASE)
+_HIDE_DESKTOP_PATTERN = re.compile(r'\bhide\b.*\bdesktop\b|\bdesktop\b.*\bhide\b', re.IGNORECASE)
+_SHOW_ALL_VISIBILITY_PATTERN = re.compile(r'\bshow\b.*\b(both|everywhere)\b', re.IGNORECASE)
+_COLUMN_WIDTHS_PATTERN = re.compile(r'\bcolumns?\b.*\bwidths?\b|\bwidths?\b.*\bcolumns?\b', re.IGNORECASE)
+_WIDTH_NUMBERS_PATTERN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:%|percent)?')
 _ALIGN_PATTERN = re.compile(r'\balign(?:ment)?\b.*\b(left|center|right)\b|\b(left|center|right)\s*align', re.IGNORECASE)
 _FONT_SIZE_PATTERN = re.compile(r'\bfont\s*size\s*(?:to|=|:)?\s*(\d+)\b', re.IGNORECASE)
 _BIGGER_PATTERN = re.compile(r'\b(bigger|larger|increase)\b', re.IGNORECASE)
@@ -569,16 +1092,80 @@ _FAVICON_VALUE_PREFIX_PATTERN = re.compile(r'^(?:url\s+)?(?:to|as)?\s*:?\s*', re
 # "vml ... namespace") are listed before the bare "vml" catch-all so a
 # fully-specific question still resolves to the more precise rule.
 _EXPLAIN_PATTERN = re.compile(r'\b(explain|what\s+is|what\'?s|why\s+does|why\s+is|tell\s+me\s+about)\b', re.IGNORECASE)
+# Sub-phase 5 — extended from 16 to ~60 topic patterns as the knowledge
+# base grew from 14 to 50 rules. ORDERING DISCIPLINE (unchanged from
+# Sub-phase 3, now load-bearing at this size): a client+concern COMBO
+# pattern (e.g. "dark mode" + "gmail") must be listed BEFORE any single-
+# keyword pattern it could otherwise collide with (e.g. the bare "new
+# outlook" pattern below would swallow "explain new outlook dark mode"
+# if the dark-mode-specific combo weren't checked first) — first match
+# in this tuple wins, always.
 _EXPLAIN_TOPICS = (
+    # --- Dark mode: client-specific combos BEFORE any bare client/topic
+    # pattern that could otherwise steal the match. ---
+    (re.compile(r'\bdark\s*mode\b.*\bgmail\b|\bgmail\b.*\bdark\s*mode\b', re.IGNORECASE), 'gmail-dark-mode-auto-invert'),
+    (re.compile(r'\bdark\s*mode\b.*\bapple\b|\bapple\b.*\bdark\s*mode\b', re.IGNORECASE), 'apple-mail-dark-mode-auto-invert'),
+    (re.compile(r'\bdark\s*mode\b.*\bnew\s*outlook\b|\bnew\s*outlook\b.*\bdark\s*mode\b', re.IGNORECASE), 'new-outlook-auto-dark-mode'),
+    (re.compile(r'\bdark\s*mode\b.*\bclassic\s*outlook\b|\bclassic\s*outlook\b.*\bdark\s*mode\b', re.IGNORECASE), 'outlook-classic-no-auto-dark-mode'),
+    # bare "dark mode" + "outlook" (no classic/new qualifier) deliberately
+    # does NOT default to Classic — routes to the honest cross-client
+    # strategy rule instead, same non-conflation discipline as everywhere
+    # else in this codebase.
+    (re.compile(r'\bwcag\b|\bcontrast\s*ratio\b|\baa\s*contrast\b', re.IGNORECASE), 'email-accessibility-wcag-contrast'),
+    (re.compile(r'\bdark\s*mode\b', re.IGNORECASE), 'email-dark-mode-general-strategy'),
+
+    # --- New Outlook vs Outlook.com, and New Outlook CSS, BEFORE the
+    # bare "new outlook" catch-all. ---
+    (re.compile(r'\boutlook\.?com\b|\bwebmail\s*outlook\b', re.IGNORECASE), 'new-outlook-vs-outlook-com'),
+    (re.compile(r'\bnew\s*outlook\b.*\bcss\b|\bcss\b.*\bnew\s*outlook\b', re.IGNORECASE), 'new-outlook-modern-css-support'),
+
+    # --- iOS Mail specific, BEFORE the generic format-detection pattern. ---
+    (re.compile(r'\bios\b.*\b(auto[\s-]*link|format[\s-]*detection|phone|address)\b', re.IGNORECASE), 'ios-mail-format-detection'),
+    (re.compile(r'\bdynamic\s*type\b', re.IGNORECASE), 'ios-mail-dynamic-type-scaling'),
+    (re.compile(r'\bios\s*mail\b', re.IGNORECASE), 'ios-mail-format-detection'),
+
+    # --- Gmail specific. ---
+    (re.compile(r'\bgmail\b.*\bclip', re.IGNORECASE), 'gmail-clipping-threshold'),
+    (re.compile(r'\bgmail\b.*\bimage\b|\bimage\b.*\bgmail\b', re.IGNORECASE), 'gmail-image-proxying-and-blocking'),
+    (re.compile(r'\bgmail\b.*\b(style|css)\b', re.IGNORECASE), 'gmail-embedded-style-support'),
+    (re.compile(r'\bgmail\b.*\bmedia\s*quer', re.IGNORECASE), 'gmail-media-query-support'),
+    (re.compile(r'\bgmail\b', re.IGNORECASE), 'gmail-embedded-style-support'),
+
+    # --- Apple Mail specific. ---
+    (re.compile(r'\bapple\s*mail\b', re.IGNORECASE), 'apple-mail-best-css-support'),
+
+    # --- Yahoo / AOL specific. ---
+    (re.compile(r'\byahoo\b.*\bimage\b|\bimage\b.*\byahoo\b', re.IGNORECASE), 'yahoo-mail-image-blocking'),
+    (re.compile(r'\byahoo\b', re.IGNORECASE), 'yahoo-mail-css-support'),
+    (re.compile(r'\baol\b', re.IGNORECASE), 'aol-mail-shared-yahoo-infrastructure'),
+
+    # --- New Outlook bare catch-all (after every combo above). ---
     (re.compile(r'\bnew\s*outlook\b|\bword\s*engine\b', re.IGNORECASE), 'outlook-word-engine-vs-new-outlook'),
     (re.compile(r'\b96[\s-]*dpi\b|\bpixels\s*per\s*inch\b|\bpixelsperinch\b', re.IGNORECASE), 'office-96-dpi'),
     (re.compile(r'\ballow\s*png\b|\ballowpng\b', re.IGNORECASE), 'outlook-allow-png'),
     (re.compile(r'\bvml\b.*\bnamespace\b|\bnamespace\b.*\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
     (re.compile(r'\bvml\b.*\bfallback\b|\bfallback\b.*\bvml\b', re.IGNORECASE), 'vml-requires-html-fallback'),
+    (re.compile(r'\bbulletproof\b.*\bbutton\b|\bbutton\b.*\bvml\b|\bvml\b.*\bbutton\b', re.IGNORECASE), 'outlook-bulletproof-button-pattern'),
+    (re.compile(r'\bbackground\s*image\b.*\boutlook\b|\boutlook\b.*\bbackground\s*image\b', re.IGNORECASE), 'outlook-background-image-needs-vml'),
+    (re.compile(r'\bbackground\s*image\b', re.IGNORECASE), 'email-bulletproof-background-pattern'),
     (re.compile(r'\brow[\s-]*collapse\b|\bzero[\s-]*height\b', re.IGNORECASE), 'global-row-collapse-danger'),
     (re.compile(r'\bspacer\b', re.IGNORECASE), 'spacer-row-safe-scoping'),
+    (re.compile(r'\bmso[\s-]*hide\b', re.IGNORECASE), 'outlook-mso-hide-preheader'),
+    (re.compile(r'\bpreheader\b', re.IGNORECASE), 'email-preheader-pattern-general'),
     (re.compile(r'\bfont\s*fallback\b', re.IGNORECASE), 'outlook-font-fallback-mso-only'),
     (re.compile(r'\bconditional\s*comment\b|mso\s*condition', re.IGNORECASE), 'conditional-comment-scope'),
+    (re.compile(r'\btable[\s-]*layout\b|\btables?\b.*\blayout\b', re.IGNORECASE), 'outlook-table-layout-required'),
+    (re.compile(r'\bline[\s-]*height\b.*\b(outlook|mso|exactly)\b|\b(outlook|mso)\b.*\bline[\s-]*height\b', re.IGNORECASE), 'outlook-line-height-exactly'),
+    (re.compile(r'\bline[\s-]*height\b', re.IGNORECASE), 'email-explicit-line-height-general'),
+    (re.compile(r'\bcss\s*support\b.*\boutlook\b|\boutlook\b.*\bcss\s*support\b', re.IGNORECASE), 'outlook-css-support-subset'),
+    (re.compile(r'\blist\b.*\b(padding|indent)\b.*\boutlook\b|\boutlook\b.*\blist\b', re.IGNORECASE), 'outlook-list-padding-behavior'),
+    (re.compile(r'\blist\b.*\b(padding|indent)\b', re.IGNORECASE), 'email-list-cross-client-indentation'),
+    (re.compile(r'\bhybrid\b.*\bwidth\b|\bfluid\b.*\bwidth\b', re.IGNORECASE), 'email-hybrid-width-strategy'),
+    (re.compile(r'\bmedia\s*quer', re.IGNORECASE), 'email-media-query-support-general'),
+    (re.compile(r'\bfont\s*fallback\b|\bfont\s*stack\b', re.IGNORECASE), 'email-font-fallback-stack-general'),
+    (re.compile(r'\babsolute\b.*\blinks?\b|\bhttps?\s*links?\b', re.IGNORECASE), 'email-links-absolute-https-only'),
+    (re.compile(r'\binline\s*style\b|\bstyle\s*block\b', re.IGNORECASE), 'email-css-inline-vs-style-block-strategy'),
+    (re.compile(r'\bchromium\b|\bwebkit\b', re.IGNORECASE), 'email-webmail-chromium-webkit-family'),
     # Sub-phase 4, item 6 — document-standards explainer rules.
     (re.compile(r'\btitle\b.*\b(name|subject)\b|\b(name|subject)\b.*\btitle\b', re.IGNORECASE), 'email-title-vs-document-name'),
     (re.compile(r'\bsubject\b', re.IGNORECASE), 'email-subject-is-send-metadata'),
@@ -587,14 +1174,16 @@ _EXPLAIN_TOPICS = (
     (re.compile(r'\breset\s*css\b', re.IGNORECASE), 'reset-css-purpose'),
     (re.compile(r'\bmeta\s*(?:data)?\s*baseline\b|\brequired\s*meta\b|\bformat[\s-]*detection\b', re.IGNORECASE), 'required-email-meta-baseline'),
     (re.compile(r'\bvml\b', re.IGNORECASE), 'vml-namespace-purpose'),
+    (re.compile(r'\balt\s*text\b|\bimage\b.*\baccessib', re.IGNORECASE), 'email-accessibility-alt-text-general'),
+    (re.compile(r'\bcss\s*support\b', re.IGNORECASE), 'email-css-inline-vs-style-block-strategy'),
 )
 
 _EXPLAIN_CLARIFY_REPLY = (
-    'I can explain: the Word rendering engine vs New Outlook, the 96-DPI Office setting, AllowPNG, '
-    'the VML namespace, why VML needs an HTML fallback, why a global row-collapse rule is risky, safe '
-    'spacer-row scoping, Outlook font fallback, MSO conditional-comment scope, the email title vs the '
-    'document name, why the subject is send metadata, favicon URL requirements, Reset CSS, and the '
-    'required email meta baseline. Which one?'
+    'Which one? I can explain a wide range of email-client compatibility topics — Classic and New Outlook, '
+    'Gmail, Apple Mail, iOS Mail, Yahoo Mail, AOL Mail, VML, MSO conditional comments, dark mode, tables, '
+    'fonts, line-height, backgrounds, buttons, lists, links, accessibility, and this document\'s own title/'
+    'subject/favicon/Reset CSS/required meta baseline. Ask about a specific topic or client and I\'ll '
+    'explain it.'
 )
 
 
@@ -668,6 +1257,189 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
                     action={'type': ActionType.NONE}, confidence=1.0,
                 )
             return CommandResult(reply=_EXPLAIN_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+
+        # Sub-phase 7 — email COMPOSITION ("create a promotional email for
+        # a summer sale with ... "). Checked BEFORE every other pattern in
+        # this function, including the generic _INSERT_PATTERN below (which
+        # also matches "create"/"add"): compose_from_brief() itself only
+        # ever matches text that clearly says "...email..." AND uses a
+        # compose verb (create/build/generate/make/compose/draft), so a
+        # plain "create a button" (no "email") safely falls through
+        # unaffected to the ordinary insert-module handling further down.
+        composition = compose_from_brief(text)
+        if composition is not None:
+            item_count = len(composition['items'])
+            top_level_types = ', '.join(item['module_type'] for item in composition['items'])
+            return CommandResult(
+                reply=(
+                    f"I will compose a {composition['pattern_label']} email with {item_count} section"
+                    f"{'s' if item_count != 1 else ''}: {top_level_types}. Review the proposal and Apply "
+                    'to insert it, or Cancel to change nothing.'
+                ),
+                action={'type': ActionType.COMPOSE_EMAIL, 'items': composition['items']},
+                confidence=0.8,
+            )
+
+        # Sub-phase 6 closure — repeatable-field ADD ("add a navigation
+        # link called Pricing with URL https://..."). Checked BEFORE
+        # _NESTED_INSERT_PATTERN below — a phrase like "... saying great
+        # stuff here" legitimately ends in the word "here" without meaning
+        # the location marker _NESTED_INSERT_PATTERN looks for, so the
+        # more specific called/named/titled/for ... with/using/saying
+        # structure must win first.
+        if _ADD_REPEATABLE_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            repeatable = module_capabilities.get_repeatable_field(selected_type)
+            if not repeatable:
+                return CommandResult(
+                    reply=f"The selected {selected_type} module doesn't have a list I can edit item-by-item.",
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            match = _ADD_REPEATABLE_PATTERN.search(text)
+            if not match:
+                return CommandResult(reply=_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.2)
+            identifier_raw = match.group(1).strip().strip('"\'').strip()
+            content_raw = match.group(2).strip().strip('"\'').strip()
+            item_schema = repeatable['itemSchema']
+            raw_item = _build_repeatable_add_item(item_schema, identifier_raw, content_raw)
+            if raw_item is None:
+                return CommandResult(
+                    reply=(
+                        f"I can add a simple two-field item to the selected {selected_type} module's list "
+                        '(e.g. "add a link called Pricing with URL https://..."), but not a richer item like this one.'
+                    ),
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            fields_by_key = {field['key']: field for field in item_schema}
+            safe_item = {}
+            for key, raw_value in raw_item.items():
+                field = fields_by_key[key]
+                validated = _validate_field_value(field, raw_value)
+                if validated is None:
+                    return CommandResult(
+                        reply=f'I couldn\'t use "{raw_value}" for {field["label"]} — please provide a valid value.',
+                        action={'type': ActionType.NONE}, confidence=0.3,
+                    )
+                safe_item[key] = validated
+            return CommandResult(
+                reply=f"I will add a new item to the selected {selected_type} module's list.",
+                action={'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': selected_type, 'op': 'add', 'item': safe_item},
+                confidence=0.85,
+            )
+
+        # Sub-phase 6, work package E -- nested insert ("add a text module
+        # here"/"insert a button into this column"). Checked before the
+        # generic _INSERT_PATTERN below, and AFTER repeatable-field ADD
+        # (see that block's docstring for why the ordering matters).
+        if _NESTED_INSERT_PATTERN.search(lowered):
+            module_type = _find_module_type(lowered)
+            if not module_type:
+                return CommandResult(
+                    reply='I can insert a text, image, button, divider, or spacer here -- which one?',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=f'I will insert a {module_type} module into the selected column.',
+                action={'type': ActionType.INSERT_NESTED_MODULE, 'module_type': module_type, 'patch': {}},
+                confidence=0.85,
+            )
+
+        # Sub-phase 6 closure — repeatable-field UPDATE ("change the
+        # second navigation link label to Services"). Checked before the
+        # generic style-patch fallthrough near the end of this function.
+        if _UPDATE_REPEATABLE_PATTERN.search(text):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            repeatable = module_capabilities.get_repeatable_field(selected_type)
+            if not repeatable:
+                return CommandResult(
+                    reply=f"The selected {selected_type} module doesn't have a list I can edit item-by-item.",
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            match = _UPDATE_REPEATABLE_PATTERN.search(text)
+            index = _ordinal_to_index(match.group(1))
+            if index is None or index < 0:
+                return CommandResult(reply=_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.2)
+            field = _match_repeatable_field(repeatable['itemSchema'], match.group(2).lower())
+            if not field:
+                return CommandResult(
+                    reply=f'Which field on item {index + 1} would you like to change?',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            raw_value = match.group(3).strip().strip('"\'').strip()
+            if not raw_value:
+                return CommandResult(
+                    reply=f'Tell me the new value for {field["label"]}.',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            validated = _validate_field_value(field, raw_value)
+            if validated is None:
+                return CommandResult(
+                    reply=f'I couldn\'t use "{raw_value}" for {field["label"]} — please provide a valid value.',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=f'This will change item {index + 1}\'s {field["label"]} to "{validated}". Please confirm.',
+                action={
+                    'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': selected_type,
+                    'op': 'update', 'index': index, 'item': {field['key']: validated},
+                },
+                confidence=0.85,
+            )
+
+        # Sub-phase 6 closure — repeatable-field REORDER ("move the
+        # fourth navigation link to position 2").
+        if _REORDER_REPEATABLE_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            repeatable = module_capabilities.get_repeatable_field(selected_type)
+            if not repeatable:
+                return CommandResult(
+                    reply=f"The selected {selected_type} module doesn't have a list I can edit item-by-item.",
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            match = _REORDER_REPEATABLE_PATTERN.search(lowered)
+            from_index = _ordinal_to_index(match.group(1))
+            try:
+                to_index = int(match.group(2)) - 1
+            except ValueError:
+                to_index = None
+            if from_index is None or from_index < 0 or to_index is None or to_index < 0:
+                return CommandResult(reply=_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.2)
+            return CommandResult(
+                reply=f'This will move item {from_index + 1} to position {to_index + 1}. Please confirm.',
+                action={
+                    'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': selected_type,
+                    'op': 'reorder', 'fromIndex': from_index, 'toIndex': to_index,
+                },
+                confidence=0.85,
+            )
+
+        # Sub-phase 6, work package E — repeatable-field item removal
+        # ("remove the first nav link"). Checked before the generic
+        # _DELETE_PATTERN below.
+        if _REMOVE_REPEATABLE_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            repeatable = module_capabilities.get_repeatable_field(selected_type)
+            if not repeatable:
+                return CommandResult(
+                    reply=f"The selected {selected_type} module doesn't have a list I can edit item-by-item.",
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            match = _REMOVE_REPEATABLE_PATTERN.search(lowered)
+            index = _ordinal_to_index(match.group(1))
+            if index is None or index < 0:
+                return CommandResult(reply=_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.2)
+            return CommandResult(
+                reply=f'This will remove item {index + 1} from the selected {selected_type} module. Please confirm.',
+                action={
+                    'type': ActionType.UPDATE_REPEATABLE_FIELD, 'module_type': selected_type,
+                    'op': 'remove', 'index': index,
+                },
+                confidence=0.85,
+            )
 
         # Document-level CSS commands — checked BEFORE the generic
         # insert/delete/global-style patterns below, since phrases like
@@ -784,6 +1556,83 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
             return CommandResult(
                 reply=f'I will set the favicon to {url}.',
                 action={'type': ActionType.SET_FAVICON, 'url': url}, confidence=0.85,
+            )
+
+        # Sub-phase 6, work package D — VML fallback toggle ("enable
+        # outlook vml for this button" / "add an outlook wrapper").
+        if _VML_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            # Background is checked first: hero-background-image is the one
+            # module type with BOTH capabilities (its own CTA button VML
+            # nests inside its background ghost-table VML — see
+            # heroCatalog.tsx), so APPLY_OUTLOOK_WRAPPER is the single
+            # correct action that covers both for that type.
+            if _is_vml_background_module(selected_type):
+                return CommandResult(
+                    reply=(
+                        f'I will enable the Classic Outlook VML background fallback for the selected '
+                        f'{selected_type} module.'
+                    ),
+                    action={'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': selected_type}, confidence=0.85,
+                )
+            if _is_vml_button_module(selected_type):
+                return CommandResult(
+                    reply=f'I will enable the Classic Outlook VML fallback for the selected {selected_type} module.',
+                    action={'type': ActionType.APPLY_VML_PATTERN, 'module_type': selected_type}, confidence=0.85,
+                )
+            return CommandResult(
+                reply=f'The selected {selected_type} module does not support a VML fallback.',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+
+        # Sub-phase 6, work package D — responsive visibility ("hide this
+        # on mobile" / "hide on desktop" / "show it on both").
+        if _HIDE_MOBILE_PATTERN.search(lowered) or _HIDE_DESKTOP_PATTERN.search(lowered) \
+                or _SHOW_ALL_VISIBILITY_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            if _SHOW_ALL_VISIBILITY_PATTERN.search(lowered):
+                visibility, phrase = 'all', 'visible on both desktop and mobile'
+            elif _HIDE_MOBILE_PATTERN.search(lowered):
+                visibility, phrase = 'hideMobile', 'hidden on mobile'
+            else:
+                visibility, phrase = 'hideDesktop', 'hidden on desktop'
+            return CommandResult(
+                reply=f'I will make the selected {selected_type} module {phrase}.',
+                action={
+                    'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': selected_type,
+                    'patch': {'visibility': visibility},
+                },
+                confidence=0.85,
+            )
+
+        # Sub-phase 6, work package D — layout column widths ("change the
+        # column widths to 70/30").
+        if _COLUMN_WIDTHS_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            capability = module_capabilities.get_module_capability(selected_type)
+            if not capability or not capability.get('isLayout'):
+                return CommandResult(
+                    reply=f'The selected {selected_type} module is not a layout, so it has no column widths to change.',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            numbers = [float(n) for n in _WIDTH_NUMBERS_PATTERN.findall(lowered)]
+            column_count = capability.get('columnCount') or 0
+            if len(numbers) != column_count:
+                return CommandResult(
+                    reply=(
+                        f'Tell me {column_count} width percentages for this layout, e.g. '
+                        '"change the column widths to 70/30".'
+                    ),
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            widths_label = '/'.join(str(int(n)) if n == int(n) else str(n) for n in numbers)
+            return CommandResult(
+                reply=f'This will change the column widths to {widths_label}%. Please confirm.',
+                action={'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': selected_type, 'widths': numbers},
+                confidence=0.85,
             )
 
         # Insert — checked before delete/duplicate so "add a button" never

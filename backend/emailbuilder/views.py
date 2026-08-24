@@ -10,8 +10,12 @@ from .ai_command import (
     ActionType, CommandResult, get_default_email_command_provider, requires_confirmation,
     requires_strong_confirmation, resolve_asset_references, validate_action,
 )
+from . import learning
 from .models import EmailAsset, EmailDocument, SavedEmailModule
-from .serializers import EmailAICommandRequestSerializer, EmailAssetSerializer, EmailDocumentSerializer, SavedEmailModuleSerializer
+from .serializers import (
+    EmailAICommandRequestSerializer, EmailAssetSerializer, EmailDocumentSerializer, LearningSignalRequestSerializer,
+    SavedEmailModuleSerializer,
+)
 
 
 class EmailDocumentViewSet(
@@ -148,6 +152,75 @@ class EmailAICommandView(APIView):
             'confidence': result.confidence,
             'provider': result.provider,
         }, status=status.HTTP_200_OK)
+
+
+def _learning_rate_limited(user_id):
+    # Abuse protection ONLY — never the deduplication/correctness
+    # mechanism (that's the (user, event_id) DB uniqueness constraint;
+    # see learning.record_signal's own docstring). A legitimate burst of
+    # a few dozen signals (e.g. a large Fix-All batch) must never be
+    # blocked, so this window is generous compared to the AI-command
+    # endpoint's own throttle.
+    key = f'emailbuilder-learning-signal:{user_id}'
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=60)
+        count = 1
+    return count > 120
+
+
+class LearningSignalView(APIView):
+    """Feature 14 V3 Sub-phase 8 — POST /api/v1/email-builder/learning/signals/
+    records one explicit Accept/Reject decision (idempotent per
+    (user, event_id) — see learning.record_signal); DELETE clears every
+    signal this user has ever recorded ("Clear learned preferences").
+    Both are the ONLY ways this table is ever written or emptied — no
+    other endpoint touches LearnedRepairSignal."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if _learning_rate_limited(request.user.pk):
+            return Response(
+                {'success': False, 'code': 'RATE_LIMITED', 'message': 'Too many requests. Please wait a moment and try again.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        serializer = LearningSignalRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        _signal, created = learning.record_signal(
+            user=request.user,
+            event_id=data['event_id'],
+            signature=data['signature'],
+            outcome=data['outcome'],
+            source=data['source'],
+        )
+        return Response({'success': True, 'created': created}, status=status.HTTP_200_OK)
+
+    def delete(self, request):
+        deleted_count = learning.clear_signals_for_user(request.user)
+        return Response({'success': True, 'deleted': deleted_count}, status=status.HTTP_200_OK)
+
+
+class LearningRankingView(APIView):
+    """GET /api/v1/email-builder/learning/signals/ranking/ — the current
+    user's own {signature: {score, evidenceCount, accepted, rejected}}
+    map, or an empty map on any internal failure (invariant 4 in
+    learning.py: a ranking failure must never surface as an error the
+    frontend has to handle specially — it just gets no ranking, i.e. the
+    exact pre-Sub-phase-8 order)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            ranking = learning.compute_ranking(request.user)
+        except Exception:  # noqa: BLE001 - ranking must never fail the request; fall back to unranked
+            ranking = {}
+        return Response({'success': True, 'signatures': ranking}, status=status.HTTP_200_OK)
 
 
 class EmailAssetViewSet(

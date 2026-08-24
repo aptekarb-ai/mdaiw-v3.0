@@ -5,6 +5,7 @@ import {
   GENERIC_ONLY, cell, createResponsiveSettings, moduleTableRow, textLine, type ModuleDefinition,
   type RepeatableFieldConfig, type SchemaField,
 } from '../registryCore';
+import { renderVmlButton } from '../vml';
 import { SOCIAL_PLATFORM_PRESETS } from './socialCatalog';
 
 const MAX_FOOTER_SOCIAL_LINKS = 6;
@@ -17,6 +18,10 @@ const footerSocialField: RepeatableFieldConfig<SocialPlatformLink> = {
   createItem: () => ({ label: 'Facebook', href: '' }),
   maxItems: MAX_FOOTER_SOCIAL_LINKS,
   addLabel: 'Add social link',
+  itemSchema: [
+    { key: 'label', label: 'Platform', kind: 'text', valueType: 'text', group: 'content' },
+    { key: 'href', label: 'URL', kind: 'url', valueType: 'url', group: 'content' },
+  ],
   renderItemFields: (item, update) => (
     <>
       <label className="properties-panel__field">
@@ -91,6 +96,14 @@ function footerDefinition(variant: FooterVariant): ModuleDefinition<FooterModule
     imagePosition: null,
     platformCompatibility: GENERIC_ONLY,
     propertyEditor: 'schema',
+    // Sub-phase 6 final reconciliation — showSocial variants (only
+    // footer-social-legal today) render the same bordered/rounded "pill"
+    // links as socialCatalog.tsx, which DOES need the VML outline
+    // fallback (see socialLinksTable below; "no background fill" does not
+    // exempt a rounded-bordered control from Classic Outlook's
+    // border-radius limitation). unsubscribe/preference links remain
+    // plain underlined text (`text-decoration:underline`), never wrapped.
+    ...(variant.showSocial ? { supportsBulletproofCta: true } : {}),
     editableFields: editableFields(variant),
     repeatableField: variant.showSocial ? footerSocialField : undefined,
     createDefaultProps: () => ({
@@ -131,7 +144,27 @@ function footerDefinition(variant: FooterVariant): ModuleDefinition<FooterModule
     renderEmailHtml: (module) => {
       const { props, settings } = module;
       const spacing = resolveSpacing(settings, 'desktop');
-      const socialLinksTable = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr>${props.socialPlatforms.map((p) => `<td style="padding:0 4px;"><a href="${escapeAttribute(sanitizeUrl(p.href))}" style="display:inline-block; padding:6px 12px; border:1px solid #B8C8CD; border-radius:999px; font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#333333; text-decoration:none;">${escapeHtml(p.label)}</a></td>`).join('')}</tr></table>`;
+      const socialCellsHtml = props.socialPlatforms.map((p) => {
+        const plainPill = `<a href="${escapeAttribute(sanitizeUrl(p.href))}" style="display:inline-block; padding:6px 12px; border:1px solid #B8C8CD; border-radius:999px; font-family:Arial,Helvetica,sans-serif; font-size:11px; color:#333333; text-decoration:none;">${escapeHtml(p.label)}</a>`;
+        // Sub-phase 6 final reconciliation — same shared outline/pill VML
+        // pairing as socialCatalog.tsx.
+        const pillHtml = settings.outlookVml
+          ? renderVmlButton({
+            href: p.href,
+            text: p.label,
+            backgroundColor: '',
+            textColor: '#333333',
+            fontSize: 11,
+            borderRadius: 999,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderColor: '#B8C8CD',
+            borderWidth: 1,
+          }, plainPill)
+          : plainPill;
+        return `<td style="padding:0 4px;">${pillHtml}</td>`;
+      }).join('');
+      const socialLinksTable = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"><tr>${socialCellsHtml}</tr></table>`;
       // align="center" on the inner table (HTML attribute, not CSS
       // margin) centers it; the outer single-cell table's padding-bottom
       // supplies the 12px gap before the content below, in place of the

@@ -438,6 +438,133 @@ describe('useEmailBuilderState — Feature 14 AI Engineer mutators', () => {
     expect(result.current.modules).toHaveLength(0);
   });
 
+  // Sub-phase 7 — addComposedModules. Covers the whole composition
+  // shape: flat modules, a layout with nested per-column children, and a
+  // module with seeded repeatable items, all landing in ONE history
+  // commit (Apply -> Undo removes the ENTIRE composition in one step).
+  describe('addComposedModules', () => {
+    it('inserts several flat modules as a single undo step', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        { type: 'header-logo-center', patch: {} },
+        { type: 'text', patch: { text: 'Hello' } },
+        { type: 'button', patch: { text: 'Shop Now' } },
+      ]));
+
+      expect(result.current.modules).toHaveLength(3);
+      expect(result.current.modules.map((m) => m.type)).toEqual(['header-logo-center', 'text', 'button']);
+      expect((result.current.modules[1].props as { text: string }).text).toBe('Hello');
+      expect(result.current.selectedModuleId).toBe(result.current.modules[2].id);
+      expect(result.current.canUndo).toBe(true);
+
+      // One undo removes the WHOLE composition, not just the last module.
+      act(() => result.current.undo());
+      expect(result.current.modules).toHaveLength(0);
+
+      act(() => result.current.redo());
+      expect(result.current.modules).toHaveLength(3);
+    });
+
+    it('populates a layout module\'s columns with nested children', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        {
+          type: 'layout-2col-50-50', patch: {},
+          children: [
+            { columnIndex: 0, modules: [{ type: 'text', patch: { text: 'Left' } }] },
+            { columnIndex: 1, modules: [{ type: 'text', patch: { text: 'Right' } }] },
+          ],
+        },
+      ]));
+
+      const layout = result.current.modules[0];
+      expect(layout.type).toBe('layout-2col-50-50');
+      expect(layout.columns).toHaveLength(2);
+      expect((layout.columns![0].modules[0].props as { text: string }).text).toBe('Left');
+      expect((layout.columns![1].modules[0].props as { text: string }).text).toBe('Right');
+
+      act(() => result.current.undo());
+      expect(result.current.modules).toHaveLength(0);
+    });
+
+    it('leaves a column with no matching child group empty (not every column needs content)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        {
+          type: 'layout-2col-50-50', patch: {},
+          children: [{ columnIndex: 0, modules: [{ type: 'text', patch: {} }] }],
+        },
+      ]));
+      const layout = result.current.modules[0];
+      expect(layout.columns![0].modules).toHaveLength(1);
+      expect(layout.columns![1].modules).toHaveLength(0);
+    });
+
+    it('seeds a module\'s repeatable field from repeatableItems', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        {
+          type: 'social-icon-row', patch: {},
+          repeatableItems: [
+            { label: 'Facebook', href: 'https://facebook.com/x' },
+            { label: 'Instagram', href: 'https://instagram.com/x' },
+          ],
+        },
+      ]));
+      const social = result.current.modules[0];
+      const platforms = (social.props as { platforms: { label: string; href: string }[] }).platforms;
+      expect(platforms).toHaveLength(2);
+      expect(platforms[0]).toEqual({ label: 'Facebook', href: 'https://facebook.com/x' });
+      expect(platforms[1]).toEqual({ label: 'Instagram', href: 'https://instagram.com/x' });
+    });
+
+    it('ignores repeatableItems for a module with no repeatable field', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        { type: 'button', patch: { text: 'Shop' }, repeatableItems: [{ label: 'x', href: 'y' }] },
+      ]));
+      const button = result.current.modules[0];
+      expect((button.props as { text: string }).text).toBe('Shop');
+      expect((button.props as Record<string, unknown>).platforms).toBeUndefined();
+    });
+
+    it('a non-layout module with children is unaffected by the children key', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        // 'text' has no .columns at all -- children must be a silent no-op.
+        { type: 'text', patch: { text: 'Plain' }, children: [{ columnIndex: 0, modules: [{ type: 'button', patch: {} }] }] },
+      ]));
+      const textModule = result.current.modules[0];
+      expect(textModule.type).toBe('text');
+      expect(textModule.columns).toBeUndefined();
+      expect((textModule.props as { text: string }).text).toBe('Plain');
+    });
+
+    it('a full mixed composition (flat + layout + repeatable) is one undo step', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addComposedModules([
+        { type: 'header-logo-center', patch: {} },
+        {
+          type: 'layout-2col-50-50', patch: {},
+          children: [
+            { columnIndex: 0, modules: [{ type: 'text', patch: { text: 'A' } }] },
+            { columnIndex: 1, modules: [{ type: 'text', patch: { text: 'B' } }] },
+          ],
+        },
+        { type: 'social-icon-row', patch: {}, repeatableItems: [{ label: 'X', href: 'https://x.com' }] },
+        { type: 'footer-simple-legal', patch: {} },
+      ]));
+
+      expect(result.current.modules).toHaveLength(4);
+      act(() => result.current.undo());
+      expect(result.current.modules).toHaveLength(0);
+      act(() => result.current.redo());
+      expect(result.current.modules).toHaveLength(4);
+      const social = result.current.modules[2];
+      expect((social.props as { platforms: unknown[] }).platforms).toHaveLength(1);
+    });
+  });
+
   it('applyGlobalStyle patches every top-level module of the given type, leaving others untouched', () => {
     const { result } = renderHook(() => useEmailBuilderState());
     act(() => {
@@ -697,6 +824,42 @@ describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phas
       // One undo reverts BOTH module patches — proves single commit.
       expect((result.current.modules[0].props as unknown as TextModuleProps).color).not.toBe('#ff0000');
       expect((result.current.modules[1].props as unknown as TextModuleProps).color).not.toBe('#00ff00');
+    });
+
+    it('Sub-phase 6: applies a module SETTINGS patch (e.g. enabling VML) via the 4th argument, in the same commit as prop/document patches', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('button'));
+      const moduleId = result.current.modules[0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [{ moduleId, propPatch: { text: 'Buy Now' } }],
+        { reset_css_enabled: false },
+        [{ moduleId, settingsPatch: { outlookVml: true } }],
+      ));
+
+      expect(result.current.modules[0].settings.outlookVml).toBe(true);
+      expect((result.current.modules[0].props as unknown as { text: string }).text).toBe('Buy Now');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(false);
+
+      act(() => result.current.undo());
+      // One undo reverts all three (prop, settings, document) — proves a
+      // single history commit, same posture as the module+document case above.
+      expect(result.current.modules[0].settings.outlookVml).toBeUndefined();
+      expect((result.current.modules[0].props as unknown as { text: string }).text).not.toBe('Buy Now');
+      expect(result.current.documentSettings.reset_css_enabled).toBe(true);
+    });
+
+    it('Sub-phase 6: applies a settings patch to a module nested inside a layout column', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      const columnId = result.current.modules[0].columns![0].id;
+      act(() => result.current.insertNestedModule(layoutId, columnId, 'button'));
+      const nestedId = result.current.modules[0].columns![0].modules[0].id;
+
+      act(() => result.current.applyRepairPatch([], null, [{ moduleId: nestedId, settingsPatch: { outlookVml: true } }]));
+
+      expect(result.current.modules[0].columns![0].modules[0].settings.outlookVml).toBe(true);
     });
   });
 });

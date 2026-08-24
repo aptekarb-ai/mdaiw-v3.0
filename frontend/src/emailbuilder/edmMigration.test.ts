@@ -46,6 +46,44 @@ describe('normalizeModule — Feature 07 responsive settings survive normalizati
     expect(normalized.settings.mobileColumnGap).toBeUndefined();
   });
 
+  // Sub-phase 6 — outlookVml regression guard (this exact bug was found
+  // live: a button/hero module's VML fallback silently reverted on every
+  // Save + Reload because this allowlist never carried the new key).
+  it('preserves outlookVml through normalization when true', () => {
+    const normalized = normalizeModule(rawModule({ outlookVml: true }));
+    expect(normalized.settings.outlookVml).toBe(true);
+  });
+
+  it('preserves outlookVml through normalization when explicitly false', () => {
+    const normalized = normalizeModule(rawModule({ outlookVml: false }));
+    expect(normalized.settings.outlookVml).toBe(false);
+  });
+
+  it('a document with no outlookVml key normalizes with it absent — no destructive default injected', () => {
+    const normalized = normalizeModule(rawModule({}));
+    expect(normalized.settings.outlookVml).toBeUndefined();
+  });
+
+  it('a non-boolean outlookVml value is dropped (normalizes to undefined)', () => {
+    const normalized = normalizeModule(rawModule({ outlookVml: 'yes' }));
+    expect(normalized.settings.outlookVml).toBeUndefined();
+  });
+
+  it('legacy flat settings shape also preserves outlookVml when present', () => {
+    const legacy = {
+      id: 'm3',
+      type: 'button',
+      order: 0,
+      props: { text: 'Hi', href: '', align: 'center', backgroundColor: '#0082AD', textColor: '#FFFFFF', fontSize: 15, borderRadius: 6 },
+      settings: {
+        paddingTop: 20, paddingRight: 20, paddingBottom: 20, paddingLeft: 20,
+        outlookVml: true,
+      },
+    } as unknown as EmailModule;
+    const normalized = normalizeModule(legacy);
+    expect(normalized.settings.outlookVml).toBe(true);
+  });
+
   it('legacy flat settings shape (pre-Feature-04.5) also preserves visibility/mobileColumnGap when present', () => {
     const legacy = {
       id: 'm2',
