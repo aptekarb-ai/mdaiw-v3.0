@@ -113,6 +113,21 @@ describe('CodeEditorPanel', () => {
     expect(screen.getByRole('button', { name: /Find/ })).toBeDisabled();
   });
 
+  // Correction 1 (Feature 09) — the toolbar Find button must open Monaco's
+  // OWN find widget (actions.find), never a second, hand-built search.
+  it('clicking Find invokes Monaco\'s real find action, not a line-1 jump', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByRole('button', { name: /Find/ }));
+
+    const monacoReactMock = (await import('@monaco-editor/react')) as unknown as {
+      __testHooks: { getAction: ReturnType<typeof vi.fn>; findActionRun: ReturnType<typeof vi.fn> };
+    };
+    expect(monacoReactMock.__testHooks.getAction).toHaveBeenCalledWith('actions.find');
+    expect(monacoReactMock.__testHooks.findActionRun).toHaveBeenCalledTimes(1);
+  });
+
   it('stays in sync when the content prop changes (live preview)', () => {
     const { rerender } = render(
       <CodeEditorPanel documentName="Doc" width={700} content={content()} platform="generic" />,

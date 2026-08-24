@@ -47,6 +47,27 @@ describe('CodeEditor', () => {
     expect(editor.focus).toHaveBeenCalled();
   });
 
+  // Correction 1 (Feature 09, Module-4) — the shared wrapper's own new
+  // capability: openFind() must call Monaco's real find action
+  // (actions.find), never a second, hand-built search implementation.
+  it('exposes openFind via ref that runs Monaco\'s built-in find action', async () => {
+    const ref = createRef<CodeEditorHandle>();
+    render(
+      <CodeEditor ref={ref} language="html" value={'line1\nline2'} onChange={() => {}} ariaLabel="HTML code" />,
+    );
+    await screen.findByLabelText('HTML code');
+
+    act(() => {
+      ref.current?.openFind();
+    });
+
+    const monacoReactMock = (await import('@monaco-editor/react')) as unknown as {
+      __testHooks: { getAction: ReturnType<typeof vi.fn>; findActionRun: ReturnType<typeof vi.fn> };
+    };
+    expect(monacoReactMock.__testHooks.getAction).toHaveBeenCalledWith('actions.find');
+    expect(monacoReactMock.__testHooks.findActionRun).toHaveBeenCalledTimes(1);
+  });
+
   it('clamps focusLine to the document range instead of throwing', async () => {
     const ref = createRef<CodeEditorHandle>();
     render(<CodeEditor ref={ref} language="css" value={'a\nb'} onChange={() => {}} ariaLabel="CSS code" />);

@@ -16,6 +16,11 @@ export interface CodeEditorHandle {
    * emphasizing it. Out-of-range lines/columns are clamped to the
    * document, never thrown. */
   focusLine: (line: number, column?: number, endLine?: number | null, endColumn?: number | null) => void;
+  /** Opens Monaco's own built-in Find widget (`actions.find`) — never a
+   * second, hand-built search implementation. In a read-only editor
+   * Monaco itself keeps the widget's Replace half inert, so this never
+   * opens a mutation path. */
+  openFind: () => void;
 }
 
 export interface CodeEditorMarker {
@@ -118,6 +123,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(function
       emphasisTimeoutRef.current = window.setTimeout(() => {
         emphasisDecorationsRef.current?.clear();
       }, EMPHASIS_DURATION_MS);
+    },
+    openFind() {
+      editorRef.current?.getAction('actions.find')?.run();
     },
   }));
 
