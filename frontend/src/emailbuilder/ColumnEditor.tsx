@@ -1,4 +1,6 @@
-import type { ColumnContainerSettings, ColumnVerticalAlign, EmailColumn, EmailModule, EmailModuleSettings } from './edm';
+import type {
+  ColumnContainerSettings, ColumnVerticalAlign, EmailColumn, EmailModule, EmailModuleSettings, LayoutColumnDirection,
+} from './edm';
 import { MAX_PADDING, MIN_PADDING, resolveColumnGutter, resolveSpacing } from './edm';
 import type { BuilderViewMode } from './registryCore';
 import { ResponsiveDimensionField } from './DimensionControl';
@@ -243,6 +245,33 @@ export function MobileStackingSettings({ module, onChange }: {
         </>
       )}
     </div>
+  );
+}
+
+// --- Settings tab addition: Desktop column direction -----------------------
+//
+// Module-4 Final Gap Closure, Correction 2 (Feature 05) — deliberately a
+// SEPARATE component from MobileStackingSettings above, not a field
+// nested inside it: this is a Desktop-side setting, distinct from
+// Mobile order (mobileColumnOrder), even though the design places both
+// controls in the same panel. Column sequence only — never wired to
+// alignment, text direction, or locale, and never mutates `columns`.
+export function DesktopDirectionSettings({ module, onChange }: {
+  module: EmailModule; onChange: (patch: Partial<EmailModuleSettings>) => void;
+}) {
+  const direction: LayoutColumnDirection = module.settings.desktopColumnDirection === 'rtl' ? 'rtl' : 'ltr';
+
+  return (
+    <label className="properties-panel__field">
+      <span>Direction on Desktop</span>
+      <select
+        value={direction}
+        onChange={(event) => onChange({ desktopColumnDirection: event.target.value as LayoutColumnDirection })}
+      >
+        <option value="ltr">Left → Right</option>
+        <option value="rtl">Right → Left</option>
+      </select>
+    </label>
   );
 }
 

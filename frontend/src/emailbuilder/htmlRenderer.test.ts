@@ -3,6 +3,7 @@ import { renderEmailBody, renderEmailDocument } from './htmlRenderer';
 import { createModule } from './moduleFactory';
 import { getModuleDefinition } from './moduleRegistry';
 import { computeCompatibilityChecks } from './htmlCompatibilityChecks';
+import { columnResponsiveClassName, gutterResponsiveClassName } from './responsiveStyles';
 import type { EmailModule, TextModuleProps, ButtonModuleProps, ImageModuleProps } from './edm';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper accepts modules narrowed to any specific Props type
@@ -450,6 +451,141 @@ describe('Feature 05 — nested layout rendering', () => {
     layout.columns![0].modules.push(text as unknown as EmailModule);
     const html = renderEmailBody(withModules([layout]));
     expect(html).not.toContain('<script>alert(1)</script>');
+  });
+});
+
+describe('Module-4 Final Gap Closure, Correction 2 — Feature 05: Desktop column direction', () => {
+  // Deliberately NOT single letters — 'A'/'B'/'C' collide with substrings
+  // already present elsewhere in the generated HTML (attribute names,
+  // "COLUMNS" in the module comment, etc.), which silently corrupts
+  // position-based assertions. These tokens cannot appear anywhere else.
+  function textCol(label: string) {
+    const text = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    text.props = { ...text.props, text: label };
+    return text as unknown as EmailModule;
+  }
+
+  // Sorts `labels` by where they actually appear in the emitted HTML —
+  // proves the real <td> sequence, not merely the source array order.
+  function orderedLabels(html: string, labels: string[]) {
+    return labels.slice().sort((a, b) => html.indexOf(a) - html.indexOf(b));
+  }
+
+  // Parses the layout's own column <td>s specifically (matches the exact
+  // literal shape layoutCatalog.tsx emits — never a nested module's own
+  // inner <td>s), in DOCUMENT/rendered order, each with its own width,
+  // class and content region — so a label's containing cell (and that
+  // cell's width/class) can be found reliably regardless of whatever
+  // nested table structure a Text module wraps its content in.
+  function columnCells(html: string) {
+    const pattern = /<td width="(\d+(?:\.\d+)?)%" valign="[^"]*" class="([^"]*)"[^>]*>/g;
+    const matches = [...html.matchAll(pattern)];
+    return matches.map((match, position) => {
+      const contentStart = match.index + match[0].length;
+      const contentEnd = position + 1 < matches.length ? matches[position + 1].index : html.length;
+      return { width: match[1], className: match[2], contentStart, contentEnd };
+    });
+  }
+
+  function cellContaining(html: string, label: string) {
+    const labelIndex = html.indexOf(label);
+    expect(labelIndex).toBeGreaterThan(-1);
+    const cell = columnCells(html).find((c) => labelIndex >= c.contentStart && labelIndex < c.contentEnd);
+    expect(cell).toBeDefined();
+    return cell!;
+  }
+
+  it('absent desktopColumnDirection renders identity (LTR) order — existing documents unchanged', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.columns![0].modules.push(textCol('ZFIRST'));
+    layout.columns![1].modules.push(textCol('ZSECOND'));
+    expect(layout.settings.desktopColumnDirection).toBeUndefined();
+    const html = renderEmailBody(withModules([layout]));
+    expect(orderedLabels(html, ['ZFIRST', 'ZSECOND'])).toEqual(['ZFIRST', 'ZSECOND']);
+  });
+
+  it('explicit "ltr" renders identity order, same as absent', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, desktopColumnDirection: 'ltr' };
+    layout.columns![0].modules.push(textCol('ZFIRST'));
+    layout.columns![1].modules.push(textCol('ZSECOND'));
+    const html = renderEmailBody(withModules([layout]));
+    expect(orderedLabels(html, ['ZFIRST', 'ZSECOND'])).toEqual(['ZFIRST', 'ZSECOND']);
+  });
+
+  it('"rtl" reverses the emitted <td> sequence for a 2-column layout', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, desktopColumnDirection: 'rtl' };
+    layout.columns![0].modules.push(textCol('ZFIRST'));
+    layout.columns![1].modules.push(textCol('ZSECOND'));
+    const html = renderEmailBody(withModules([layout]));
+    expect(orderedLabels(html, ['ZFIRST', 'ZSECOND'])).toEqual(['ZSECOND', 'ZFIRST']);
+  });
+
+  it('"rtl" reverses a 3-column layout as third, second, first — proving this is a real reversal, not a two-column swap', () => {
+    const layout = createModule('layout-3col', 0);
+    layout.settings = { ...layout.settings, desktopColumnDirection: 'rtl' };
+    layout.columns![0].modules.push(textCol('ZFIRST'));
+    layout.columns![1].modules.push(textCol('ZSECOND'));
+    layout.columns![2].modules.push(textCol('ZTHIRD'));
+    const html = renderEmailBody(withModules([layout]));
+    expect(orderedLabels(html, ['ZFIRST', 'ZSECOND', 'ZTHIRD'])).toEqual(['ZTHIRD', 'ZSECOND', 'ZFIRST']);
+  });
+
+  it('unequal column widths stay attached to their original content after reversal', () => {
+    const layout = createModule('layout-2col-30-70', 0);
+    layout.settings = { ...layout.settings, desktopColumnDirection: 'rtl' };
+    layout.columns![0].modules.push(textCol('ZNARROW'));
+    layout.columns![1].modules.push(textCol('ZWIDE'));
+    const html = renderEmailBody(withModules([layout]));
+
+    expect(html.indexOf('ZWIDE')).toBeLessThan(html.indexOf('ZNARROW'));
+    // ZWIDE (originally column 1, 70%) still carries its own 70% width
+    // even though it now renders first; ZNARROW (originally column 0,
+    // 30%) still carries 30% even though it now renders last — width
+    // never swaps onto the wrong content.
+    expect(cellContaining(html, 'ZWIDE').width).toBe('70');
+    expect(cellContaining(html, 'ZNARROW').width).toBe('30');
+  });
+
+  it('reversed cells keep their ORIGINAL column class attached to their own content', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, desktopColumnDirection: 'rtl' };
+    layout.columns![0].modules.push(textCol('ZFIRST'));
+    layout.columns![1].modules.push(textCol('ZSECOND'));
+    const html = renderEmailBody(withModules([layout]));
+
+    expect(cellContaining(html, 'ZFIRST').className).toBe(columnResponsiveClassName(layout.id, 0));
+    expect(cellContaining(html, 'ZSECOND').className).toBe(columnResponsiveClassName(layout.id, 1));
+  });
+
+  it('gutter cell count and canonical identity stay correct under reversal for a 3-column layout', () => {
+    const layout = createModule('layout-3col', 0);
+    layout.settings = {
+      ...layout.settings, desktopColumnDirection: 'rtl', columnGutter: { desktop: { value: 10, unit: 'px' } },
+    };
+    const html = renderEmailBody(withModules([layout]));
+    // Still exactly 2 gutters for 3 columns, regardless of direction.
+    const gutterCells = (html.match(/font-size:0; line-height:0;/g) ?? []).length;
+    expect(gutterCells).toBe(2);
+    // Rendered order is col2, gutter, col1, gutter, col0. The first
+    // emitted gutter sits between original columns 2 and 1, so it keeps
+    // canonical identity "gutter 1" (the real gutter between columns 1
+    // and 2) — never renumbered to match its display position.
+    const gut1Index = html.indexOf(gutterResponsiveClassName(layout.id, 1));
+    const gut0Index = html.indexOf(gutterResponsiveClassName(layout.id, 0));
+    expect(gut1Index).toBeGreaterThan(-1);
+    expect(gut0Index).toBeGreaterThan(-1);
+    expect(gut1Index).toBeLessThan(gut0Index);
+  });
+
+  it('existing documents (no desktopColumnDirection key) render the exact identity order for 3+ columns too', () => {
+    const layout = createModule('layout-3col', 0);
+    layout.columns![0].modules.push(textCol('ZFIRST'));
+    layout.columns![1].modules.push(textCol('ZSECOND'));
+    layout.columns![2].modules.push(textCol('ZTHIRD'));
+    const html = renderEmailBody(withModules([layout]));
+    expect(orderedLabels(html, ['ZFIRST', 'ZSECOND', 'ZTHIRD'])).toEqual(['ZFIRST', 'ZSECOND', 'ZTHIRD']);
   });
 });
 

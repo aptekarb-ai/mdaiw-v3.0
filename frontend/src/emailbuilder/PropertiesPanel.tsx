@@ -9,7 +9,8 @@ import { PaddingControls } from './PaddingControls';
 import { OuterSpacingControls } from './OuterSpacingControls';
 import { ResponsiveDimensionField } from './DimensionControl';
 import {
-  ColumnEditor, ColumnGutterEditor, ColumnWidthsEditor, LayoutStructureOverview, MobileStackingSettings,
+  ColumnEditor, ColumnGutterEditor, ColumnWidthsEditor, DesktopDirectionSettings, LayoutStructureOverview,
+  MobileStackingSettings,
 } from './ColumnEditor';
 import { ColorControl } from './ColorControl';
 import { TypographyControls } from './TypographyControls';
@@ -303,6 +304,11 @@ export function PropertiesPanel({
                 {isLayout && (
                   <PropertySection title="Responsive / Mobile Stacking">
                     <MobileStackingSettings module={module} onChange={(patch) => onUpdateSettings(module.id, patch)} />
+                  </PropertySection>
+                )}
+                {isLayout && (
+                  <PropertySection title="Column Direction">
+                    <DesktopDirectionSettings module={module} onChange={(patch) => onUpdateSettings(module.id, patch)} />
                   </PropertySection>
                 )}
                 <ResetMobileOverridesSection

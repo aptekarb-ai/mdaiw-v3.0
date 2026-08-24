@@ -692,6 +692,161 @@ describe('EmailBuilderWorkspacePage — Feature 05 Layout Builder', () => {
   });
 });
 
+describe('EmailBuilderWorkspacePage — Module-4 Final Gap Closure, Correction 2 (Feature 05 Desktop column direction)', () => {
+  function columnSettings() {
+    return { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' as const };
+  }
+
+  // Deliberately unique tokens — see htmlRenderer.test.ts's same rationale:
+  // single letters collide with substrings already present elsewhere in
+  // the rendered page (module labels, attribute names, etc).
+  function twoColumnDocument(settingsOverrides: Record<string, unknown> = {}) {
+    return baseDocument({
+      content: {
+        version: 1,
+        modules: [{
+          id: 'layout-1', type: 'layout-2col-50-50', order: 0,
+          props: { columnWidths: [50, 50] },
+          settings: { ...createResponsiveSettings(), ...settingsOverrides },
+          columns: [
+            {
+              id: 'col-a',
+              modules: [{ id: 'nested-a', type: 'text', order: 0, props: { text: 'ZFIRST-CONTENT' }, settings: createResponsiveSettings() }],
+              settings: columnSettings(),
+            },
+            {
+              id: 'col-b',
+              modules: [{ id: 'nested-b', type: 'text', order: 0, props: { text: 'ZSECOND-CONTENT' }, settings: createResponsiveSettings() }],
+              settings: columnSettings(),
+            },
+          ],
+        }],
+      },
+    });
+  }
+
+  it('setting "Direction on Desktop" to Right → Left persists the setting on save', async () => {
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const select = screen.getByLabelText('Direction on Desktop') as HTMLSelectElement;
+    expect(select.value).toBe('ltr');
+    await user.selectOptions(select, 'rtl');
+    expect(select.value).toBe('rtl');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({ settings: expect.objectContaining({ desktopColumnDirection: 'rtl' }) }),
+        ]),
+      }),
+    })));
+  });
+
+  it('Undo restores Left → Right after setting Right → Left; Redo reapplies Right → Left; this stays one normal history operation', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const select = () => screen.getByLabelText('Direction on Desktop') as HTMLSelectElement;
+    await user.selectOptions(select(), 'rtl');
+    expect(select().value).toBe('rtl');
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(select().value).toBe('ltr');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(select().value).toBe('rtl');
+  });
+
+  it('a reloaded document with desktopColumnDirection: "rtl" renders the canvas in reversed order (save/reload persistence)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(twoColumnDocument({ desktopColumnDirection: 'rtl' }));
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+    await screen.findByText('ZSECOND-CONTENT');
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZSECOND-CONTENT')).toBeLessThan(text.indexOf('ZFIRST-CONTENT'));
+  });
+
+  it('a reloaded document with no desktopColumnDirection key renders identity order (existing documents unchanged)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(twoColumnDocument());
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+    await screen.findByText('ZSECOND-CONTENT');
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZFIRST-CONTENT')).toBeLessThan(text.indexOf('ZSECOND-CONTENT'));
+  });
+
+  it('Mobile stacking inherits the reversed Desktop order when mobileColumnOrder is absent', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(twoColumnDocument({ desktopColumnDirection: 'rtl' }));
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZSECOND-CONTENT')).toBeLessThan(text.indexOf('ZFIRST-CONTENT'));
+  });
+
+  it('an explicit mobileColumnOrder wins on Mobile regardless of the Desktop direction setting', async () => {
+    // Desktop is RTL (would inherit as second,first), but mobileColumnOrder
+    // explicitly requests identity ([0, 1]) — the explicit override must win.
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      twoColumnDocument({ desktopColumnDirection: 'rtl', mobileColumnOrder: [0, 1] }),
+    );
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZFIRST-CONTENT')).toBeLessThan(text.indexOf('ZSECOND-CONTENT'));
+  });
+
+  it('changing Desktop direction never overwrites or regenerates an existing mobileColumnOrder', async () => {
+    const document1 = twoColumnDocument({ mobileColumnOrder: [1, 0] });
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+
+    await user.click(screen.getByText('ZFIRST-CONTENT'));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    // Reselect the layout via the breadcrumb (module selection moved to
+    // the nested Text module) so the Desktop-direction control is visible.
+    await user.click(screen.getByRole('button', { name: '2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    await user.selectOptions(screen.getByLabelText('Direction on Desktop'), 'rtl');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({
+            settings: expect.objectContaining({ desktopColumnDirection: 'rtl', mobileColumnOrder: [1, 0] }),
+          }),
+        ]),
+      }),
+    })));
+  });
+});
+
 describe('EmailBuilderWorkspacePage — Feature 06 Module Element Editor', () => {
   it('Text: editing content, font size, color and alignment updates the canvas and marks dirty', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());

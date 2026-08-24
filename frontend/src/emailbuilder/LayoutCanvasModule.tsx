@@ -56,10 +56,22 @@ export function LayoutCanvasModule({
     return dimension.unit === 'px' ? dimension.value : 0;
   })();
 
+  // Module-4 Final Gap Closure, Correction 2 (Feature 05) — the Desktop
+  // visual sequence, as an array of ORIGINAL column indexes (never a
+  // mutation of `columns` itself). Reused as the Mobile-stacked default
+  // too (see below) — matches the existing, documented rule that an
+  // absent mobileColumnOrder inherits whatever order Desktop actually
+  // renders in (MOBILE_COLUMN_ORDER_LIMITATION in responsiveStyles.ts).
+  const desktopOrderedIndexes = layout.settings.desktopColumnDirection === 'rtl'
+    ? columns.map((_, index) => index).reverse()
+    : columns.map((_, index) => index);
+
   const orderedIndexes = (() => {
-    if (!stacked) return columns.map((_, index) => index);
+    if (!stacked) return desktopOrderedIndexes;
+    // An explicit, still-valid mobileColumnOrder always wins on Mobile,
+    // regardless of the Desktop direction setting.
     const order = layout.settings.mobileColumnOrder;
-    if (!order || order.length !== columns.length) return columns.map((_, index) => index);
+    if (!order || order.length !== columns.length) return desktopOrderedIndexes;
     return order;
   })();
 

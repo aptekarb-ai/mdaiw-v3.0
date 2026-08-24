@@ -99,4 +99,45 @@ describe('normalizeModule — Feature 07 responsive settings survive normalizati
     expect(normalized.settings.visibility).toBe('hideDesktop');
     expect(normalized.settings.mobileColumnGap).toEqual({ value: 8, unit: 'px' });
   });
+
+  // Module-4 Final Gap Closure, Correction 2 (Feature 05) —
+  // desktopColumnDirection regression guard. Found live via this
+  // sub-phase's own save/reload acceptance test: without wiring this
+  // field into the allowlist above, Direction on Desktop silently
+  // reverted to Left → Right on every Save + Reload — the exact same
+  // failure mode outlookVml hit in Sub-phase 6.
+  it('preserves desktopColumnDirection through normalization when "rtl"', () => {
+    const normalized = normalizeModule(rawModule({ desktopColumnDirection: 'rtl' }));
+    expect(normalized.settings.desktopColumnDirection).toBe('rtl');
+  });
+
+  it('preserves desktopColumnDirection through normalization when explicitly "ltr"', () => {
+    const normalized = normalizeModule(rawModule({ desktopColumnDirection: 'ltr' }));
+    expect(normalized.settings.desktopColumnDirection).toBe('ltr');
+  });
+
+  it('a document with no desktopColumnDirection key normalizes with it absent — no destructive default injected', () => {
+    const normalized = normalizeModule(rawModule({}));
+    expect(normalized.settings.desktopColumnDirection).toBeUndefined();
+  });
+
+  it('an invalid desktopColumnDirection value is dropped (normalizes to undefined)', () => {
+    const normalized = normalizeModule(rawModule({ desktopColumnDirection: 'sideways' }));
+    expect(normalized.settings.desktopColumnDirection).toBeUndefined();
+  });
+
+  it('legacy flat settings shape also preserves desktopColumnDirection when present', () => {
+    const legacy = {
+      id: 'm4',
+      type: 'layout-2col-50-50',
+      order: 0,
+      props: { columnWidths: [50, 50] },
+      settings: {
+        paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+        desktopColumnDirection: 'rtl',
+      },
+    } as unknown as EmailModule;
+    const normalized = normalizeModule(legacy);
+    expect(normalized.settings.desktopColumnDirection).toBe('rtl');
+  });
 });
