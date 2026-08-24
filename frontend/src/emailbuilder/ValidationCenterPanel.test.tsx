@@ -284,3 +284,17 @@ describe('ValidationCenterPanel', () => {
     });
   });
 });
+
+// Module-4 Final Gap Closure, Correction 4 (Feature 13) — pairs with
+// ExportDeployDialog.test.tsx's "blocks Export Email on a document-level
+// Custom CSS security error" test: the SAME document must be flagged as an
+// error here too, proving Validation Center and Export/Deploy now agree
+// (Export/Deploy previously omitted documentSettings from its validateEmail
+// call, so this document-level check group silently never ran there).
+describe('ValidationCenterPanel — Correction 4 (Feature 13) parity with Export/Deploy', () => {
+  it('flags a document-level Custom CSS security error (not a clean document)', () => {
+    renderPanel({ customCssEnabled: true, customCss: '.x{width:expression(alert(1))}' });
+    expect(screen.queryByText('100')).not.toBeInTheDocument();
+    expect(screen.getByText(/Custom CSS failed a security check/)).toBeInTheDocument();
+  });
+});

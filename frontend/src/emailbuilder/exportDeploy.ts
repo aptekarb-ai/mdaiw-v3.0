@@ -1,4 +1,4 @@
-import { validateEmail } from './emailValidation';
+import { validateEmail, type DocumentValidationSettings } from './emailValidation';
 import { getPlatformLabel } from './platformOptions';
 import type { EmailDocumentContent } from './edm';
 import type { EmailPlatform } from './types';
@@ -56,10 +56,19 @@ export function extractImageAssetUrls(html: string): string[] {
 // dark-mode risk, a platform token the chosen export platform doesn't
 // natively support) do not block, they are exactly the kind of thing a
 // deployment hand-off is meant to surface for human review, not prevent.
+//
+// Module-4 Final Gap Closure, Correction 4 (Feature 13) — `documentSettings`
+// must be forwarded into validateEmail() exactly like ValidationCenterPanel
+// already does, or the entire document-settings check group (including the
+// error-severity document:custom-css-security check) silently never runs —
+// meaning a document Validation Center correctly blocks could export here
+// with no gate and no override checkbox. Found live via this correction's
+// own audit, not a hypothetical.
 export function buildExportSummary(
   html: string, content: EmailDocumentContent, platform: EmailPlatform, emailName: string, width: number,
+  documentSettings?: DocumentValidationSettings,
 ): ExportSummary {
-  const report = validateEmail(html, content, platform);
+  const report = validateEmail(html, content, platform, documentSettings);
   const errorCount = report.issues.filter((issue) => issue.severity === 'error').length;
   const warningCount = report.issues.length - errorCount;
   const responsiveCategory = report.categories.find((category) => category.id === 'responsive');

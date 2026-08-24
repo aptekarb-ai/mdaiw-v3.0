@@ -84,6 +84,34 @@ describe('ExportDeployDialog', () => {
     expect(screen.getByRole('button', { name: /Export Email/ })).toBeDisabled();
   });
 
+  // Module-4 Final Gap Closure, Correction 4 (Feature 13) — this is the
+  // exact gap the correction closes: a document whose ONLY problem is a
+  // document-level Custom CSS security error (not a module-level issue)
+  // must block export identically to how Validation Center blocks it.
+  // Before the fix, buildExportSummary() never received documentSettings,
+  // so this document exported with no gate and no override checkbox.
+  it('blocks Export Email on a document-level Custom CSS security error (document-settings check group, not a module issue)', () => {
+    const document = baseDocument({
+      custom_css_enabled: true,
+      custom_css: '.x{width:expression(alert(1))}',
+    });
+    renderDialog({ document });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/validation error/);
+    expect(screen.getByRole('button', { name: /Export Email/ })).toBeDisabled();
+  });
+
+  it('does not block export when Custom CSS is disabled, even if custom_css text would itself be unsafe', () => {
+    const document = baseDocument({
+      custom_css_enabled: false,
+      custom_css: '.x{width:expression(alert(1))}',
+    });
+    renderDialog({ document });
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Export Email/ })).not.toBeDisabled();
+  });
+
   it('enables Export Email once the acknowledgement checkbox is checked', async () => {
     const user = userEvent.setup();
     const image = createModule('image', 0);
