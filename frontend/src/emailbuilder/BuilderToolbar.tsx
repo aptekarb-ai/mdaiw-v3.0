@@ -26,11 +26,20 @@ interface BuilderToolbarProps {
   canRedo: boolean;
   viewMode: BuilderViewMode;
   editorMode: EditorMode;
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — visual
+  // canvas viewport only, see EmailCanvas.tsx. zoomMin/zoomMax drive the
+  // minus/plus buttons' disabled state at the bounds.
+  zoomLevel: number;
+  zoomMin: number;
+  zoomMax: number;
   onUndo: () => void;
   onRedo: () => void;
   onSave: () => void;
   onViewModeChange: (mode: BuilderViewMode) => void;
   onEditorModeChange: (mode: EditorMode) => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onZoomReset: () => void;
   onOpenPlatformDialog: () => void;
   onOpenExportDialog: () => void;
   onOpenDocumentSettingsDialog: () => void;
@@ -49,7 +58,9 @@ function Separator() {
 
 export function BuilderToolbar({
   name, platform, width, dirty, saveStatus, canUndo, canRedo, viewMode, editorMode,
-  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onOpenPlatformDialog, onOpenExportDialog,
+  zoomLevel, zoomMin, zoomMax,
+  onUndo, onRedo, onSave, onViewModeChange, onEditorModeChange, onZoomIn, onZoomOut, onZoomReset,
+  onOpenPlatformDialog, onOpenExportDialog,
   onOpenDocumentSettingsDialog,
 }: BuilderToolbarProps) {
   const navigate = useNavigate();
@@ -168,6 +179,39 @@ export function BuilderToolbar({
             onClick={() => onViewModeChange('mobile')}
           >
             Mobile
+          </button>
+        </div>
+
+        <Separator />
+
+        <div className="builder-toolbar__zoom" role="group" aria-label="Canvas zoom">
+          <button
+            type="button"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={editorMode !== 'visual' || zoomLevel <= zoomMin}
+            onClick={onZoomOut}
+          >
+            <span aria-hidden="true">&minus;</span>
+          </button>
+          <button
+            type="button"
+            className="builder-toolbar__zoom-level"
+            aria-label={`Zoom level ${zoomLevel} percent. Click to reset to 100 percent.`}
+            title="Reset zoom to 100%"
+            disabled={editorMode !== 'visual'}
+            onClick={onZoomReset}
+          >
+            {zoomLevel}%
+          </button>
+          <button
+            type="button"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={editorMode !== 'visual' || zoomLevel >= zoomMax}
+            onClick={onZoomIn}
+          >
+            <span aria-hidden="true">+</span>
           </button>
         </div>
       </div>

@@ -10,6 +10,9 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
   const onOpenPlatformDialog = vi.fn();
   const onOpenExportDialog = vi.fn();
   const onOpenDocumentSettingsDialog = vi.fn();
+  const onZoomIn = vi.fn();
+  const onZoomOut = vi.fn();
+  const onZoomReset = vi.fn();
   render(
     <MemoryRouter>
       <BuilderToolbar
@@ -22,11 +25,17 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
         canRedo={false}
         viewMode="desktop"
         editorMode="visual"
+        zoomLevel={100}
+        zoomMin={50}
+        zoomMax={150}
         onUndo={vi.fn()}
         onRedo={vi.fn()}
         onSave={vi.fn()}
         onViewModeChange={onViewModeChange}
         onEditorModeChange={onEditorModeChange}
+        onZoomIn={onZoomIn}
+        onZoomOut={onZoomOut}
+        onZoomReset={onZoomReset}
         onOpenPlatformDialog={onOpenPlatformDialog}
         onOpenExportDialog={onOpenExportDialog}
         onOpenDocumentSettingsDialog={onOpenDocumentSettingsDialog}
@@ -36,6 +45,7 @@ function renderToolbar(overrides: Partial<Parameters<typeof BuilderToolbar>[0]> 
   );
   return {
     onEditorModeChange, onViewModeChange, onOpenPlatformDialog, onOpenExportDialog, onOpenDocumentSettingsDialog,
+    onZoomIn, onZoomOut, onZoomReset,
   };
 }
 
@@ -160,6 +170,63 @@ describe('BuilderToolbar — AI Engineer entry point (Feature 14)', () => {
     renderToolbar({ editorMode: 'ai' });
     expect(screen.getByRole('button', { name: 'Desktop' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Mobile' })).toBeDisabled();
+  });
+});
+
+// Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — the zoom
+// control group beside Desktop/Mobile: minus/percentage-reset/plus, same
+// disabled-in-non-Visual-mode and disabled-at-bounds pattern as every
+// other visual-canvas-only control in this toolbar.
+describe('BuilderToolbar — Canvas zoom (Feature 03)', () => {
+  it('shows the current zoom percentage', () => {
+    renderToolbar({ zoomLevel: 75 });
+    expect(screen.getByRole('button', { name: /Zoom level 75 percent/ })).toHaveTextContent('75%');
+  });
+
+  it('clicking Zoom in calls onZoomIn', async () => {
+    const user = userEvent.setup();
+    const { onZoomIn } = renderToolbar({ zoomLevel: 100 });
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(onZoomIn).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking Zoom out calls onZoomOut', async () => {
+    const user = userEvent.setup();
+    const { onZoomOut } = renderToolbar({ zoomLevel: 100 });
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
+    expect(onZoomOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking the percentage display calls onZoomReset', async () => {
+    const user = userEvent.setup();
+    const { onZoomReset } = renderToolbar({ zoomLevel: 150 });
+    await user.click(screen.getByRole('button', { name: /Zoom level 150 percent/ }));
+    expect(onZoomReset).toHaveBeenCalledTimes(1);
+  });
+
+  it('Zoom out is disabled at the minimum bound', () => {
+    renderToolbar({ zoomLevel: 50, zoomMin: 50, zoomMax: 150 });
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Zoom in' })).not.toBeDisabled();
+  });
+
+  it('Zoom in is disabled at the maximum bound', () => {
+    renderToolbar({ zoomLevel: 150, zoomMin: 50, zoomMax: 150 });
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Zoom out' })).not.toBeDisabled();
+  });
+
+  it('all zoom controls are disabled outside Visual mode', () => {
+    renderToolbar({ editorMode: 'code', zoomLevel: 100 });
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Zoom level 100 percent/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
+  });
+
+  it('zoom controls are enabled in Visual mode at a mid-range level', () => {
+    renderToolbar({ editorMode: 'visual', zoomLevel: 100 });
+    expect(screen.getByRole('button', { name: 'Zoom out' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Zoom in' })).not.toBeDisabled();
   });
 });
 

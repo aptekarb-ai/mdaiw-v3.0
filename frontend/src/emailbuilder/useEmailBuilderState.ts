@@ -108,8 +108,23 @@ export interface UseEmailBuilderState {
   // `EmailDocument.content`.
   documentSettings: EmailDocumentSettingsSnapshot;
   dirty: boolean;
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave) — a
+  // monotonically increasing counter, bumped on every commit/undo/redo
+  // (i.e. exactly when `dirty` becomes true). `revision` is REACTIVE state
+  // so a page-level effect can depend on it to (re)arm a save debounce;
+  // `getRevision`/`getModules`/`getDocumentSettings` are stable functions
+  // reading the SAME synchronously-updated refs `modules`/`documentSettings`
+  // already use internally, so an async save-completion handler can always
+  // ask "has the document changed since I started saving?" without a stale
+  // closure — the save orchestration itself lives in
+  // EmailBuilderWorkspacePage.tsx, not here; this hook only exposes the
+  // primitive it's built from.
+  revision: number;
   canUndo: boolean;
   canRedo: boolean;
+  getRevision: () => number;
+  getModules: () => EmailModule[];
+  getDocumentSettings: () => EmailDocumentSettingsSnapshot;
   loadModules: (modules: EmailModule[], documentSettings?: EmailDocumentSettingsSnapshot) => void;
   // One history commit per call (never coalesced — item 1's "CSS A ->
   // Save CSS B -> Undo = A -> Redo = B" requires each Apply to be its own
@@ -189,6 +204,8 @@ export function useEmailBuilderState(): UseEmailBuilderState {
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
   const [selectedColumn, setSelectedColumn] = useState<SelectedColumnRef | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [revision, setRevision] = useState(0);
+  const revisionRef = useRef(0);
   const historyRef = useRef<HistoryRef>({ stack: [{ modules: [], documentSettings: EMPTY_DOCUMENT_SETTINGS }], index: 0 });
   const coalesceRef = useRef<{ key: string | null; timestamp: number }>({ key: null, timestamp: 0 });
   // Synchronously-authoritative mirrors of `modules`/`documentSettings`,
@@ -202,6 +219,16 @@ export function useEmailBuilderState(): UseEmailBuilderState {
   // snapshot each time. Reading these refs instead sidesteps both.
   const modulesRef = useRef<EmailModule[]>([]);
   const documentSettingsRef = useRef<EmailDocumentSettingsSnapshot>(EMPTY_DOCUMENT_SETTINGS);
+
+  // Module-4 Final Gap Closure, Correction 3 — the ONE place `revision`
+  // ever advances, called everywhere `setDirty(true)` already is (commit,
+  // undo, redo). Synchronous ref bump first (readable immediately by
+  // getRevision) then the reactive state bump (so effects depending on
+  // `revision` re-run).
+  const bumpRevision = useCallback(() => {
+    revisionRef.current += 1;
+    setRevision(revisionRef.current);
+  }, []);
 
   // The ONE history commit function — every mutator below (module tree
   // AND document settings) funnels through this. Each entry snapshots
@@ -235,7 +262,8 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setModules(next.modules);
     setDocumentSettings(next.documentSettings);
     setDirty(true);
-  }, []);
+    bumpRevision();
+  }, [bumpRevision]);
 
   // The history stack snapshots the WHOLE top-level `modules` tree on
   // every commit — including any nested columns/modules inside layout
@@ -304,6 +332,8 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setSelectedModuleId(null);
     setSelectedColumn(null);
     setDirty(false);
+    revisionRef.current = 0;
+    setRevision(0);
   }, []);
 
   const addModule = useCallback((type: EmailModuleType) => {
@@ -595,7 +625,8 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setModules(entry.modules);
     setDocumentSettings(entry.documentSettings);
     setDirty(true);
-  }, []);
+    bumpRevision();
+  }, [bumpRevision]);
 
   const redo = useCallback(() => {
     const history = historyRef.current;
@@ -607,9 +638,13 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setModules(entry.modules);
     setDocumentSettings(entry.documentSettings);
     setDirty(true);
-  }, []);
+    bumpRevision();
+  }, [bumpRevision]);
 
   const markSaved = useCallback(() => setDirty(false), []);
+  const getRevision = useCallback(() => revisionRef.current, []);
+  const getModules = useCallback(() => modulesRef.current, []);
+  const getDocumentSettings = useCallback(() => documentSettingsRef.current, []);
 
   // Nested-aware — a selected module can be a top-level module OR one
   // living inside a layout's column (ids are globally unique, so a
@@ -624,8 +659,12 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     selectedColumn,
     documentSettings,
     dirty,
+    revision,
     canUndo: history.index > 0,
     canRedo: history.index < history.stack.length - 1,
+    getRevision,
+    getModules,
+    getDocumentSettings,
     loadModules,
     updateDocumentSettings,
     applyRepairPatch,

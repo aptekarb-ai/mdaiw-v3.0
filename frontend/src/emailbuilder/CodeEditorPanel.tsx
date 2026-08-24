@@ -78,7 +78,7 @@ export function CodeEditorPanel({
   }
 
   function handleFind() {
-    editorRef.current?.focusLine(1);
+    editorRef.current?.openFind();
   }
 
   return (

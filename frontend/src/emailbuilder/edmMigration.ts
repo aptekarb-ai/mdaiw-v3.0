@@ -177,6 +177,18 @@ function normalizeVisibility(raw: unknown): EmailModuleSettings['visibility'] {
     : undefined;
 }
 
+const LAYOUT_COLUMN_DIRECTION_VALUES = new Set(['ltr', 'rtl']);
+
+// Module-4 Final Gap Closure, Correction 2 (Feature 05) — optional,
+// absent means today's exact existing behavior (LTR/identity order). No
+// destructive migration/version bump needed, same convention as
+// normalizeVisibility above.
+function normalizeDesktopColumnDirection(raw: unknown): EmailModuleSettings['desktopColumnDirection'] {
+  return typeof raw === 'string' && LAYOUT_COLUMN_DIRECTION_VALUES.has(raw)
+    ? (raw as EmailModuleSettings['desktopColumnDirection'])
+    : undefined;
+}
+
 function normalizeMobileColumnGap(raw: unknown): EmailModuleSettings['mobileColumnGap'] {
   return isDimensionValue(raw) ? raw : undefined;
 }
@@ -201,6 +213,7 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const visibility = normalizeVisibility(settings.visibility);
   const mobileColumnGap = normalizeMobileColumnGap(settings.mobileColumnGap);
   const outlookVml = normalizeOutlookVml(settings.outlookVml);
+  const desktopColumnDirection = normalizeDesktopColumnDirection(settings.desktopColumnDirection);
 
   if ('desktop' in settings) {
     // Already the current shape — still backfill any field an even-older
@@ -222,6 +235,7 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
       ...(visibility ? { visibility } : {}),
       ...(mobileColumnGap ? { mobileColumnGap } : {}),
       ...(outlookVml !== undefined ? { outlookVml } : {}),
+      ...(desktopColumnDirection ? { desktopColumnDirection } : {}),
     };
   }
 
@@ -242,6 +256,7 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
     ...(visibility ? { visibility } : {}),
     ...(mobileColumnGap ? { mobileColumnGap } : {}),
     ...(outlookVml !== undefined ? { outlookVml } : {}),
+    ...(desktopColumnDirection ? { desktopColumnDirection } : {}),
   };
 }
 

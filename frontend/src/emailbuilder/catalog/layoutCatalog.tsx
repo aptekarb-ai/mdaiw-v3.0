@@ -73,6 +73,17 @@ function layoutDefinition(
       const mobileGutterPx = mobileGutterDimension.unit === 'px' ? Math.round(mobileGutterDimension.value) : 0;
       const gutterActive = gutterPx > 0 || mobileGutterPx > 0;
 
+      // Module-4 Final Gap Closure, Correction 2 (Feature 05) — the
+      // Desktop visual sequence as an array of ORIGINAL column indexes.
+      // This is the real static-export/Preview/Code/Export renderer, so
+      // (unlike mobileColumnOrder) this DOES change the actual emitted
+      // <td> order — never the canonical `columns`/`columnWidths` data,
+      // which stay untouched; every cell below still looks up its width/
+      // class/valign/background/content by its ORIGINAL index.
+      const desktopOrderedIndexes = module.settings.desktopColumnDirection === 'rtl'
+        ? columns.map((_, index) => index).reverse()
+        : columns.map((_, index) => index);
+
       // Sub-phase 3, item 8 — a single counter running across ALL
       // columns (not reset per column), so every nested module gets a
       // genuinely unique MODULE-__PARENT__.N comment regardless of which
@@ -81,8 +92,12 @@ function layoutDefinition(
       // __PARENT__ to the layout's own top-level number once rendering
       // reaches it (layoutCatalog.tsx has no way to know that number
       // itself — see registryCore.tsx's resolveNestedModuleParentPlaceholder).
+      // Numbered in canonical (original) column order regardless of
+      // Desktop direction — this is an authoring/debug label, not a
+      // user-facing visual sequence.
       let nestedModuleIndex = 0;
-      const cells = columns.map((column, index) => {
+      const cells = desktopOrderedIndexes.map((index, position) => {
+        const column = columns[index];
         const width = module.props.columnWidths[index] ?? 0;
         const spacing = resolveSpacing(column.settings, 'desktop');
         const valign = column.settings.verticalAlign;
@@ -104,9 +119,17 @@ function layoutDefinition(
           + `style="width:${width}%; vertical-align:${valign}; ${background}${paddingStyle(spacing)}">`
           + `${innerHtml}</td>`
         );
-        const isLast = index === columns.length - 1;
-        const gutterCell = !isLast && gutterActive
-          ? `<td width="${gutterPx}" class="${gutterResponsiveClassName(module.id, index)}" `
+        const isLastRendered = position === desktopOrderedIndexes.length - 1;
+        // The gutter's OWN identity (for the mobile-collapse CSS rule in
+        // responsiveStyles.ts, which is keyed by original column index)
+        // is the smaller of the two original indexes it sits between —
+        // true regardless of which direction they're rendered in, since
+        // a reversal always keeps the same two columns adjacent, just
+        // visited in the opposite sequence.
+        const nextIndex = !isLastRendered ? desktopOrderedIndexes[position + 1] : null;
+        const gutterIndex = nextIndex !== null ? Math.min(index, nextIndex) : null;
+        const gutterCell = gutterIndex !== null && gutterActive
+          ? `<td width="${gutterPx}" class="${gutterResponsiveClassName(module.id, gutterIndex)}" `
             + `style="width:${widthCssValue({ value: gutterPx, unit: 'px' })}; font-size:0; line-height:0;">&nbsp;</td>`
           : '';
         return columnCell + gutterCell;

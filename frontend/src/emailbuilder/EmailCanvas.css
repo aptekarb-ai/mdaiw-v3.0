@@ -34,10 +34,20 @@
   background: var(--color-text-subtle);
 }
 
-.email-canvas__surface {
-  position: relative;
+/* Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — the flex
+   child / outer sizing wrapper `.email-canvas__surface` used to be
+   directly (see EmailCanvas.tsx). At 100% zoom this is functionally a
+   no-op passthrough (its own width/height are left unset, so it just
+   shrink-wraps the surface exactly like before); at other zoom levels it
+   carries the explicit scaled width/height a `transform: scale()` on the
+   surface itself cannot express through layout. */
+.email-canvas__zoom-wrapper {
   flex-shrink: 0;
   max-width: 100%;
+}
+
+.email-canvas__surface {
+  position: relative;
   min-height: 440px;
   background: var(--color-white);
   border: 1px solid var(--color-border);

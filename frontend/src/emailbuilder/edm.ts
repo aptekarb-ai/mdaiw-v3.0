@@ -104,6 +104,13 @@ export interface OuterSpacing {
   mobile: Partial<OuterSpacingSides>;
 }
 
+// Module-4 Final Gap Closure, Correction 2 (Feature 05) — the Desktop
+// column display sequence. 'ltr' (or absent) = today's exact existing
+// order; 'rtl' = the same columns in reverse visual order. Column
+// SEQUENCE only — never text direction, locale, alignment, or a
+// mutation of the canonical columns[] array.
+export type LayoutColumnDirection = 'ltr' | 'rtl';
+
 // desktop = primary/default configuration (also the source of truth for
 // today's single static HTML export — see htmlRenderer.ts). mobile
 // carries explicit overrides only; any key absent from `mobile` inherits
@@ -138,6 +145,24 @@ export interface EmailModuleSettings {
   // judged unsafe/unproven for Feature 07's scope). Absent/undefined
   // means "desktop order" (identity).
   mobileColumnOrder?: number[];
+  // Module-4 Final Gap Closure, Correction 2 (Feature 05) — layout
+  // modules only. Which visual sequence columns render in on Desktop:
+  // 'ltr' (or absent/undefined) = column 0, 1, 2... left to right —
+  // today's exact existing behavior, so this is purely additive.
+  // 'rtl' = the same columns rendered right to left. This is a DISPLAY
+  // ORDER only — it never mutates, reverses, or duplicates the
+  // canonical `columns[]` array; every renderer resolves the visual
+  // sequence at render time (see LayoutCanvasModule.tsx's
+  // desktopOrderedIndexes / catalog/layoutCatalog.tsx's renderEmailHtml),
+  // keyed back to each column's ORIGINAL index for width/class/valign/
+  // background/content, so reversing the sequence can never attach one
+  // column's styling or content to another. Unlike mobileColumnOrder,
+  // this DOES affect the real exported/rendered HTML (Desktop is
+  // already the static-export source of truth) — see
+  // MOBILE_COLUMN_ORDER_LIMITATION in responsiveStyles.ts for why an
+  // absent mobileColumnOrder means Mobile-stacked order inherits
+  // whatever this setting produces on Desktop.
+  desktopColumnDirection?: LayoutColumnDirection;
   // Feature 07 — layout modules only. Vertical gap between stacked
   // columns on Mobile (instruction 24), rendered as a real spacer <tr>
   // between stacked column rows — never CSS margin. Undefined/0 means no

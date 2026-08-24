@@ -21,6 +21,9 @@ export interface FakeMonacoEditorInstance {
   setPosition: ReturnType<typeof vi.fn>;
   focus: ReturnType<typeof vi.fn>;
   createDecorationsCollection: ReturnType<typeof vi.fn>;
+  // Only what CodeEditor.tsx's openFind() needs — getAction(id).run() —
+  // not a general Monaco action-registry mock.
+  getAction: ReturnType<typeof vi.fn>;
 }
 
 export function buildMonacoEditorReactMock() {
@@ -52,6 +55,8 @@ export function buildMonacoEditorReactMock() {
   };
 
   const editorInstances: FakeMonacoEditorInstance[] = [];
+  const findActionRun = vi.fn();
+  const getAction = vi.fn((id: string) => (id === 'actions.find' ? { run: findActionRun } : undefined));
 
   function EditorMock({ value, onChange, onMount, options }: {
     value: string;
@@ -85,6 +90,7 @@ export function buildMonacoEditorReactMock() {
         setPosition: vi.fn(),
         focus: vi.fn(),
         createDecorationsCollection,
+        getAction,
       };
       editorInstances.push(fakeEditor);
       onMount?.(fakeEditor, fakeMonacoNamespace);
@@ -115,6 +121,6 @@ export function buildMonacoEditorReactMock() {
   return {
     default: EditorMock,
     loader: { init: vi.fn().mockResolvedValue(undefined), config: vi.fn() },
-    __testHooks: { setModelMarkers, createDecorationsCollection, decorationsClear, editorInstances },
+    __testHooks: { setModelMarkers, createDecorationsCollection, decorationsClear, editorInstances, getAction, findActionRun },
   };
 }

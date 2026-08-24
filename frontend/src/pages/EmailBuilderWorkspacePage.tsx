@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router';
 import { getEmailDocument, updateEmailDocument } from '../api/client';
 import type { EmailDocument as EmailDocumentRecord } from '../emailbuilder/types';
@@ -29,6 +29,14 @@ import './EmailBuilderWorkspacePage.css';
 
 type LoadStatus = 'loading' | 'ready' | 'not-found' | 'error';
 
+// Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — approved
+// bounds: 50%-150%, 25% steps, 100% default/reset. Visual-canvas-viewport
+// concern only — see EmailCanvas.tsx's zoom transform.
+const ZOOM_MIN = 50;
+const ZOOM_MAX = 150;
+const ZOOM_STEP = 25;
+const ZOOM_DEFAULT = 100;
+
 export function EmailBuilderWorkspacePage() {
   const { id } = useParams<{ id: string }>();
   const [loadStatus, setLoadStatus] = useState<LoadStatus>('loading');
@@ -37,6 +45,12 @@ export function EmailBuilderWorkspacePage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [viewMode, setViewMode] = useState<BuilderViewMode>('desktop');
   const [editorMode, setEditorMode] = useState<EditorMode>('visual');
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — ephemeral
+  // editor-viewport state only: never sent to the backend, never stored on
+  // EmailDocument/EDM, never persisted to localStorage. Reset to 100 every
+  // time a document is freshly loaded (see the getEmailDocument effect
+  // below) — it must not "leak" between documents or survive a reload.
+  const [zoomLevel, setZoomLevel] = useState(ZOOM_DEFAULT);
   // Local/temporary — not persisted across sessions (deliberately not
   // over-engineered per the refinement brief), just extra canvas room.
   const [modulesPanelCollapsed, setModulesPanelCollapsed] = useState(false);
@@ -68,6 +82,7 @@ export function EmailBuilderWorkspacePage() {
           custom_css_enabled: loaded.custom_css_enabled,
           custom_css: loaded.custom_css,
         });
+        setZoomLevel(ZOOM_DEFAULT);
         setLoadStatus('ready');
       })
       .catch((caught) => {
@@ -90,26 +105,116 @@ export function EmailBuilderWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per id; builder is a stable-callback hook instance
   }, [id]);
 
-  // Sub-phase 2 closure, item 1 — content AND document-level settings
-  // (title/subject/favicon/Reset CSS/Custom CSS) are now ONE local,
-  // undo/redo-able builder state (see useEmailBuilderState.ts's
-  // HistoryEntry), so they persist together in this ONE PATCH — exactly
-  // the same "local edit now, network Save later" contract every module
-  // edit already had, extended to cover document settings too.
-  const handleSave = useCallback(() => {
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave) —
+  // revision/snapshot-safe save orchestration. Three refs, all scoped to
+  // this ONE save path (still Sub-phase 2 closure's single content+
+  // document-settings PATCH below — no second persistence system):
+  //   - savingRef: a PATCH is currently in flight.
+  //   - inFlightRevisionRef: the builder.revision snapshot that in-flight
+  //     PATCH is persisting.
+  //   - pendingSaveRef: edits (or another save request) arrived while a
+  //     PATCH was in flight, so exactly one follow-up save is owed once it
+  //     settles.
+  // performSave is called from three places — the autosave debounce
+  // effect, handleSave (manual button/Ctrl+S), and its own completion
+  // handler (the follow-up save) — and is safe to call from all three
+  // concurrently: if nothing is in flight it starts a PATCH with the
+  // CURRENT (latest) modules/documentSettings; if something is already in
+  // flight it never starts a second request, it only ever records that a
+  // follow-up is owed. Rapid edits therefore always collapse into the
+  // single latest state instead of racing overlapping PATCHes, and a
+  // stale (older-revision) response can never call markSaved() over newer
+  // unsaved edits — see the revision comparison in the .then() below.
+  const savingRef = useRef(false);
+  const inFlightRevisionRef = useRef<number | null>(null);
+  const pendingSaveRef = useRef(false);
+
+  const performSave = useCallback(() => {
     if (!id) return;
+    const requestedRevision = builder.getRevision();
+    if (savingRef.current) {
+      if (inFlightRevisionRef.current !== requestedRevision) {
+        pendingSaveRef.current = true;
+      }
+      return;
+    }
+    savingRef.current = true;
+    inFlightRevisionRef.current = requestedRevision;
+    pendingSaveRef.current = false;
     setSaveStatus('saving');
-    updateEmailDocument(id, { content: { version: 1, modules: builder.modules }, ...builder.documentSettings })
+    const modulesSnapshot = builder.getModules();
+    const documentSettingsSnapshot = builder.getDocumentSettings();
+    updateEmailDocument(id, { content: { version: 1, modules: modulesSnapshot }, ...documentSettingsSnapshot })
       .then((saved) => {
+        savingRef.current = false;
         setDocument(saved);
-        builder.markSaved();
-        setSaveStatus('saved');
+        if (builder.getRevision() === inFlightRevisionRef.current) {
+          builder.markSaved();
+          setSaveStatus('saved');
+        } else {
+          // Newer edits landed while this PATCH was in flight — leave
+          // `dirty` untouched (still true) rather than clearing it over
+          // content this response never actually persisted.
+          pendingSaveRef.current = true;
+        }
+        if (pendingSaveRef.current) {
+          pendingSaveRef.current = false;
+          performSave();
+        }
       })
       .catch(() => {
+        savingRef.current = false;
+        // Dirty stays true (never cleared here) so a later manual Save or
+        // the next edit's autosave debounce can retry.
         setSaveStatus('error');
       });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, builder.modules, builder.documentSettings, builder.markSaved]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
+  }, [id]);
+
+  const autosaveTimerRef = useRef<number | null>(null);
+
+  // Trailing-edge 2-second debounce: fires exactly once, 2s after the
+  // MOST RECENT commit/undo/redo (`builder.revision`) — every further
+  // edit within that window clears and restarts the timer via this
+  // effect's cleanup, so rapid edits never produce more than one PATCH.
+  useEffect(() => {
+    if (!builder.dirty) return undefined;
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      performSave();
+    }, 2000);
+    return () => {
+      if (autosaveTimerRef.current !== null) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [builder.revision, builder.dirty, performSave]);
+
+  // Manual Save (button + Ctrl+S below) — flushes/cancels any pending
+  // autosave debounce first, then calls the SAME performSave path (which
+  // itself serializes behind an in-flight autosave rather than racing it).
+  const handleSave = useCallback(() => {
+    if (autosaveTimerRef.current !== null) {
+      window.clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    performSave();
+  }, [performSave]);
+
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — pure
+  // client-side viewport state, clamped to the approved 50-150 range in
+  // 25-point steps. Never touches builder.modules/documentSettings, never
+  // reaches the save path above.
+  const handleZoomIn = useCallback(() => {
+    setZoomLevel((current) => Math.min(ZOOM_MAX, current + ZOOM_STEP));
+  }, []);
+  const handleZoomOut = useCallback(() => {
+    setZoomLevel((current) => Math.max(ZOOM_MIN, current - ZOOM_STEP));
+  }, []);
+  const handleZoomReset = useCallback(() => {
+    setZoomLevel(ZOOM_DEFAULT);
+  }, []);
 
   // Feature 10 — applying a platform switch PATCHes only `platform` (the
   // same endpoint/pattern as handleSave's `content`-only PATCH); it never
@@ -556,11 +661,17 @@ export function EmailBuilderWorkspacePage() {
         canRedo={builder.canRedo}
         viewMode={viewMode}
         editorMode={editorMode}
+        zoomLevel={zoomLevel}
+        zoomMin={ZOOM_MIN}
+        zoomMax={ZOOM_MAX}
         onUndo={builder.undo}
         onRedo={builder.redo}
         onSave={handleSave}
         onViewModeChange={setViewMode}
         onEditorModeChange={setEditorMode}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onZoomReset={handleZoomReset}
         onOpenPlatformDialog={() => setPlatformDialogOpen(true)}
         onOpenExportDialog={() => setExportDialogOpen(true)}
         onOpenDocumentSettingsDialog={() => setDocumentSettingsDialogOpen(true)}
@@ -646,6 +757,7 @@ export function EmailBuilderWorkspacePage() {
           selectedModuleId={builder.selectedModuleId}
           width={document.width}
           viewMode={viewMode}
+          zoomLevel={zoomLevel}
           savedModules={savedModulesState.savedModules}
           onSelect={builder.selectModule}
           onDelete={builder.deleteModule}

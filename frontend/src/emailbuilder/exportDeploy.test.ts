@@ -58,6 +58,40 @@ describe('buildExportSummary', () => {
     expect(summary.imageCount).toBe(1);
   });
 
+  // Module-4 Final Gap Closure, Correction 4 (Feature 13) — without
+  // forwarding documentSettings into validateEmail(), the entire
+  // document-level check group (including the error-severity
+  // document:custom-css-security check) never ran, so a document
+  // Validation Center correctly blocks could export here with no gate.
+  it('blocks export when documentSettings carries a Custom CSS security error, exactly like Validation Center', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+    const summary = buildExportSummary(html, content, 'generic', 'Email', 700, {
+      emailSubject: '',
+      faviconUrl: '',
+      resetCssEnabled: true,
+      customCssEnabled: true,
+      customCss: '.x{width:expression(alert(1))}',
+    });
+
+    expect(summary.hasBlockingIssues).toBe(true);
+    expect(summary.validationStatus).toBe('Needs attention');
+    expect(summary.errorCount).toBeGreaterThan(0);
+  });
+
+  it('does not block when documentSettings is omitted (backward compatible) or carries no security issue', () => {
+    const content = contentWith([]);
+    const html = renderEmailDocument({ width: 700, content });
+
+    const withoutDocumentSettings = buildExportSummary(html, content, 'generic', 'Email', 700);
+    const withCleanDocumentSettings = buildExportSummary(html, content, 'generic', 'Email', 700, {
+      emailSubject: 'Hello', faviconUrl: '', resetCssEnabled: true, customCssEnabled: false, customCss: '',
+    });
+
+    expect(withoutDocumentSettings.hasBlockingIssues).toBe(false);
+    expect(withCleanDocumentSettings.hasBlockingIssues).toBe(false);
+  });
+
   it('revalidates against the platform passed in — a platform token unsupported by the export platform becomes a warning', () => {
     const text = createModule('text', 0) as unknown as EmailModule<{ text: string }>;
     const withToken = { ...text, props: { ...text.props, text: 'Hi %%FirstName%%' } };

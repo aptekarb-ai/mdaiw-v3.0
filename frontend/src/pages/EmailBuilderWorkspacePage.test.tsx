@@ -692,6 +692,161 @@ describe('EmailBuilderWorkspacePage — Feature 05 Layout Builder', () => {
   });
 });
 
+describe('EmailBuilderWorkspacePage — Module-4 Final Gap Closure, Correction 2 (Feature 05 Desktop column direction)', () => {
+  function columnSettings() {
+    return { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' as const };
+  }
+
+  // Deliberately unique tokens — see htmlRenderer.test.ts's same rationale:
+  // single letters collide with substrings already present elsewhere in
+  // the rendered page (module labels, attribute names, etc).
+  function twoColumnDocument(settingsOverrides: Record<string, unknown> = {}) {
+    return baseDocument({
+      content: {
+        version: 1,
+        modules: [{
+          id: 'layout-1', type: 'layout-2col-50-50', order: 0,
+          props: { columnWidths: [50, 50] },
+          settings: { ...createResponsiveSettings(), ...settingsOverrides },
+          columns: [
+            {
+              id: 'col-a',
+              modules: [{ id: 'nested-a', type: 'text', order: 0, props: { text: 'ZFIRST-CONTENT' }, settings: createResponsiveSettings() }],
+              settings: columnSettings(),
+            },
+            {
+              id: 'col-b',
+              modules: [{ id: 'nested-b', type: 'text', order: 0, props: { text: 'ZSECOND-CONTENT' }, settings: createResponsiveSettings() }],
+              settings: columnSettings(),
+            },
+          ],
+        }],
+      },
+    });
+  }
+
+  it('setting "Direction on Desktop" to Right → Left persists the setting on save', async () => {
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const select = screen.getByLabelText('Direction on Desktop') as HTMLSelectElement;
+    expect(select.value).toBe('ltr');
+    await user.selectOptions(select, 'rtl');
+    expect(select.value).toBe('rtl');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({ settings: expect.objectContaining({ desktopColumnDirection: 'rtl' }) }),
+        ]),
+      }),
+    })));
+  });
+
+  it('Undo restores Left → Right after setting Right → Left; Redo reapplies Right → Left; this stays one normal history operation', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const select = () => screen.getByLabelText('Direction on Desktop') as HTMLSelectElement;
+    await user.selectOptions(select(), 'rtl');
+    expect(select().value).toBe('rtl');
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(select().value).toBe('ltr');
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(select().value).toBe('rtl');
+  });
+
+  it('a reloaded document with desktopColumnDirection: "rtl" renders the canvas in reversed order (save/reload persistence)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(twoColumnDocument({ desktopColumnDirection: 'rtl' }));
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+    await screen.findByText('ZSECOND-CONTENT');
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZSECOND-CONTENT')).toBeLessThan(text.indexOf('ZFIRST-CONTENT'));
+  });
+
+  it('a reloaded document with no desktopColumnDirection key renders identity order (existing documents unchanged)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(twoColumnDocument());
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+    await screen.findByText('ZSECOND-CONTENT');
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZFIRST-CONTENT')).toBeLessThan(text.indexOf('ZSECOND-CONTENT'));
+  });
+
+  it('Mobile stacking inherits the reversed Desktop order when mobileColumnOrder is absent', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(twoColumnDocument({ desktopColumnDirection: 'rtl' }));
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZSECOND-CONTENT')).toBeLessThan(text.indexOf('ZFIRST-CONTENT'));
+  });
+
+  it('an explicit mobileColumnOrder wins on Mobile regardless of the Desktop direction setting', async () => {
+    // Desktop is RTL (would inherit as second,first), but mobileColumnOrder
+    // explicitly requests identity ([0, 1]) — the explicit override must win.
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      twoColumnDocument({ desktopColumnDirection: 'rtl', mobileColumnOrder: [0, 1] }),
+    );
+    const user = userEvent.setup();
+    const { container } = renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    const text = container.textContent ?? '';
+    expect(text.indexOf('ZFIRST-CONTENT')).toBeLessThan(text.indexOf('ZSECOND-CONTENT'));
+  });
+
+  it('changing Desktop direction never overwrites or regenerates an existing mobileColumnOrder', async () => {
+    const document1 = twoColumnDocument({ mobileColumnOrder: [1, 0] });
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('ZFIRST-CONTENT');
+
+    await user.click(screen.getByText('ZFIRST-CONTENT'));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+    // Reselect the layout via the breadcrumb (module selection moved to
+    // the nested Text module) so the Desktop-direction control is visible.
+    await user.click(screen.getByRole('button', { name: '2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    await user.selectOptions(screen.getByLabelText('Direction on Desktop'), 'rtl');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({
+            settings: expect.objectContaining({ desktopColumnDirection: 'rtl', mobileColumnOrder: [1, 0] }),
+          }),
+        ]),
+      }),
+    })));
+  });
+});
+
 describe('EmailBuilderWorkspacePage — Feature 06 Module Element Editor', () => {
   it('Text: editing content, font size, color and alignment updates the canvas and marks dirty', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
@@ -2488,5 +2643,362 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     await user.click(screen.getByRole('button', { name: 'Visual' }));
     const after = screen.getAllByRole('button', { name: /^Shop|^About|^Contact/ }).map((el) => el.textContent);
     expect(after).toEqual(['About', 'Contact', 'Shop']);
+  });
+});
+
+// Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave) — a
+// controllable promise, so a test can hold a mocked updateEmailDocument
+// PATCH "in flight" and resolve it at a precise, asserted point.
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+// Real (not fake) timers, deliberately: @testing-library's findBy/waitFor
+// poll via real setTimeout internally, which does not advance under
+// `vi.useFakeTimers()` unless every intervening query is manually ticked.
+// The 2s debounce is short enough that a genuine real-time wait keeps
+// these tests simple and unambiguous — see the per-test timeout bump below.
+function wait(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+describe('EmailBuilderWorkspacePage — Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave)', () => {
+  // A test that intentionally leaves a deferred promise (from
+  // mockReturnValueOnce) unresolved if it fails partway would otherwise
+  // leak that queued mock implementation into the next test — clearAllMocks
+  // (the file's global afterEach) clears call history but not queued
+  // once-implementations. mockReset() clears both.
+  beforeEach(() => {
+    vi.mocked(client.getEmailDocument).mockReset();
+    vi.mocked(client.updateEmailDocument).mockReset();
+  });
+
+  it('autosaves 2 seconds after an edit — no PATCH before, exactly one after', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    await wait(1600);
+    expect(client.updateEmailDocument).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+  }, 10000);
+
+  it('multiple edits inside the debounce window collapse into exactly one PATCH with the latest state', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await wait(1000);
+    await user.click(await screen.findByRole('button', { name: 'Add Text' })); // resets the debounce
+    expect(client.updateEmailDocument).not.toHaveBeenCalled(); // still within 2s of the LAST edit
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    const payload = vi.mocked(client.updateEmailDocument).mock.calls[0][1] as { content: { modules: unknown[] } };
+    expect(payload.content.modules).toHaveLength(2);
+  }, 10000);
+
+  it('an edit landing while a PATCH is in flight is never lost — the stale response cannot clear the newer dirty state, and exactly one follow-up PATCH persists the latest content', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    const first = deferred<EmailDocument>();
+    const second = deferred<EmailDocument>();
+    vi.mocked(client.updateEmailDocument)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' })); // edit A: 1 module
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(1), { timeout: 3000 }); // debounce fires -> PATCH A in flight (unresolved)
+    const payloadA = vi.mocked(client.updateEmailDocument).mock.calls[0][1] as { content: { modules: unknown[] } };
+    expect(payloadA.content.modules).toHaveLength(1);
+
+    await user.click(await screen.findByRole('button', { name: 'Add Text' })); // edit B while A is in flight: 2 modules
+    // PATCH A is still in flight, so the toolbar legitimately still shows
+    // "Saving…" — the revision-mismatch/follow-up mechanism below is an
+    // internal correctness guarantee, not a second visible status label.
+    expect(screen.getByText('Saving…')).toBeInTheDocument();
+
+    // Resolve the STALE request. It must not clear dirty (B is newer), and
+    // must trigger exactly one follow-up PATCH carrying the CURRENT state.
+    first.resolve(document1);
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(2));
+    const payloadB = vi.mocked(client.updateEmailDocument).mock.calls[1][1] as { content: { modules: unknown[] } };
+    expect(payloadB.content.modules).toHaveLength(2);
+    // The follow-up PATCH (B) starts immediately and is itself still in
+    // flight — still "Saving…", not yet "Saved".
+    expect(screen.getByText('Saving…')).toBeInTheDocument();
+
+    second.resolve(document1);
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
+    expect(client.updateEmailDocument).toHaveBeenCalledTimes(2); // nothing else was owed
+  }, 10000);
+
+  it('a failed autosave preserves dirty state and allows a later manual retry', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument)
+      .mockRejectedValueOnce({ message: 'Server error' })
+      .mockResolvedValueOnce(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    expect(await screen.findByText('Save failed', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByText('We could not save your changes. Please try again.')).toBeInTheDocument();
+
+    // Dirty was preserved (never cleared on failure) — the Save button is
+    // enabled and a manual retry succeeds.
+    expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+  }, 10000);
+
+  it('manual Save works before the debounce expires, and flushes/cancels the pending autosave (no duplicate PATCH later)', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: 'Save' })); // well before the 2s debounce
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+
+    await wait(2200); // past the original debounce mark
+    expect(client.updateEmailDocument).toHaveBeenCalledTimes(1); // no second, stale-timer PATCH
+  }, 10000);
+
+  it('Ctrl+S works before the debounce expires, and flushes/cancels the pending autosave', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Saved')).toBeInTheDocument();
+
+    await wait(2200);
+    expect(client.updateEmailDocument).toHaveBeenCalledTimes(1);
+  }, 10000);
+
+  it('Ctrl+S while an autosave PATCH is in flight does not race it — it serializes as one follow-up save with the latest state', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    const first = deferred<EmailDocument>();
+    vi.mocked(client.updateEmailDocument)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' })); // 1 module
+
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(1), { timeout: 3000 }); // autosave fires -> PATCH #1 in flight
+
+    await user.click(await screen.findByRole('button', { name: 'Add Text' })); // edit while in flight: 2 modules
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true }); // manual save attempt while #1 is still in flight
+
+    // Must not start a second CONCURRENT request.
+    expect(client.updateEmailDocument).toHaveBeenCalledTimes(1);
+
+    first.resolve(document1);
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledTimes(2));
+    const payload = vi.mocked(client.updateEmailDocument).mock.calls[1][1] as { content: { modules: unknown[] } };
+    expect(payload.content.modules).toHaveLength(2);
+    await waitFor(() => expect(screen.getByText('Saved')).toBeInTheDocument());
+    expect(client.updateEmailDocument).toHaveBeenCalledTimes(2); // no extra request beyond the one owed follow-up
+  }, 10000);
+
+  it('Undo/Redo after a successful autosave remains correct', async () => {
+    const user = userEvent.setup();
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    expect(await screen.findByText('Saved', {}, { timeout: 3000 })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('Start building your email')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(await screen.findByText('Add your heading or paragraph text here.', { selector: 'p' })).toBeInTheDocument();
+  }, 10000);
+
+  it('a hard reload after a successful autosave restores the autosaved content', async () => {
+    const user = userEvent.setup();
+    const initial = baseDocument();
+    let persisted: EmailDocument = initial;
+    vi.mocked(client.getEmailDocument).mockResolvedValueOnce(initial);
+    vi.mocked(client.updateEmailDocument).mockImplementation(async (_id, patch) => {
+      persisted = { ...initial, ...patch } as EmailDocument;
+      return persisted;
+    });
+    const { unmount } = renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    expect(await screen.findByText('Saved', {}, { timeout: 3000 })).toBeInTheDocument();
+
+    unmount();
+    vi.mocked(client.getEmailDocument).mockResolvedValueOnce(persisted);
+    renderPage();
+    expect(await screen.findByText('Add your heading or paragraph text here.', { selector: 'p' })).toBeInTheDocument();
+    expect(screen.getByText('Saved')).toBeInTheDocument();
+  }, 10000);
+});
+
+// Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom).
+describe('EmailBuilderWorkspacePage — Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom)', () => {
+  it('defaults to 100% and Zoom in/out/reset cycle through 50-150 in 25-point steps, clamped at the bounds', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    renderPage();
+    await screen.findByText('Start building your email');
+
+    expect(screen.getByRole('button', { name: /Zoom level 100 percent/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByRole('button', { name: /Zoom level 125 percent/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByRole('button', { name: /Zoom level 150 percent/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: /Zoom level 150 percent/ })); // reset
+    expect(screen.getByRole('button', { name: /Zoom level 100 percent/ })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
+    expect(screen.getByRole('button', { name: /Zoom level 50 percent/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled();
+  });
+
+  it('applies a CSS transform scale to the canvas surface at non-100% zoom, and none at 100%, without changing its width', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    renderPage();
+    await screen.findByText('Start building your email');
+    const surface = () => document.querySelector('.email-canvas__surface') as HTMLElement;
+    expect(surface().style.transform).toBe('');
+    expect(surface().style.width).toBe('700px');
+
+    await user.click(screen.getByRole('button', { name: 'Zoom in' })); // 125%
+    expect(surface().style.transform).toBe('scale(1.25)');
+    expect(surface().style.width).toBe('700px'); // canvasWidth itself never changes
+  });
+
+  it('modules remain selectable/editable at non-100% zoom', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' })); // 150%
+
+    await user.click(screen.getByText('Add your heading or paragraph text here.', { selector: 'p' }));
+    expect(screen.getByLabelText('Text')).toBeInTheDocument(); // Properties panel opened — selection still works
+  });
+
+  it('Desktop/Mobile switching works independently of the current zoom level', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(screen.getByRole('button', { name: 'Zoom in' })); // 125%
+    const surface = () => document.querySelector('.email-canvas__surface') as HTMLElement;
+    expect(surface().style.width).toBe('700px');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(surface().style.width).toBe('375px');
+    expect(surface().style.transform).toBe('scale(1.25)'); // zoom unaffected by the device switch
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(surface().style.width).toBe('700px');
+    expect(surface().style.transform).toBe('scale(1.25)');
+  });
+
+  it('Code view output is byte-identical regardless of zoom level', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeAt100 = (screen.getByRole('textbox') as HTMLTextAreaElement).value;
+    expect(codeAt100.length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' })); // 150%
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeAt150 = (screen.getByRole('textbox') as HTMLTextAreaElement).value;
+
+    expect(codeAt150).toBe(codeAt100);
+  });
+
+  it('Preview Studio output is byte-identical regardless of zoom level', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    const previewAt100 = await screen.findByTitle('Desktop preview');
+    const srcdocAt100 = previewAt100.getAttribute('srcdoc');
+    expect(srcdocAt100).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    await user.click(screen.getByRole('button', { name: 'Zoom in' })); // 150%
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    const previewAt150 = await screen.findByTitle('Desktop preview');
+    expect(previewAt150.getAttribute('srcdoc')).toBe(srcdocAt100);
+  });
+
+  it('zoom resets to 100% on a fresh document load', async () => {
+    const user = userEvent.setup();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const { unmount } = renderPage('1');
+    await screen.findByText('Start building your email');
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByRole('button', { name: /Zoom level 125 percent/ })).toBeInTheDocument();
+
+    unmount();
+    renderPage('2');
+    await screen.findByText('Start building your email');
+    expect(screen.getByRole('button', { name: /Zoom level 100 percent/ })).toBeInTheDocument();
   });
 });

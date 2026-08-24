@@ -33,14 +33,28 @@ function downloadTextFile(text: string, filename: string, mimeType: string): voi
 }
 
 // Feature 13 — Export / Deploy. Operations covered: final validation gate
-// (blocks "Export Email" on any error-severity issue unless acknowledged),
-// generic HTML export, platform-specific export (re-validates against
-// whichever "Export As" platform is selected here — a preview-only choice,
-// independent of the document's own saved platform, same non-mutating
-// pattern Feature 10's compatibility-impact scan already uses), copy HTML,
-// download HTML/assets, save as template, create deployment handoff (a
-// downloadable JSON manifest alongside the HTML). Same accessible-modal
-// shape (focus trap, Escape, backdrop click) as PlatformEnvironmentDialog.
+// (blocks "Export Email" on any error-severity issue unless acknowledged —
+// Correction 4 made this evaluate the SAME document-level checks Validation
+// Center does, see buildExportSummary's documentSettings argument), generic
+// HTML export, copy HTML, download HTML/assets, save as template, create
+// deployment handoff (a downloadable JSON manifest alongside the HTML).
+// Same accessible-modal shape (focus trap, Escape, backdrop click) as
+// PlatformEnvironmentDialog.
+//
+// "Export As" platform-specific export (spec item 3) is DEFERRED, not
+// implemented: selecting SFMC/Marketo/HubSpot here re-validates the SAME
+// generic HTML against that platform's token/compatibility expectations
+// (a preview-only choice, independent of the document's own saved
+// platform — same non-mutating pattern Feature 10's compatibility-impact
+// scan already uses) but never changes the generated markup itself — see
+// htmlRenderer.ts and platformOptions.ts, both of which document the same
+// deferral. This is deliberate, not an oversight: there is no specification
+// for the required vendor-specific output contract (real AMPscript/Marketo-
+// token/HubL markup) and no acceptance environment to validate such output
+// against, so shipping unverified vendor-specific generation would be worse
+// than the current honest Generic HTML + platform-advisory behavior. Every
+// platform choice exports byte-identical HTML today; only the Environment
+// label and platform-token compatibility warning change.
 export function ExportDeployDialog({ document, documentSettings, content, onSaveAsTemplate, onClose }: ExportDeployDialogProps) {
   const [exportPlatform, setExportPlatform] = useState<EmailPlatform>(document.platform);
   const [acknowledgeUnsafe, setAcknowledgeUnsafe] = useState(false);
@@ -99,9 +113,19 @@ export function ExportDeployDialog({ document, documentSettings, content, onSave
     [document.width, documentSettings, content],
   );
 
+  // Module-4 Final Gap Closure, Correction 4 (Feature 13) — the same
+  // DocumentValidationSettings shape ValidationCenterPanel already builds,
+  // so this gate evaluates the identical document-level checks (Custom CSS
+  // security included), not a narrower subset.
   const summary = useMemo(
-    () => buildExportSummary(rawHtml, content, exportPlatform, document.name, document.width),
-    [rawHtml, content, exportPlatform, document.name, document.width],
+    () => buildExportSummary(rawHtml, content, exportPlatform, document.name, document.width, {
+      emailSubject: documentSettings.email_subject,
+      faviconUrl: documentSettings.favicon_url,
+      resetCssEnabled: documentSettings.reset_css_enabled,
+      customCssEnabled: documentSettings.custom_css_enabled,
+      customCss: documentSettings.custom_css,
+    }),
+    [rawHtml, content, exportPlatform, document.name, document.width, documentSettings],
   );
 
   const imageAssetUrls = useMemo(() => extractImageAssetUrls(rawHtml), [rawHtml]);

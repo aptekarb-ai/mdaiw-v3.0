@@ -176,6 +176,48 @@
   cursor: not-allowed;
 }
 
+/* Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — same
+   bordered-group visual language as .builder-toolbar__view-switch, placed
+   beside the Desktop/Mobile device group rather than a separate
+   bottom/context toolbar (see BuilderToolbar.tsx). */
+.builder-toolbar__zoom {
+  display: flex;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.builder-toolbar__zoom button {
+  height: 30px;
+  min-width: 30px;
+  padding: 0 var(--space-2);
+  border: none;
+  background: transparent;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.builder-toolbar__zoom button:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-white);
+}
+
+.builder-toolbar__zoom button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.builder-toolbar__zoom-level {
+  min-width: 44px;
+  font-variant-numeric: tabular-nums;
+}
+
 .builder-toolbar__status {
   display: flex;
   align-items: center;
