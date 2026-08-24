@@ -1,4 +1,4 @@
-import { useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import type { EmailModule, EmailModuleType } from './edm';
 import { resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
@@ -18,6 +18,12 @@ interface EmailCanvasProps {
   selectedModuleId: string | null;
   width: number;
   viewMode: BuilderViewMode;
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — a visual
+  // editor-viewport scale (50-150, see EmailBuilderWorkspacePage.tsx's
+  // ZOOM_MIN/ZOOM_MAX), applied via CSS transform to `.email-canvas__surface`
+  // ONLY. Never touches `canvasWidth` below, never reaches
+  // renderPreview/definition output, never passed to Code/Preview/Export.
+  zoomLevel: number;
   savedModules: SavedEmailModule[];
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
@@ -65,7 +71,7 @@ function readDropIndex(event: DragEvent, fallback: number): DropInfo | null {
 }
 
 export function EmailCanvas({
-  modules, selectedModuleId, width, viewMode, savedModules, onSelect, onDelete, onDuplicate, onReorder,
+  modules, selectedModuleId, width, viewMode, zoomLevel, savedModules, onSelect, onDelete, onDuplicate, onReorder,
   onDropNewModule, onDropSavedModule, onSaveModule, onAddFirstModule,
   activeColumn, onSelectColumn, onSelectNestedModule, onInsertNestedModule, onInsertNestedSavedModule,
   onReorderNested, onMoveNested, onDuplicateNested, onDeleteNested,
@@ -74,6 +80,36 @@ export function EmailCanvas({
   // Builder-UI-only drag feedback — an insertion line showing where a
   // dropped module will land. Never part of the exported email HTML.
   const [dropIndicator, setDropIndicator] = useState<number | null>(null);
+
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — CSS
+  // `transform: scale()` is a paint-only effect: it does NOT change the
+  // element's layout box, so the flex scroll container (`.email-canvas`)
+  // would reserve space for the UNSCALED surface and clip/mis-scroll a
+  // zoomed-in (>100%) or leave excess space around a zoomed-out (<100%)
+  // one. `.email-canvas__zoom-wrapper` below is the "small outer sizing
+  // wrapper" that fixes this: it gets an explicit width/height equal to
+  // the surface's NATURAL (unscaled) size times the zoom factor, so the
+  // scroll container's bounds and the flex `justify-content: center`
+  // centering are both correct at every zoom level. Width is always known
+  // exactly (`canvasWidth`); height is dynamic (content-dependent), so it's
+  // measured via ResizeObserver off the actual unscaled surface — `zoom`
+  // itself never changes that measured value, only how it's displayed.
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const [surfaceHeight, setSurfaceHeight] = useState<number | null>(null);
+
+  useEffect(() => {
+    const node = surfaceRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setSurfaceHeight(entry.contentRect.height);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [modules, viewMode]);
+
+  const zoomFactor = zoomLevel / 100;
+  const isZoomed = zoomFactor !== 1;
 
   function clearIndicator() {
     setDropIndicator(null);
@@ -114,8 +150,18 @@ export function EmailCanvas({
   return (
     <div className="email-canvas" data-view-mode={viewMode}>
       <div
+        className="email-canvas__zoom-wrapper"
+        style={isZoomed ? {
+          width: canvasWidth * zoomFactor,
+          height: surfaceHeight !== null ? surfaceHeight * zoomFactor : undefined,
+        } : undefined}
+      >
+      <div
+        ref={surfaceRef}
         className="email-canvas__surface"
-        style={{ width: canvasWidth }}
+        style={isZoomed
+          ? { width: canvasWidth, transform: `scale(${zoomFactor})`, transformOrigin: 'top center' }
+          : { width: canvasWidth }}
         onDragOver={(event) => {
           event.preventDefault();
           if (
@@ -269,6 +315,7 @@ export function EmailCanvas({
         {modules.length > 0 && dropIndicator === modules.length && (
           <div className="email-canvas__drop-indicator" />
         )}
+      </div>
       </div>
     </div>
   );

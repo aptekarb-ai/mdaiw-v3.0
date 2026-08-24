@@ -193,6 +193,73 @@ describe('useEmailBuilderState', () => {
     expect(result.current.selectedModuleId).toBeNull();
     expect(result.current.canUndo).toBe(false);
   });
+
+  // Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave) — the
+  // revision counter EmailBuilderWorkspacePage.tsx's save orchestration
+  // is built on. `revision` is the reactive dependency an autosave-debounce
+  // effect watches; `getRevision`/`getModules`/`getDocumentSettings` are
+  // the synchronous getters an async save-completion handler reads to
+  // detect "did the document change since I started saving".
+  it('revision starts at 0 and is unaffected by an initial empty load', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    expect(result.current.revision).toBe(0);
+    expect(result.current.getRevision()).toBe(0);
+  });
+
+  it('revision advances by exactly 1 on each commit-producing mutation', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('text'));
+    expect(result.current.revision).toBe(1);
+    act(() => result.current.addModule('image'));
+    expect(result.current.revision).toBe(2);
+  });
+
+  it('revision advances on undo and on redo', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('text'));
+    expect(result.current.revision).toBe(1);
+
+    act(() => result.current.undo());
+    expect(result.current.revision).toBe(2);
+
+    act(() => result.current.redo());
+    expect(result.current.revision).toBe(3);
+  });
+
+  it('revision does NOT advance on markSaved (saving is not itself an edit)', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('text'));
+    const revisionAfterEdit = result.current.revision;
+
+    act(() => result.current.markSaved());
+    expect(result.current.revision).toBe(revisionAfterEdit);
+  });
+
+  it('getRevision/getModules/getDocumentSettings read the CURRENT values synchronously, not a stale snapshot', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('text'));
+    const firstRevision = result.current.getRevision();
+    expect(result.current.getModules()).toHaveLength(1);
+
+    act(() => result.current.addModule('image'));
+    // A getter captured/called before the second edit must, when called
+    // AGAIN after it, reflect the new state — this is the exact property
+    // the save-completion "has anything changed since I started" check
+    // depends on.
+    expect(result.current.getRevision()).not.toBe(firstRevision);
+    expect(result.current.getModules()).toHaveLength(2);
+  });
+
+  it('loadModules resets revision back to 0', () => {
+    const { result } = renderHook(() => useEmailBuilderState());
+    act(() => result.current.addModule('text'));
+    act(() => result.current.addModule('image'));
+    expect(result.current.revision).toBeGreaterThan(0);
+
+    act(() => result.current.loadModules([]));
+    expect(result.current.revision).toBe(0);
+    expect(result.current.getRevision()).toBe(0);
+  });
 });
 
 describe('useEmailBuilderState — Feature 05 nested (column) operations', () => {
