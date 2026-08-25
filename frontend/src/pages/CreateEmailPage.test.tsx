@@ -17,6 +17,7 @@ function renderPage() {
         <Route path="/email-builder/create" element={<CreateEmailPage />} />
         <Route path="/email-builder" element={<div>Email Builder dashboard</div>} />
         <Route path="/email-builder/builder/:id" element={<div>Builder pending page</div>} />
+        <Route path="/email-builder/templates" element={<div>Templates page</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -192,11 +193,21 @@ describe('CreateEmailPage', () => {
   it('does not let a click select a disabled Start From card', async () => {
     const user = userEvent.setup();
     renderPage();
-    const templateRadio = screen.getByRole('radio', { name: /Template/ });
-    expect(templateRadio).toBeDisabled();
-    await user.click(templateRadio);
-    expect(templateRadio).not.toBeChecked();
+    const htmlRadio = screen.getByRole('radio', { name: /Existing HTML/ });
+    expect(htmlRadio).toBeDisabled();
+    await user.click(htmlRadio);
+    expect(htmlRadio).not.toBeChecked();
     expect(screen.getByRole('radio', { name: /Blank Email/ })).toBeChecked();
+  });
+
+  it('selecting Template and submitting hands off to the shared Templates picker, without creating a document', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('radio', { name: /^Template/ }));
+    expect(screen.getByRole('radio', { name: /^Template/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Choose Template →' }));
+    expect(await screen.findByText('Templates page')).toBeInTheDocument();
+    expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
 
   it('prevents duplicate submission while a create request is in flight', async () => {

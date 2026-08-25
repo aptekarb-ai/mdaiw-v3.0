@@ -128,6 +128,19 @@ export function CreateEmailPage() {
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (submitting) return;
+
+    if (startType === 'template') {
+      // Phase B (Template Experience) — Template hands off to the SAME
+      // picker/create-from-template workflow Dashboard's "Choose Template"
+      // uses (TemplatesPage), rather than this wizard growing a second
+      // template-selection step/engine. The name/platform/width already
+      // chosen above are not carried forward — the destination email's
+      // name is chosen on that page (per the required uniqueness check),
+      // and its platform/width are copied from the selected template.
+      navigate('/email-builder/templates');
+      return;
+    }
+
     const validation = validate();
     setErrors(validation);
     setFormError(null);
@@ -317,7 +330,7 @@ export function CreateEmailPage() {
             </button>
             <button type="submit" className="button button--primary" disabled={submitting}>
               {submitting && <span className="mdaiw-icon mdaiw-icon--spinner create-email-page__spinner" aria-hidden="true" />}
-              {submitting ? 'Creating…' : 'Create Email →'}
+              {startType === 'template' ? 'Choose Template →' : submitting ? 'Creating…' : 'Create Email →'}
             </button>
           </div>
         </form>

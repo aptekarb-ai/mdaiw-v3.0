@@ -65,11 +65,10 @@ const APP_NAV: NavEntry[] = [
       { to: '/email-builder', label: 'Email Dashboard', icon: 'dashboard' },
       { to: '/email-builder/create', label: 'Create Email', icon: 'file' },
       // Module-4 Navigation Completion, Phase A — these five now route to
-      // real destinations. Templates stays disabled: Phase B scope, not
-      // yet built (see the Module-4 Navigation + Entry-Point Completion
-      // Audit).
+      // real destinations. Phase B adds Templates as a sixth (see the
+      // Module-4 Navigation + Entry-Point Completion Audit).
       { to: '/email-builder/emails', label: 'My Emails', icon: 'email' },
-      { to: '/email-builder/templates', label: 'Templates', icon: 'landing-page', disabled: true },
+      { to: '/email-builder/templates', label: 'Templates', icon: 'landing-page' },
       { to: '/email-builder/modules', label: 'Module Library', icon: 'department' },
       { to: '/email-builder/assets', label: 'Assets / Brand Kit', icon: 'camera' },
       { to: '/email-builder/validation', label: 'Preview & Validation', icon: 'eye' },

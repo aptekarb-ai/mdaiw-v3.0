@@ -1,14 +1,19 @@
 import io
 import json
+from unittest.mock import Mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.db import IntegrityError, connection, transaction
+from django.db.migrations.executor import MigrationExecutor
+from django.test import TestCase, TransactionTestCase
 from django.test.client import BOUNDARY, MULTIPART_CONTENT, encode_multipart
+from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from PIL import Image
 
 from .models import EmailAsset, EmailDocument, SavedEmailModule
+from .views import save_with_unique_name_guard
 
 
 def _asset_image_bytes(image_format='JPEG', size=(20, 20)):
@@ -529,6 +534,413 @@ class EmailDocumentRenameTests(TestCase):
     def test_anonymous_cannot_rename(self):
         response = self._patch_json({'name': 'Hijacked'})
         self.assertEqual(response.status_code, 403)
+
+
+class EmailDocumentNameUniquenessTests(TestCase):
+    """Phase B (Template Experience) Decision 1 — durable per-user,
+    case-/whitespace-insensitive name uniqueness. The DB's
+    (user, name_normalized) UniqueConstraint (models.py) is authoritative;
+    EmailDocumentSerializer.validate_name pre-checks the same condition for
+    fast UX (see EmailDocumentNameNormalizationModelTests and
+    SaveWithUniqueNameGuardTests below for the model- and race-level
+    backstops this HTTP-level behavior sits on top of)."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='john.roe', password='StrongPass123')
+        self.document = EmailDocument.objects.create(
+            user=self.user, name='Spring Launch', platform='generic', width=700, start_type='blank',
+        )
+        self.url = '/api/v1/email-builder/emails/'
+
+    def _post_json(self, data):
+        payload = {'platform': 'generic', 'width': 700, 'start_type': 'blank'}
+        payload.update(data)
+        return self.client.post(self.url, data=json.dumps(payload), content_type='application/json')
+
+    def _patch_json(self, doc_id, data):
+        return self.client.patch(
+            f'{self.url}{doc_id}/', data=json.dumps(data), content_type='application/json',
+        )
+
+    def test_create_exact_duplicate_name_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json({'name': 'Spring Launch'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+        self.assertEqual(EmailDocument.objects.filter(user=self.user).count(), 1)
+
+    def test_create_case_insensitive_duplicate_rejected(self):
+        self.client.force_login(self.user)
+        for variant in ['spring launch', 'SPRING LAUNCH', 'Spring LAUNCH', 'sPrInG lAuNcH']:
+            response = self._post_json({'name': variant})
+            self.assertEqual(response.status_code, 400, variant)
+            self.assertIn('name', response.json()['errors'])
+        self.assertEqual(EmailDocument.objects.filter(user=self.user).count(), 1)
+
+    def test_create_whitespace_equivalent_duplicate_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post_json({'name': '  Spring Launch  '})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+
+    def test_create_same_name_different_user_allowed(self):
+        self.client.force_login(self.other_user)
+        response = self._post_json({'name': 'Spring Launch'})
+        self.assertEqual(response.status_code, 201)
+
+    def test_rename_to_existing_name_rejected(self):
+        second = EmailDocument.objects.create(
+            user=self.user, name='Autumn Launch', platform='generic', width=700, start_type='blank',
+        )
+        self.client.force_login(self.user)
+        response = self._patch_json(second.id, {'name': 'spring launch'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+        second.refresh_from_db()
+        self.assertEqual(second.name, 'Autumn Launch')
+
+    def test_rename_to_own_current_name_allowed(self):
+        # A document colliding only with itself (e.g. re-casing/re-trimming
+        # its own current name) must not be rejected — validate_name
+        # excludes self.instance.
+        self.client.force_login(self.user)
+        response = self._patch_json(self.document.id, {'name': '  SPRING LAUNCH  '})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['name'], 'SPRING LAUNCH')
+
+    def test_rename_to_different_users_name_allowed(self):
+        EmailDocument.objects.create(
+            user=self.other_user, name='Shared Title', platform='generic', width=700, start_type='blank',
+        )
+        self.client.force_login(self.user)
+        response = self._patch_json(self.document.id, {'name': 'Shared Title'})
+        self.assertEqual(response.status_code, 200)
+
+    def test_duplicate_error_message_is_field_level_and_specific(self):
+        self.client.force_login(self.user)
+        response = self._post_json({'name': 'Spring Launch'})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()['errors']['name'],
+            ['An email with this name already exists. Choose a different name.'],
+        )
+        self.assertNotEqual(response.status_code, 500)
+
+    def test_forged_name_normalized_in_payload_is_ignored_not_written(self):
+        # name_normalized is absent from EmailDocumentSerializer.Meta.fields
+        # (serializers.py) — DRF drops unknown keys, so this proves a
+        # forged value can neither reach storage nor be used to dodge the
+        # uniqueness check by claiming a mismatched normalized form.
+        self.client.force_login(self.user)
+        response = self._post_json({'name': 'Forged Normalized Value', 'name_normalized': 'not-even-close'})
+        self.assertEqual(response.status_code, 201)
+        self.assertNotIn('name_normalized', response.json())
+        document = EmailDocument.objects.get(pk=response.json()['id'])
+        self.assertEqual(document.name_normalized, 'forged normalized value')
+
+    def test_forged_name_normalized_cannot_bypass_uniqueness_check(self):
+        self.client.force_login(self.user)
+        # Claiming a name_normalized that doesn't collide, while `name`
+        # itself does, must still be rejected — the server derives
+        # name_normalized from `name`, never trusts the client's claim.
+        response = self._post_json({'name': 'spring launch', 'name_normalized': 'this-does-not-collide'})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', response.json()['errors'])
+        self.assertEqual(EmailDocument.objects.filter(user=self.user).count(), 1)
+
+
+class CreateFromTemplateIntegrityTests(TestCase):
+    """The frontend's createEmailDocumentFromTemplate (duplicateEmailDocument.ts)
+    composes create-from-template purely from this API's existing
+    create/update endpoints — no dedicated backend endpoint exists for it.
+    This proves the resulting rows are fully independent at the API/DB
+    level: editing the newly-created document afterward cannot reach the
+    source template's row, by ordinary FK/PK isolation."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+        self.template = EmailDocument.objects.create(
+            user=self.user, name='Newsletter Template', platform='sfmc', width=650, start_type='template',
+            content={'version': 1, 'modules': [_module('tpl-1')]},
+        )
+        self.url = '/api/v1/email-builder/emails/'
+
+    def test_editing_the_created_document_never_touches_the_source_template(self):
+        self.client.force_login(self.user)
+        created = self.client.post(self.url, data=json.dumps({
+            'name': 'From Newsletter Template', 'platform': self.template.platform,
+            'width': self.template.width, 'start_type': 'blank',
+        }), content_type='application/json').json()
+
+        # Further edits to the NEW document (the builder's normal autosave
+        # PATCH path) target only its own id.
+        self.client.patch(f'{self.url}{created["id"]}/', data=json.dumps({
+            'content': {'version': 1, 'modules': [_module('edited-1'), _module('edited-2', order=1)]},
+        }), content_type='application/json')
+
+        self.template.refresh_from_db()
+        self.assertEqual(self.template.name, 'Newsletter Template')
+        self.assertEqual(self.template.start_type, 'template')
+        self.assertEqual(self.template.content, {'version': 1, 'modules': [_module('tpl-1')]})
+
+        edited = EmailDocument.objects.get(pk=created['id'])
+        self.assertEqual(len(edited.content['modules']), 2)
+        self.assertEqual(edited.start_type, 'blank')
+
+
+class EmailDocumentNameNormalizationModelTests(TestCase):
+    """Model-level proof that `name_normalized` (models.py) stays in sync
+    on every save() regardless of caller, and that the DB constraint
+    itself — not just the serializer pre-check — rejects a collision."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='jane.doe', password='StrongPass123')
+
+    def test_save_trims_and_populates_name_normalized(self):
+        document = EmailDocument.objects.create(
+            user=self.user, name='  Mixed CASE Name  ', platform='generic', width=700, start_type='blank',
+        )
+        self.assertEqual(document.name, 'Mixed CASE Name')
+        self.assertEqual(document.name_normalized, 'mixed case name')
+
+    def test_casefold_collides_beyond_ascii_lower(self):
+        # German sharp s (ß) casefolds to "ss" — a case Python's plain
+        # .lower() does not fold but .casefold() does; this is exactly why
+        # name_normalization.py uses casefold(), not lower().
+        document = EmailDocument.objects.create(
+            user=self.user, name='Straße Update', platform='generic', width=700, start_type='blank',
+        )
+        self.assertEqual(document.name_normalized, 'strasse update')
+
+    def test_db_constraint_blocks_direct_orm_duplicate(self):
+        EmailDocument.objects.create(
+            user=self.user, name='Direct One', platform='generic', width=700, start_type='blank',
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                EmailDocument.objects.create(
+                    user=self.user, name='direct one', platform='generic', width=700, start_type='blank',
+                )
+        # The failed INSERT must not have left a partial row behind.
+        self.assertEqual(EmailDocument.objects.filter(user=self.user).count(), 1)
+
+
+class NameNormalizedMigrationLogicTests(TransactionTestCase):
+    """Runs the REAL 0009/0010 migrations through Django's own
+    MigrationExecutor against a database actually parked at the 0008
+    state (nullable name_normalized, no constraint yet — the exact
+    pre-migration window this migration was designed for), rather than
+    calling the migration's Python function in isolation against the
+    current (already-constrained) schema. This is the textbook-correct
+    way to test a data migration and the only way to legitimately
+    reproduce "before" behavior: the live dev database this migration was
+    originally run against has no snapshot from before it ran, so its
+    true pre-migration state can't be replayed directly — this rebuilds
+    that same state from scratch via the migration graph itself.
+
+    Rows are created through the HISTORICAL model
+    (state.apps.get_model(...) at the 0008 migration), which does NOT
+    carry models.py's custom save() override (migrations only capture
+    field structure, never Python methods) — so name_normalized genuinely
+    stays unset, not "reset after the fact" the way a real-model bypass
+    would have to fake it."""
+
+    def setUp(self):
+        self.executor = MigrationExecutor(connection)
+        self.executor.migrate([('emailbuilder', '0008_emaildocument_name_normalized')])
+        self.executor.loader.build_graph()
+
+    def tearDown(self):
+        # Leave the test database back at the latest migration state for
+        # every other test in the suite.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+    def _historical_models(self):
+        state = self.executor.loader.project_state(('emailbuilder', '0008_emaildocument_name_normalized'))
+        return state.apps.get_model('auth', 'User'), state.apps.get_model('emailbuilder', 'EmailDocument')
+
+    def test_resolves_collisions_avoids_taken_suffixes_and_populates_every_row(self):
+        HistoricalUser, HistoricalDocument = self._historical_models()
+        user = HistoricalUser.objects.create(username='migration.qa')
+        other_user = HistoricalUser.objects.create(username='migration.qa.2')
+
+        def unmigrated(owner, name, content=None):
+            return HistoricalDocument.objects.create(
+                user=owner, name=name, platform='generic', width=700, start_type='blank',
+                content=content or {'version': 1, 'modules': []},
+            )
+
+        content_a = {'version': 1, 'modules': [{'id': 'a', 'type': 'text', 'order': 0, 'props': {}, 'settings': {}}]}
+        oldest = unmigrated(user, 'test', content_a)
+        middle = unmigrated(user, 'Test')
+        newest = unmigrated(user, 'TEST')
+        # An unrelated, pre-existing row that already occupies the exact
+        # suffix a naive algorithm would pick first — proves suffix
+        # selection checks the user's WHOLE namespace, not just the
+        # colliding group.
+        occupies_suffix = unmigrated(user, 'test (2)')
+        unrelated = unmigrated(user, 'Completely Different')
+        other_users_row = unmigrated(other_user, 'test')
+        self.assertIsNone(oldest.name_normalized)  # genuinely unset pre-migration, not faked
+
+        self.executor.migrate([('emailbuilder', '0010_emaildocument_name_normalized_unique')])
+
+        oldest = EmailDocument.objects.get(pk=oldest.pk)
+        middle = EmailDocument.objects.get(pk=middle.pk)
+        newest = EmailDocument.objects.get(pk=newest.pk)
+        occupies_suffix = EmailDocument.objects.get(pk=occupies_suffix.pk)
+        unrelated = EmailDocument.objects.get(pk=unrelated.pk)
+        other_users_row = EmailDocument.objects.get(pk=other_users_row.pk)
+
+        # Oldest keeps its exact original name and content untouched.
+        self.assertEqual(oldest.name, 'test')
+        self.assertEqual(oldest.name_normalized, 'test')
+        self.assertEqual(oldest.content, content_a)
+
+        # Colliding rows get a suffix; "(2)" is already taken by an
+        # unrelated row, so the algorithm must skip straight to (3)/(4).
+        self.assertEqual(middle.name, 'test (3)')
+        self.assertEqual(newest.name, 'test (4)')
+        self.assertEqual(middle.name_normalized, 'test (3)')
+        self.assertEqual(newest.name_normalized, 'test (4)')
+
+        # The unrelated pre-existing "(2)" row is left alone.
+        self.assertEqual(occupies_suffix.name, 'test (2)')
+        self.assertEqual(occupies_suffix.name_normalized, 'test (2)')
+
+        # A non-colliding row just gets populated; name unchanged.
+        self.assertEqual(unrelated.name, 'Completely Different')
+        self.assertEqual(unrelated.name_normalized, 'completely different')
+
+        # A different user's identical name is untouched — no cross-user
+        # collision handling.
+        self.assertEqual(other_users_row.name, 'test')
+        self.assertEqual(other_users_row.name_normalized, 'test')
+
+        normalized_values = [oldest.name_normalized, middle.name_normalized, newest.name_normalized, occupies_suffix.name_normalized]
+        self.assertEqual(len(normalized_values), len(set(normalized_values)))
+
+        # The constraint this migration exists to add is now live and
+        # enforced through the real (post-migration) model.
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                EmailDocument.objects.create(
+                    user_id=user.pk, name='test', platform='generic', width=700, start_type='blank',
+                )
+
+    def test_migration_sequence_applies_cleanly_and_final_state_is_populated_and_unique(self):
+        HistoricalUser, HistoricalDocument = self._historical_models()
+        user = HistoricalUser.objects.create(username='migration.qa.sequence')
+        HistoricalDocument.objects.create(
+            user=user, name='dup', platform='generic', width=700, start_type='blank',
+            content={'version': 1, 'modules': []},
+        )
+        HistoricalDocument.objects.create(
+            user=user, name='DUP', platform='generic', width=700, start_type='blank',
+            content={'version': 1, 'modules': []},
+        )
+
+        # 0008 -> 0009 -> 0010 in one real sequence, exactly the order
+        # `migrate` runs them in production.
+        self.executor.migrate([('emailbuilder', '0010_emaildocument_name_normalized_unique')])
+
+        docs = list(EmailDocument.objects.filter(user_id=user.pk).order_by('id'))
+        self.assertEqual(len(docs), 2)
+        self.assertTrue(all(d.name_normalized for d in docs))
+        self.assertEqual(len({d.name_normalized for d in docs}), 2)
+
+    def test_reverse_migration_is_schema_safe_and_does_not_delete_or_corrupt_rows(self):
+        # 0009's data changes (the suffix renames) are intentionally NOT
+        # undone on reverse (documented in the migration file — the exact
+        # pre-migration names aren't recorded anywhere to restore
+        # losslessly). What reverse MUST do safely: drop the constraint
+        # and the column back to nullable, then drop the column entirely,
+        # without touching row count, ids, or any other field.
+        #
+        # KNOWN LIMITATION (discovered here, SQLite only, unverified on
+        # Postgres): reversing 0010 -> 0007 as ONE combined multi-hop
+        # `migrate` call raises `OperationalError: expressions prohibited
+        # in PRIMARY KEY and UNIQUE constraints` from SQLite's
+        # column-drop table-rebuild — a SQLite/Django backward-executor
+        # interaction, not a defect in these migrations' own definitions
+        # (each one is a standard AddField/RunPython/AlterField+
+        # AddConstraint). Reversing the SAME target as TWO separate
+        # `manage.py migrate emailbuilder <target>` invocations (0008,
+        # then 0007) — exactly how a real staged rollback would be run
+        # from the CLI — is clean, which is what this test demonstrates
+        # and asserts. Postgres does DROP COLUMN/DROP CONSTRAINT as true
+        # ALTER TABLE statements with no full-table rebuild, so this is
+        # very likely SQLite-specific, but that has not been verified
+        # against a real Postgres instance in this environment — flagged
+        # honestly rather than assumed.
+        HistoricalUser, HistoricalDocument = self._historical_models()
+        user = HistoricalUser.objects.create(username='migration.qa.reverse')
+        first = HistoricalDocument.objects.create(
+            user=user, name='dup', platform='generic', width=700, start_type='blank',
+            content={'version': 1, 'modules': [{'id': 'x', 'type': 'text', 'order': 0, 'props': {}, 'settings': {}}]},
+        )
+        second = HistoricalDocument.objects.create(
+            user=user, name='DUP', platform='generic', width=700, start_type='blank',
+            content={'version': 1, 'modules': []},
+        )
+        first_id, second_id = first.pk, second.pk
+
+        self.executor.migrate([('emailbuilder', '0010_emaildocument_name_normalized_unique')])
+        self.executor.loader.build_graph()
+        forward_names = list(EmailDocument.objects.filter(user_id=user.pk).order_by('id').values_list('name', flat=True))
+        self.assertEqual(forward_names, ['dup', 'dup (2)'])  # 0009 already ran; sanity check before reversing
+
+        # Staged reversal, matching the CLI-realistic two-command rollback
+        # — must not raise, must not drop rows.
+        self.executor.migrate([('emailbuilder', '0008_emaildocument_name_normalized')])
+        self.executor.loader.build_graph()
+        self.executor.migrate([('emailbuilder', '0007_learnedrepairsignal')])
+        self.executor.loader.build_graph()
+
+        state_0007 = self.executor.loader.project_state(('emailbuilder', '0007_learnedrepairsignal'))
+        ReversedDocument = state_0007.apps.get_model('emailbuilder', 'EmailDocument')
+        reversed_docs = ReversedDocument.objects.filter(user_id=user.pk).order_by('id')
+        self.assertEqual(list(reversed_docs.values_list('pk', flat=True)), [first_id, second_id])
+        # The 0009 rename is NOT undone by reversing — by design, and
+        # explicitly not silently data-lossy: the row simply keeps
+        # whatever name it already had.
+        self.assertEqual([d.name for d in reversed_docs], ['dup', 'dup (2)'])
+        self.assertEqual(reversed_docs[0].content['modules'][0]['id'], 'x')
+        # name_normalized doesn't exist on the historical 0007 model at
+        # all — the column itself was dropped by reversing 0008.
+        self.assertNotIn('name_normalized', [f.name for f in ReversedDocument._meta.get_fields()])
+
+
+class SaveWithUniqueNameGuardTests(TestCase):
+    """views.save_with_unique_name_guard is the final race backstop behind
+    EmailDocumentSerializer.validate_name — this proves the translation
+    from a DB-level IntegrityError to a clean field-level 400 directly,
+    independent of whether the pre-check already caught the common case."""
+
+    def test_translates_name_collision_integrity_error_to_field_error(self):
+        serializer = Mock()
+        serializer.save.side_effect = IntegrityError(
+            'UNIQUE constraint failed: emailbuilder_emaildocument.user_id, '
+            'emailbuilder_emaildocument.name_normalized',
+        )
+        with self.assertRaises(DRFValidationError) as ctx:
+            save_with_unique_name_guard(serializer)
+        self.assertIn('name', ctx.exception.detail)
+        self.assertEqual(
+            str(ctx.exception.detail['name'][0]),
+            'An email with this name already exists. Choose a different name.',
+        )
+
+    def test_reraises_unrelated_integrity_error_unchanged(self):
+        serializer = Mock()
+        serializer.save.side_effect = IntegrityError('some other constraint failed')
+        with self.assertRaises(IntegrityError):
+            save_with_unique_name_guard(serializer)
 
 
 class EmailDocumentDeleteTests(TestCase):

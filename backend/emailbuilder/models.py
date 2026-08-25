@@ -4,6 +4,8 @@ from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
+from .name_normalization import normalize_email_name
+
 MIN_EMAIL_WIDTH = 320
 MAX_EMAIL_WIDTH = 1200
 DEFAULT_EMAIL_WIDTH = 700
@@ -56,6 +58,13 @@ class EmailDocument(models.Model):
         related_name='email_documents',
     )
     name = models.CharField(max_length=120)
+    # Derived, never client-writable (absent from EmailDocumentSerializer's
+    # `fields`) — kept in sync by save() below. Canonical per-user
+    # uniqueness key: see name_normalization.py for why this is a stored
+    # Python-computed column rather than a database Lower(name) expression.
+    # max_length is wider than `name`'s because casefold() can expand a
+    # handful of Unicode code points (e.g. German ß -> "ss").
+    name_normalized = models.CharField(max_length=360, editable=False)
     # Email Document Standards slice — three DELIBERATELY distinct
     # concepts, never conflated in UI copy or code:
     #   `name`          the builder/dashboard draft name (above) — never
@@ -104,6 +113,24 @@ class EmailDocument(models.Model):
 
     class Meta:
         ordering = ['-updated_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'name_normalized'], name='unique_emaildocument_user_name_normalized',
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        # Every write path funnels through here (DRF's ModelSerializer
+        # create()/update() both end in instance.save() — see
+        # serializers.py's EmailDocumentSerializer) — so `name` is always
+        # stored trimmed and `name_normalized` is always kept in sync,
+        # regardless of caller. Bulk operations (`.update()`/`bulk_create`/
+        # `bulk_update`) bypass save() by design in Django, so any future
+        # code path that bulk-writes `name` must set `name_normalized`
+        # itself — see the data migration for the one existing example.
+        self.name = self.name.strip()
+        self.name_normalized = normalize_email_name(self.name)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f'{self.name} (user={self.user_id})'

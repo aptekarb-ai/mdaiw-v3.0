@@ -207,23 +207,10 @@ describe('AppSidebar AI Email Builder navigation', () => {
     expect(screen.getByRole('link', { name: 'Email Dashboard' })).toBeInTheDocument();
   });
 
-  // Module-4 Navigation Completion, Phase A — only Templates (Phase B
-  // scope) remains a disabled "Coming soon" placeholder; the other five
-  // now route to real destinations.
-  it('renders Templates as the only remaining disabled, non-navigable entry', async () => {
-    const user = userEvent.setup();
-    mockAuthenticated();
-    renderSidebarAt('/dashboard');
-
-    await user.click(screen.getByRole('button', { name: 'AI Email Builder' }));
-
-    expect(screen.queryByRole('link', { name: 'Templates' })).not.toBeInTheDocument();
-    const entry = screen.getByText('Templates').closest('span');
-    expect(entry).toHaveAttribute('aria-disabled', 'true');
-    expect(entry).toHaveAttribute('title', 'Coming soon');
-  });
-
-  it('renders the five Phase-A items as real, enabled links to their routes', async () => {
+  // Module-4 Navigation Completion — Phase A enabled five items; Phase B
+  // (Template Experience) enables the sixth, Templates. All six now route
+  // to real destinations; none remain disabled placeholders.
+  it('renders the six email-builder items as real, enabled links to their routes', async () => {
     const user = userEvent.setup();
     mockAuthenticated();
     renderSidebarAt('/dashboard');
@@ -232,6 +219,7 @@ describe('AppSidebar AI Email Builder navigation', () => {
 
     const expected: [string, string][] = [
       ['My Emails', '/email-builder/emails'],
+      ['Templates', '/email-builder/templates'],
       ['Module Library', '/email-builder/modules'],
       ['Assets / Brand Kit', '/email-builder/assets'],
       ['Preview & Validation', '/email-builder/validation'],
@@ -374,7 +362,7 @@ describe('AppSidebar collapsed icon-only rail', () => {
     );
   });
 
-  it('renders the disabled Templates child inside the flyout as non-navigable', async () => {
+  it('renders the Templates child inside the flyout as a real, navigable link', async () => {
     const user = userEvent.setup();
     mockAuthenticated();
     renderSidebarAt('/dashboard');
@@ -385,10 +373,9 @@ describe('AppSidebar collapsed icon-only rail', () => {
     expect(screen.getByRole('link', { name: 'Create Email' })).toHaveAttribute(
       'href', '/email-builder/create',
     );
-    expect(screen.queryByRole('link', { name: 'Templates' })).not.toBeInTheDocument();
-    const entry = screen.getByText('Templates').closest('span');
-    expect(entry).toHaveAttribute('aria-disabled', 'true');
-    expect(entry).toHaveAttribute('title', 'Coming soon');
+    expect(screen.getByRole('link', { name: 'Templates' })).toHaveAttribute(
+      'href', '/email-builder/templates',
+    );
   });
 
   it('closes the flyout on Escape and returns focus to the trigger', async () => {

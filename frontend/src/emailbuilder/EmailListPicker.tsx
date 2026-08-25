@@ -3,7 +3,7 @@ import { useRecentEmails } from './useRecentEmails';
 import { DEFAULT_QUERY, filterAndSortEmails } from './recentEmailsFilter';
 import { getPlatformLabel } from './platformOptions';
 import { formatUpdatedAtFull, formatUpdatedAtShort } from './dashboardFormat';
-import type { EmailDocument } from './types';
+import type { EmailDocument, EmailStartType } from './types';
 import '../pages/EmailBuilderDashboardPage.css';
 import './EmailListPicker.css';
 
@@ -14,20 +14,36 @@ import './EmailListPicker.css';
 // email" (Preview & Validation, AI Engineer, Module Library's "insert
 // into email" flow) renders THIS, with per-row actions supplied by the
 // caller — never a second list-fetch/filter implementation.
+//
+// Phase B — `startTypeFilter` narrows the underlying list to one
+// start_type (e.g. 'template' for the Templates experience) BEFORE search/
+// sort runs; this is a plain array filter layered in front of
+// filterAndSortEmails, not a second engine, and is what makes the empty
+// states below correctly say "no templates" rather than "no emails" when
+// the user has ordinary emails but no saved templates.
 interface EmailListPickerProps {
   heading: string;
   description?: string;
   emptyHint?: string;
+  emptyStateLabel?: string;
+  startTypeFilter?: EmailStartType;
   renderRowActions: (email: EmailDocument) => ReactNode;
 }
 
-export function EmailListPicker({ heading, description, emptyHint, renderRowActions }: EmailListPickerProps) {
+export function EmailListPicker({
+  heading, description, emptyHint, emptyStateLabel, startTypeFilter, renderRowActions,
+}: EmailListPickerProps) {
   const { status, emails, refresh } = useRecentEmails();
   const [search, setSearch] = useState('');
 
+  const scopedEmails = useMemo(
+    () => (startTypeFilter ? emails.filter((email) => email.start_type === startTypeFilter) : emails),
+    [emails, startTypeFilter],
+  );
+
   const filtered = useMemo(
-    () => filterAndSortEmails(emails, { ...DEFAULT_QUERY, search }),
-    [emails, search],
+    () => filterAndSortEmails(scopedEmails, { ...DEFAULT_QUERY, search }),
+    [scopedEmails, search],
   );
 
   return (
@@ -66,15 +82,15 @@ export function EmailListPicker({ heading, description, emptyHint, renderRowActi
         </div>
       )}
 
-      {status === 'success' && emails.length === 0 && (
+      {status === 'success' && scopedEmails.length === 0 && (
         <div className="email-builder-dashboard__empty">
           <span className="mdaiw-icon mdaiw-icon--email" aria-hidden="true" />
-          <p>No emails yet</p>
+          <p>{emptyStateLabel ?? 'No emails yet'}</p>
           <p className="email-builder-dashboard__empty-hint">{emptyHint ?? 'Create an email first.'}</p>
         </div>
       )}
 
-      {status === 'success' && emails.length > 0 && filtered.length === 0 && (
+      {status === 'success' && scopedEmails.length > 0 && filtered.length === 0 && (
         <div className="email-builder-dashboard__empty">
           <p>No emails match your search.</p>
           <button type="button" className="button button--outline" onClick={() => setSearch('')}>

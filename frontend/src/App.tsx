@@ -23,6 +23,7 @@ import { ModuleLibraryPage } from './pages/ModuleLibraryPage';
 import { AssetManagerPage } from './pages/AssetManagerPage';
 import { PreviewValidationEntryPage } from './pages/PreviewValidationEntryPage';
 import { AIEngineerEntryPage } from './pages/AIEngineerEntryPage';
+import { TemplatesPage } from './pages/TemplatesPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -72,6 +73,11 @@ function App() {
                     distinct path exists only so the sidebar can give it
                     its own unambiguous active-nav state. */}
                 <Route path="/email-builder/emails" element={<EmailBuilderDashboardPage />} />
+                {/* Phase B (Template Experience) — the ONE template
+                    picker/create-from-template experience shared by
+                    Dashboard's "Choose Template", Create Email's
+                    "Template" start type, and this nav item. */}
+                <Route path="/email-builder/templates" element={<TemplatesPage />} />
                 <Route path="/email-builder/modules" element={<ModuleLibraryPage />} />
                 <Route path="/email-builder/assets" element={<AssetManagerPage />} />
                 <Route path="/email-builder/validation" element={<PreviewValidationEntryPage />} />

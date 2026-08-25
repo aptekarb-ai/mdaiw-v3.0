@@ -10,6 +10,7 @@ from .models import (
     MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, RepairSignalOutcome,
     RepairSignalSource, SavedEmailModule,
 )
+from .name_normalization import normalize_email_name
 from .validators import validate_asset_image
 
 
@@ -46,6 +47,19 @@ class EmailDocumentSerializer(serializers.ModelSerializer):
         trimmed = value.strip()
         if not trimmed:
             raise serializers.ValidationError('Email name is required.')
+        # Early UX only — the DB's (user, name_normalized) constraint
+        # (models.py) is authoritative and is what actually protects
+        # against a concurrent/racing request choosing the same name; see
+        # EmailDocumentViewSet's IntegrityError handling in views.py for
+        # that final backstop.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is not None:
+            existing = EmailDocument.objects.filter(user=user, name_normalized=normalize_email_name(trimmed))
+            if self.instance is not None:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                raise serializers.ValidationError('An email with this name already exists. Choose a different name.')
         return trimmed
 
     def validate_width(self, value):

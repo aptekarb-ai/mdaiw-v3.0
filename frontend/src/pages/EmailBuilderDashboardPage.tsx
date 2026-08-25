@@ -16,12 +16,14 @@ import type { ApiError } from '../types/auth';
 import type { EmailDocument } from '../emailbuilder/types';
 import './EmailBuilderDashboardPage.css';
 
-// Only 'create' has a real, implemented next step (Feature 02). The other
-// three quick actions stay disabled until their own starting-point flow
-// exists — see startTypeOptions.ts for the same "available" gate used in
-// the Create Email wizard's Start From cards.
+// 'create' (Feature 02) and 'template' (Phase B — Template Experience)
+// have real, implemented next steps. 'import'/'ai-generate' stay disabled
+// until their own starting-point flow exists — see startTypeOptions.ts for
+// the same "available" gate used in the Create Email wizard's Start From
+// cards.
 const ACTION_ROUTES: Partial<Record<(typeof QUICK_ACTIONS)[number]['key'], string>> = {
   create: '/email-builder/create',
+  template: '/email-builder/templates',
 };
 
 const PAGE_SIZE = 12;

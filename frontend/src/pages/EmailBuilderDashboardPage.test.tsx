@@ -100,11 +100,21 @@ describe('EmailBuilderDashboardPage — header and quick actions', () => {
   it('keeps the not-yet-implemented entry actions disabled with aria-disabled', async () => {
     mockDocuments([]);
     renderPage();
-    for (const name of [/Choose Template/, /Import HTML/, /AI Generate Email/]) {
+    for (const name of [/Import HTML/, /AI Generate Email/]) {
       const button = screen.getByRole('button', { name });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute('aria-disabled', 'true');
     }
+    await waitFor(() => expect(client.listEmailDocuments).toHaveBeenCalled());
+  });
+
+  // Phase B (Template Experience) — Choose Template is no longer
+  // "Coming soon"; it routes to the shared Templates picker.
+  it('renders Choose Template as an enabled link to /email-builder/templates', async () => {
+    mockDocuments([]);
+    renderPage();
+    const templateLink = screen.getByRole('link', { name: /Choose Template/ });
+    expect(templateLink).toHaveAttribute('href', '/email-builder/templates');
     await waitFor(() => expect(client.listEmailDocuments).toHaveBeenCalled());
   });
 });

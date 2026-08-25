@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from rest_framework import mixins, status, viewsets
+from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -16,6 +18,28 @@ from .serializers import (
     EmailAICommandRequestSerializer, EmailAssetSerializer, EmailDocumentSerializer, LearningSignalRequestSerializer,
     SavedEmailModuleSerializer,
 )
+
+
+DUPLICATE_NAME_ERROR = 'An email with this name already exists. Choose a different name.'
+
+
+def save_with_unique_name_guard(serializer, **extra):
+    """EmailDocumentSerializer.validate_name already rejects the common
+    case pre-save; this is the final backstop for the race two concurrent
+    requests can create (both pass validation, then both try to INSERT/
+    UPDATE the same (user, name_normalized) pair) — the DB's
+    UniqueConstraint (models.py) is what actually decides that race, and
+    this turns the resulting IntegrityError into the same clean
+    field-level 400 instead of an unhandled 500. The nested atomic() block
+    means the failed statement only rolls back to this savepoint, not the
+    whole request, so this stays safe to call under ATOMIC_REQUESTS too."""
+    try:
+        with transaction.atomic():
+            serializer.save(**extra)
+    except IntegrityError as exc:
+        if 'name_normalized' in str(exc):
+            raise ValidationError({'name': [DUPLICATE_NAME_ERROR]})
+        raise
 
 
 class EmailDocumentViewSet(
@@ -44,7 +68,10 @@ class EmailDocumentViewSet(
         return EmailDocument.objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        save_with_unique_name_guard(serializer, user=self.request.user)
+
+    def perform_update(self, serializer):
+        save_with_unique_name_guard(serializer)
 
 
 class SavedEmailModuleViewSet(

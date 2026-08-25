@@ -6,9 +6,11 @@ export interface StartTypeOption {
   description: string;
   // mdaiw-icon suffix (see public/assets/mdaiw/css/mdaiw-icons.css).
   icon: string;
-  // Feature 02 only implements Blank Email end-to-end. The other three
-  // are shown (per spec) so the full future flow is visible, but are not
-  // selectable yet — no broken route exists for them to navigate to.
+  // Feature 02 implements Blank Email end-to-end; Phase B (Template
+  // Experience) implements Template by handing off to the shared
+  // /email-builder/templates picker (see CreateEmailPage's handleSubmit) —
+  // no second template engine lives inside this wizard. HTML/AI remain
+  // not selectable yet — no route exists for them to navigate to.
   available: boolean;
 }
 
@@ -16,7 +18,7 @@ export const START_TYPE_OPTIONS: StartTypeOption[] = [
   { value: 'blank', label: 'Blank Email', description: 'Start from scratch', icon: 'file', available: true },
   {
     value: 'template', label: 'Template', description: 'Choose a starter template',
-    icon: 'landing-page', available: false,
+    icon: 'landing-page', available: true,
   },
   {
     value: 'html', label: 'Existing HTML', description: 'Import your existing email',
