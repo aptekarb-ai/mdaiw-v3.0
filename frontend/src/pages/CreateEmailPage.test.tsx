@@ -18,6 +18,7 @@ function renderPage() {
         <Route path="/email-builder" element={<div>Email Builder dashboard</div>} />
         <Route path="/email-builder/builder/:id" element={<div>Builder pending page</div>} />
         <Route path="/email-builder/templates" element={<div>Templates page</div>} />
+        <Route path="/email-builder/import" element={<div>Import HTML page</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -193,11 +194,23 @@ describe('CreateEmailPage', () => {
   it('does not let a click select a disabled Start From card', async () => {
     const user = userEvent.setup();
     renderPage();
-    const htmlRadio = screen.getByRole('radio', { name: /Existing HTML/ });
-    expect(htmlRadio).toBeDisabled();
-    await user.click(htmlRadio);
-    expect(htmlRadio).not.toBeChecked();
+    const aiRadio = screen.getByRole('radio', { name: /AI Generate/ });
+    expect(aiRadio).toBeDisabled();
+    await user.click(aiRadio);
+    expect(aiRadio).not.toBeChecked();
     expect(screen.getByRole('radio', { name: /Blank Email/ })).toBeChecked();
+  });
+
+  // Phase C (Import HTML) — Existing HTML is no longer disabled; it hands
+  // off to the shared Import HTML page, same shape as Template.
+  it('selecting Existing HTML and submitting hands off to the shared Import HTML page, without creating a document', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('radio', { name: /^Existing HTML/ }));
+    expect(screen.getByRole('radio', { name: /^Existing HTML/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Import HTML →' }));
+    expect(await screen.findByText('Import HTML page')).toBeInTheDocument();
+    expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
 
   it('selecting Template and submitting hands off to the shared Templates picker, without creating a document', async () => {

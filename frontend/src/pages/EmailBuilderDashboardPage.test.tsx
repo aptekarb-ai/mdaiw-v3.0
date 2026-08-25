@@ -100,7 +100,7 @@ describe('EmailBuilderDashboardPage — header and quick actions', () => {
   it('keeps the not-yet-implemented entry actions disabled with aria-disabled', async () => {
     mockDocuments([]);
     renderPage();
-    for (const name of [/Import HTML/, /AI Generate Email/]) {
+    for (const name of [/AI Generate Email/]) {
       const button = screen.getByRole('button', { name });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute('aria-disabled', 'true');
@@ -115,6 +115,16 @@ describe('EmailBuilderDashboardPage — header and quick actions', () => {
     renderPage();
     const templateLink = screen.getByRole('link', { name: /Choose Template/ });
     expect(templateLink).toHaveAttribute('href', '/email-builder/templates');
+    await waitFor(() => expect(client.listEmailDocuments).toHaveBeenCalled());
+  });
+
+  // Phase C (Import HTML) — Import HTML is no longer "Coming soon"; it
+  // routes to the shared Import HTML page.
+  it('renders Import HTML as an enabled link to /email-builder/import', async () => {
+    mockDocuments([]);
+    renderPage();
+    const importLink = screen.getByRole('link', { name: /Import HTML/ });
+    expect(importLink).toHaveAttribute('href', '/email-builder/import');
     await waitFor(() => expect(client.listEmailDocuments).toHaveBeenCalled());
   });
 });

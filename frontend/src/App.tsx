@@ -24,6 +24,7 @@ import { AssetManagerPage } from './pages/AssetManagerPage';
 import { PreviewValidationEntryPage } from './pages/PreviewValidationEntryPage';
 import { AIEngineerEntryPage } from './pages/AIEngineerEntryPage';
 import { TemplatesPage } from './pages/TemplatesPage';
+import { ImportHtmlPage } from './pages/ImportHtmlPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -78,6 +79,10 @@ function App() {
                     Dashboard's "Choose Template", Create Email's
                     "Template" start type, and this nav item. */}
                 <Route path="/email-builder/templates" element={<TemplatesPage />} />
+                {/* Phase C (Import HTML) — the ONE import experience
+                    shared by Dashboard's "Import HTML" card and Create
+                    Email's "Existing HTML" start type. */}
+                <Route path="/email-builder/import" element={<ImportHtmlPage />} />
                 <Route path="/email-builder/modules" element={<ModuleLibraryPage />} />
                 <Route path="/email-builder/assets" element={<AssetManagerPage />} />
                 <Route path="/email-builder/validation" element={<PreviewValidationEntryPage />} />

@@ -141,6 +141,15 @@ export function CreateEmailPage() {
       return;
     }
 
+    if (startType === 'html') {
+      // Phase C (Import HTML) — same hand-off shape as Template: one
+      // shared importer (ImportHtmlPage) used by both this wizard and
+      // Dashboard's "Import HTML" card, never a second import engine
+      // built into this form.
+      navigate('/email-builder/import');
+      return;
+    }
+
     const validation = validate();
     setErrors(validation);
     setFormError(null);
@@ -330,7 +339,9 @@ export function CreateEmailPage() {
             </button>
             <button type="submit" className="button button--primary" disabled={submitting}>
               {submitting && <span className="mdaiw-icon mdaiw-icon--spinner create-email-page__spinner" aria-hidden="true" />}
-              {startType === 'template' ? 'Choose Template →' : submitting ? 'Creating…' : 'Create Email →'}
+              {startType === 'template' ? 'Choose Template →'
+                : startType === 'html' ? 'Import HTML →'
+                : submitting ? 'Creating…' : 'Create Email →'}
             </button>
           </div>
         </form>

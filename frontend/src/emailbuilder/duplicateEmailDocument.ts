@@ -1,6 +1,7 @@
 import { createEmailDocument, deleteEmailDocument, updateEmailDocument } from '../api/client';
 import { cloneModuleWithNewId } from './moduleFactory';
-import type { CreateEmailDocumentInput, EmailDocument, UpdateEmailDocumentInput } from './types';
+import type { CreateEmailDocumentInput, EmailDocument, EmailPlatform, UpdateEmailDocumentInput } from './types';
+import type { EmailModule } from './edm';
 import type { ApiError } from '../types/auth';
 
 // Shared by duplicateEmailDocument, Feature 13's saveEmailAsTemplate, and
@@ -141,6 +142,29 @@ export async function createEmailDocumentFromTemplate(source: EmailDocument, nam
       reset_css_enabled: source.reset_css_enabled,
       custom_css_enabled: source.custom_css_enabled,
       custom_css: source.custom_css,
+    },
+  );
+}
+
+// Phase C (Import HTML) — Dashboard "Import HTML" and Create Email's
+// "Template" start type both hand off to the shared ImportHtmlPage,
+// which parses/sanitizes/maps the pasted or uploaded HTML entirely
+// client-side (htmlImportParser.ts/htmlImportSanitize.ts/
+// htmlImportMapper.ts — no network activity during that step) and only
+// reaches the network here, exactly like createEmailDocumentFromTemplate
+// above: create with a user-typed, uniqueness-checked name, then PATCH
+// the mapped content in — same createDocumentWithContent rollback path,
+// same start_type='html' (the enum value that already existed for
+// exactly this), same "name is user-typed, never silently suffixed"
+// rule (a collision surfaces as a real field error, it is not retried).
+export async function createEmailDocumentFromImportedHtml(
+  name: string, platform: EmailPlatform, width: number, modules: EmailModule[], emailTitle: string,
+): Promise<EmailDocument> {
+  return createDocumentWithContent(
+    { name, platform, width, start_type: 'html' },
+    {
+      content: { version: 1, modules },
+      ...(emailTitle ? { email_title: emailTitle } : {}),
     },
   );
 }
