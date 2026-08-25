@@ -7,11 +7,10 @@ export interface StartTypeOption {
   // mdaiw-icon suffix (see public/assets/mdaiw/css/mdaiw-icons.css).
   icon: string;
   // Feature 02 implements Blank Email end-to-end; Phase B (Template
-  // Experience) implements Template, and Phase C (Import HTML) implements
-  // Existing HTML, both by handing off to their own shared picker/import
-  // page (see CreateEmailPage's handleSubmit) — no second engine lives
-  // inside this wizard for either. AI remains not selectable yet — no
-  // route exists for it to navigate to.
+  // Experience), Phase C (Import HTML), and Phase D (AI Generate) each
+  // implement their option by handing off to their own shared picker/
+  // import/generate page (see CreateEmailPage's handleSubmit) — no
+  // second engine lives inside this wizard for any of them.
   available: boolean;
 }
 
@@ -27,7 +26,7 @@ export const START_TYPE_OPTIONS: StartTypeOption[] = [
   },
   {
     value: 'ai', label: 'AI Generate', description: 'Generate an email with AI',
-    icon: 'ai-assistants', available: false,
+    icon: 'ai-assistants', available: true,
   },
 ];
 

@@ -1900,13 +1900,14 @@ class EmailAssetTests(TestCase):
 
 # --- Feature 14 -- AI Engineer Voice --------------------------------------
 
-from unittest.mock import MagicMock  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
 
 from django.core.cache import cache as _cache  # noqa: E402
 from django.test import override_settings  # noqa: E402
 
 from .ai_command import (  # noqa: E402
     ActionType,
+    CommandResult,
     FallbackEmailCommandProvider,
     RuleBasedEmailCommandProvider,
     _resolve_color,
@@ -3415,6 +3416,40 @@ class EmailAICommandViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['provider'], 'deterministic')
 
+    def test_oversized_compose_email_response_degrades_to_none_end_to_end(self):
+        """Phase D reconciliation, item 2 -- an oversized COMPOSE_EMAIL
+        response (more top-level items than MAX_COMPOSITION_ITEMS) must
+        never reach the client as an apparently-successful, silently-
+        truncated email. This exercises the FULL view path (not just
+        validate_action() in isolation): a fake provider stands in for a
+        misbehaving real AI provider that returned too many items: the
+        view must degrade the action to NONE while still returning 200/
+        success so the frontend's existing generic 'could not generate'
+        error path handles it, and a retry on the same connection must
+        still work normally afterward."""
+        self.client.force_login(self.user)
+        oversized_items = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_ITEMS + 3)]
+        fake_provider = Mock()
+        fake_provider.resolve.return_value = CommandResult(
+            reply='oversized', action={'type': ActionType.COMPOSE_EMAIL, 'items': oversized_items},
+            confidence=0.9, provider='openai',
+        )
+        with patch('emailbuilder.views.get_default_email_command_provider', return_value=fake_provider):
+            response = self._post({'message': 'Create an email: a promotional summer sale'})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['success'])
+        # Never an apparently-successful partial/truncated composition.
+        self.assertEqual(body['action']['type'], ActionType.NONE)
+        self.assertNotIn('items', body['action'])
+        self.assertFalse(body['requires_confirmation'])
+
+        # Retry (e.g. after editing the brief) still works normally --
+        # this failure mode is not sticky.
+        retry = self._post({'message': 'add a button'})
+        self.assertEqual(retry.status_code, 200)
+        self.assertEqual(retry.json()['action']['type'], 'INSERT_MODULE')
+
     def test_ai_configured_but_call_fails_falls_back_to_deterministic(self):
         """With a key configured but the provider itself raising (e.g. a
         malformed/failed response), the view must still degrade to the
@@ -4392,6 +4427,39 @@ class CompositionEngineDeterministicTests(TestCase):
         self.assertIsNone(composition.compose_from_brief(''))
         self.assertIsNone(composition.compose_from_brief(None))
 
+    def test_verb_free_brief_alone_is_not_a_composition(self):
+        """Documents the exact gate AI Generate Email's compose-intent
+        prefix exists to satisfy (see AIGenerateEmailPage.tsx's
+        COMPOSE_INTENT_PREFIX) -- a raw brief with no compose verb and no
+        literal 'email' word is correctly NOT recognized on its own."""
+        self.assertIsNone(composition.compose_from_brief(
+            'Summer promotion for running shoes, 20% off, hero section, '
+            'three featured products, strong CTA and footer.',
+        ))
+
+    def test_compose_intent_prefix_makes_a_verb_free_brief_compose(self):
+        """Phase D (AI Generate Email) -- proves the SMALLEST fix actually
+        works against the real deterministic router: AI Generate Email
+        prepends 'Create an email: ' to the user's own free-typed brief
+        before sending it, rather than requiring the user to type a
+        compose verb themselves. This is the exact brief from the Phase D
+        reconciliation request."""
+        prefixed = 'Create an email: ' + (
+            'Summer promotion for running shoes, 20% off, hero section, '
+            'three featured products, strong CTA and footer.'
+        )
+        result = composition.compose_from_brief(prefixed)
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result['items']), 0)
+        types = [item['module_type'] for item in result['items']]
+        # The brief's own explicitly-named sections come through via
+        # detect_sections' section-signal layering, regardless of which
+        # base pattern the prefix framing happens to score onto.
+        self.assertTrue(any(t.startswith('hero') for t in types))
+        self.assertTrue(any(t.startswith('product') for t in types))
+        self.assertTrue(any(t.startswith('cta') or t == 'button' for t in types))
+        self.assertTrue(any(t.startswith('footer') for t in types))
+
     def test_every_curated_pattern_resolves_to_at_least_one_item(self):
         for key in composition.PATTERNS:
             with self.subTest(pattern=key):
@@ -4570,9 +4638,19 @@ class ComposeEmailValidateActionTests(TestCase):
         })
         self.assertNotIn('repeatable_items', result['items'][0])
 
-    def test_items_beyond_max_composition_items_are_truncated(self):
+    def test_items_beyond_max_composition_items_are_rejected_not_truncated(self):
+        # Phase D (AI Generate Email) safety fix — an oversized composition
+        # from an untrusted provider is an INVALID action (degrades to the
+        # existing NONE-action fallback in EmailAICommandView), never
+        # silently shortened to the first N items and treated as valid.
         raw_items = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_ITEMS + 5)]
         result = validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': raw_items})
+        self.assertIsNone(result)
+
+    def test_items_at_exactly_max_composition_items_are_accepted(self):
+        raw_items = [{'module_type': 'text', 'patch': {}} for _ in range(ai_command_module.MAX_COMPOSITION_ITEMS)]
+        result = validate_action({'type': ActionType.COMPOSE_EMAIL, 'items': raw_items})
+        self.assertIsNotNone(result)
         self.assertEqual(len(result['items']), ai_command_module.MAX_COMPOSITION_ITEMS)
 
     def test_children_beyond_max_per_column_are_truncated(self):

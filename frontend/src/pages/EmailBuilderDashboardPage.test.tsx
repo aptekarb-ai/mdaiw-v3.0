@@ -97,14 +97,27 @@ describe('EmailBuilderDashboardPage — header and quick actions', () => {
     expect(await screen.findByText('Create Email page')).toBeInTheDocument();
   });
 
-  it('keeps the not-yet-implemented entry actions disabled with aria-disabled', async () => {
+  // Phase D (AI Generate Email) — every quick action is now enabled;
+  // there is no remaining disabled entry. (Every card — including the
+  // enabled ones — still carries a visually-hidden same-size "Coming
+  // soon" placeholder span for layout purposes, so this checks for
+  // disabled BUTTONS specifically, not the text.)
+  it('has no remaining disabled quick-action entries', async () => {
     mockDocuments([]);
     renderPage();
-    for (const name of [/AI Generate Email/]) {
-      const button = screen.getByRole('button', { name });
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute('aria-disabled', 'true');
-    }
+    const disabledActionButtons = screen.queryAllByRole('button', { name: /Choose Template|Import HTML|AI Generate Email/ })
+      .filter((button) => button.hasAttribute('disabled'));
+    expect(disabledActionButtons).toHaveLength(0);
+    await waitFor(() => expect(client.listEmailDocuments).toHaveBeenCalled());
+  });
+
+  // Phase D (AI Generate Email) — AI Generate Email is no longer
+  // "Coming soon"; it routes to the shared AI Generate page.
+  it('renders AI Generate Email as an enabled link to /email-builder/ai-generate', async () => {
+    mockDocuments([]);
+    renderPage();
+    const aiLink = screen.getByRole('link', { name: /AI Generate Email/ });
+    expect(aiLink).toHaveAttribute('href', '/email-builder/ai-generate');
     await waitFor(() => expect(client.listEmailDocuments).toHaveBeenCalled());
   });
 

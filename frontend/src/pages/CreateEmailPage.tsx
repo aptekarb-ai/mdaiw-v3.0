@@ -150,6 +150,16 @@ export function CreateEmailPage() {
       return;
     }
 
+    if (startType === 'ai') {
+      // Phase D (AI Generate Email) — same hand-off shape as Template/
+      // Import: one shared brief-entry/compose/create page
+      // (AIGenerateEmailPage) used by both this wizard and Dashboard's
+      // "AI Generate Email" card, never a second AI composition engine
+      // built into this form.
+      navigate('/email-builder/ai-generate');
+      return;
+    }
+
     const validation = validate();
     setErrors(validation);
     setFormError(null);
@@ -341,6 +351,7 @@ export function CreateEmailPage() {
               {submitting && <span className="mdaiw-icon mdaiw-icon--spinner create-email-page__spinner" aria-hidden="true" />}
               {startType === 'template' ? 'Choose Template →'
                 : startType === 'html' ? 'Import HTML →'
+                : startType === 'ai' ? 'Generate →'
                 : submitting ? 'Creating…' : 'Create Email →'}
             </button>
           </div>

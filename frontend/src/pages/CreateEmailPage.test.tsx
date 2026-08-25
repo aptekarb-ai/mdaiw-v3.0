@@ -19,6 +19,7 @@ function renderPage() {
         <Route path="/email-builder/builder/:id" element={<div>Builder pending page</div>} />
         <Route path="/email-builder/templates" element={<div>Templates page</div>} />
         <Route path="/email-builder/import" element={<div>Import HTML page</div>} />
+        <Route path="/email-builder/ai-generate" element={<div>AI Generate page</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -191,14 +192,13 @@ describe('CreateEmailPage', () => {
     }
   });
 
-  it('does not let a click select a disabled Start From card', async () => {
-    const user = userEvent.setup();
+  // Phase D (AI Generate Email) — every Start From card is now enabled;
+  // there is no remaining disabled-card case to test.
+  it('every Start From card is enabled and selectable', () => {
     renderPage();
-    const aiRadio = screen.getByRole('radio', { name: /AI Generate/ });
-    expect(aiRadio).toBeDisabled();
-    await user.click(aiRadio);
-    expect(aiRadio).not.toBeChecked();
-    expect(screen.getByRole('radio', { name: /Blank Email/ })).toBeChecked();
+    for (const radio of screen.getAllByRole('radio', { name: /Blank Email|Template|Existing HTML|AI Generate/ })) {
+      expect(radio).not.toBeDisabled();
+    }
   });
 
   // Phase C (Import HTML) — Existing HTML is no longer disabled; it hands
@@ -210,6 +210,18 @@ describe('CreateEmailPage', () => {
     expect(screen.getByRole('radio', { name: /^Existing HTML/ })).toBeChecked();
     await user.click(screen.getByRole('button', { name: 'Import HTML →' }));
     expect(await screen.findByText('Import HTML page')).toBeInTheDocument();
+    expect(client.createEmailDocument).not.toHaveBeenCalled();
+  });
+
+  // Phase D (AI Generate Email) — AI Generate is no longer disabled; it
+  // hands off to the shared AI Generate page, same shape as Template/HTML.
+  it('selecting AI Generate and submitting hands off to the shared AI Generate page, without creating a document', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('radio', { name: /^AI Generate/ }));
+    expect(screen.getByRole('radio', { name: /^AI Generate/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Generate →' }));
+    expect(await screen.findByText('AI Generate page')).toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
 

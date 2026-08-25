@@ -25,6 +25,7 @@ import { PreviewValidationEntryPage } from './pages/PreviewValidationEntryPage';
 import { AIEngineerEntryPage } from './pages/AIEngineerEntryPage';
 import { TemplatesPage } from './pages/TemplatesPage';
 import { ImportHtmlPage } from './pages/ImportHtmlPage';
+import { AIGenerateEmailPage } from './pages/AIGenerateEmailPage';
 import { AssetPreviewPage } from './pages/dev/AssetPreviewPage';
 
 const MODULE_ROUTES = [
@@ -83,6 +84,11 @@ function App() {
                     shared by Dashboard's "Import HTML" card and Create
                     Email's "Existing HTML" start type. */}
                 <Route path="/email-builder/import" element={<ImportHtmlPage />} />
+                {/* Phase D (AI Generate Email) — the ONE pre-document
+                    compose/create experience shared by Dashboard's "AI
+                    Generate Email" and Create Email's "AI Generate"
+                    start type. */}
+                <Route path="/email-builder/ai-generate" element={<AIGenerateEmailPage />} />
                 <Route path="/email-builder/modules" element={<ModuleLibraryPage />} />
                 <Route path="/email-builder/assets" element={<AssetManagerPage />} />
                 <Route path="/email-builder/validation" element={<PreviewValidationEntryPage />} />

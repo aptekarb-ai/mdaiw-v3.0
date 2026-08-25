@@ -168,3 +168,26 @@ export async function createEmailDocumentFromImportedHtml(
     },
   );
 }
+
+// Phase D (AI Generate Email) — Dashboard "AI Generate Email" and Create
+// Email's "AI Generate" start type both hand off to the shared
+// AIGenerateEmailPage, which composes entirely via the EXISTING stateless
+// requestAICommand()/COMPOSE_EMAIL contract (no document/email id
+// involved — see backend EmailAICommandView) and builds EmailModule[]
+// client-side via moduleFactory.ts's buildComposedModule — the SAME pure
+// function the in-builder AI Engineer's addComposedModules uses, not a
+// second module-construction path. Nothing is created until composition
+// has already succeeded and the user has confirmed a name: this is the
+// THIRD sibling reusing createDocumentWithContent's create+PATCH+
+// rollback-delete-on-failure transaction (after createEmailDocumentFromTemplate
+// and createEmailDocumentFromImportedHtml above) — same "name is
+// user-typed, never silently suffixed" rule, same start_type convention
+// (the 'ai' enum value that already existed for exactly this).
+export async function createEmailDocumentFromAI(
+  name: string, platform: EmailPlatform, width: number, modules: EmailModule[],
+): Promise<EmailDocument> {
+  return createDocumentWithContent(
+    { name, platform, width, start_type: 'ai' },
+    { content: { version: 1, modules } },
+  );
+}

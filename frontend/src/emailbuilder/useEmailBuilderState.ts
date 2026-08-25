@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import type { ColumnContainerSettings, EmailModule, EmailModuleSettings, EmailModuleType } from './edm';
-import { cloneModuleWithNewId, createModule, createModuleFromSaved } from './moduleFactory';
-import { getModuleDefinition } from './moduleRegistry';
+import { buildComposedModule, cloneModuleWithNewId, createModule, createModuleFromSaved } from './moduleFactory';
+import type { ComposedModuleEntry } from './moduleFactory';
 import {
   duplicateNestedModule as duplicateNestedModuleInTree,
   findModuleById,
@@ -73,19 +73,7 @@ interface SelectedColumnRef {
 // EmailBuilderWorkspacePage.tsx's handleApplyAiAction (COMPOSE_EMAIL
 // case), the SAME "backend/AI concern stays out of the state hook"
 // boundary applyGlobalStyle/addModulesWithProps already keep.
-export interface ComposedModuleEntry {
-  type: EmailModuleType;
-  patch: Record<string, unknown>;
-  // One group per column index — only meaningful when `type` is a layout
-  // module type. Each child is flat (never itself nested further), same
-  // one-level-of-nesting constraint INSERT_NESTED_MODULE already enforces.
-  children?: { columnIndex: number; modules: { type: EmailModuleType; patch: Record<string, unknown> }[] }[];
-  // Seeds a module's own repeatableField (e.g. social-icon-row's platform
-  // links) — only meaningful when `type` actually has one; silently
-  // ignored (not applied) otherwise, exactly like every other composition
-  // capability that only applies where the module registry supports it.
-  repeatableItems?: Record<string, unknown>[];
-}
+export type { ComposedModuleEntry } from './moduleFactory';
 
 function reindex(modules: EmailModule[]): EmailModule[] {
   return modules.map((module, index) => ({ ...module, order: index }));
@@ -383,45 +371,12 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     return ids;
   }, [commit]);
 
-  // Sub-phase 7 — builds one top-level module (optionally with nested
-  // column children and/or seeded repeatable items) from a composition
-  // entry, reusing the EXACT SAME createModule/createDefaultColumns/
-  // repeatableField primitives every other insert path already uses —
-  // never a second module-construction system.
-  const buildComposedModule = useCallback((entry: ComposedModuleEntry, order: number): EmailModule => {
-    const created = createModule(entry.type, order);
-    let module = Object.keys(entry.patch).length ? { ...created, props: { ...created.props, ...entry.patch } } : created;
-
-    if (entry.children && entry.children.length > 0 && module.columns) {
-      const columns = module.columns.map((column, columnIndex) => {
-        const group = entry.children!.find((g) => g.columnIndex === columnIndex);
-        if (!group) return column;
-        const nestedModules = group.modules.map((child, childIndex) => {
-          const createdChild = createModule(child.type, childIndex);
-          return Object.keys(child.patch).length
-            ? { ...createdChild, props: { ...createdChild.props, ...child.patch } }
-            : createdChild;
-        });
-        return { ...column, modules: nestedModules };
-      });
-      module = { ...module, columns };
-    }
-
-    if (entry.repeatableItems && entry.repeatableItems.length > 0) {
-      const definition = getModuleDefinition(entry.type);
-      const repeatable = definition.repeatableField;
-      if (repeatable) {
-        const bounded = entry.repeatableItems.slice(0, repeatable.maxItems ?? 20);
-        const items = bounded.map((item) => ({ ...repeatable.createItem(), ...item }));
-        if (items.length >= (repeatable.minItems ?? 0)) {
-          module = { ...module, props: { ...module.props, [repeatable.path]: items } };
-        }
-      }
-    }
-
-    return module;
-  }, []);
-
+  // Phase D — buildComposedModule itself now lives in moduleFactory.ts
+  // (extracted, pure, no hook dependency) so the pre-document AI Generate
+  // Email flow can build modules from an AI composition without a
+  // mounted builder instance. This hook still owns the ONLY thing that
+  // genuinely needs live state: appending the built modules to the
+  // current tree and committing one history entry.
   const addComposedModules = useCallback((entries: ComposedModuleEntry[]) => {
     const current = modulesRef.current;
     const built: EmailModule[] = [];
@@ -435,7 +390,7 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     setSelectedModuleId(ids[ids.length - 1] ?? null);
     setSelectedColumn(null);
     return ids;
-  }, [commit, buildComposedModule]);
+  }, [commit]);
 
   const applyGlobalStyle = useCallback((moduleType: EmailModuleType, patch: Record<string, unknown>) => {
     const current = modulesRef.current;

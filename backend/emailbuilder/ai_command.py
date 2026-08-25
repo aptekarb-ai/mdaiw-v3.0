@@ -615,8 +615,20 @@ def validate_action(action):
         raw_items = action.get('items')
         if not isinstance(raw_items, list) or not raw_items:
             return None
+        # Phase D (AI Generate Email) safety fix: this used to be
+        # `raw_items[:MAX_COMPOSITION_ITEMS]` — a SILENT truncation that
+        # would quietly keep only the first N items of an oversized
+        # provider response and treat the result as valid. An untrusted
+        # provider result (this is exactly the boundary where AI-provider
+        # output first meets validation) exceeding the authoritative cap
+        # must be treated as an invalid composition, not silently
+        # shortened — it degrades to the existing NONE-action fallback
+        # exactly like any other invalid action (see EmailAICommandView),
+        # never a partially-applied result the caller never asked for.
+        if len(raw_items) > MAX_COMPOSITION_ITEMS:
+            return None
         safe_items = []
-        for entry in raw_items[:MAX_COMPOSITION_ITEMS]:
+        for entry in raw_items:
             validated = _validate_composition_item(entry, allow_layout=True)
             if validated is not None:
                 safe_items.append(validated)
