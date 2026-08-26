@@ -18,6 +18,14 @@ interface ExportDeployDialogProps {
   content: EmailDocumentContent;
   onSaveAsTemplate: (templateName: string) => Promise<EmailDocument>;
   onClose: () => void;
+  // Phase E1 (Export -> Validation nav) — closes this dialog and switches
+  // the SAME builder to its existing Validate tab (ValidationCenterPanel),
+  // optionally scrolling/highlighting one concrete finding there. This
+  // performs no validation itself — it only hands off an id already
+  // computed by buildExportSummary from the same validateEmail() report
+  // ValidationCenterPanel re-derives on its own. No second validation
+  // view is created.
+  onViewValidation: (issueId: string | null) => void;
 }
 
 type ActionState = 'idle' | 'busy' | 'done' | 'error';
@@ -55,7 +63,9 @@ function downloadTextFile(text: string, filename: string, mimeType: string): voi
 // than the current honest Generic HTML + platform-advisory behavior. Every
 // platform choice exports byte-identical HTML today; only the Environment
 // label and platform-token compatibility warning change.
-export function ExportDeployDialog({ document, documentSettings, content, onSaveAsTemplate, onClose }: ExportDeployDialogProps) {
+export function ExportDeployDialog({
+  document, documentSettings, content, onSaveAsTemplate, onClose, onViewValidation,
+}: ExportDeployDialogProps) {
   const [exportPlatform, setExportPlatform] = useState<EmailPlatform>(document.platform);
   const [acknowledgeUnsafe, setAcknowledgeUnsafe] = useState(false);
   const [copyState, setCopyState] = useState<ActionState>('idle');
@@ -132,6 +142,12 @@ export function ExportDeployDialog({ document, documentSettings, content, onSave
 
   const canExport = !summary.hasBlockingIssues || acknowledgeUnsafe;
   const fileBaseName = sanitizeExportFileName(document.name);
+  const hasValidationIssues = summary.errorCount + summary.warningCount > 0;
+
+  function handleViewValidation() {
+    onViewValidation(summary.firstIssueId);
+    onClose();
+  }
 
   async function handleCopyHtml() {
     setCopyState('busy');
@@ -255,6 +271,11 @@ export function ExportDeployDialog({ document, documentSettings, content, onSave
                 <dd className={summary.validationStatus === 'Passed' ? 'export-deploy-dialog__pass' : 'export-deploy-dialog__fail'}>
                   <span className={`mdaiw-icon mdaiw-icon--${summary.validationStatus === 'Passed' ? 'check-circle' : 'warning'}`} aria-hidden="true" />
                   {summary.validationStatus} ({summary.score}/100)
+                  {hasValidationIssues && (
+                    <button type="button" className="export-deploy-dialog__view-validation" onClick={handleViewValidation}>
+                      View in Validation →
+                    </button>
+                  )}
                 </dd>
               </div>
             </dl>

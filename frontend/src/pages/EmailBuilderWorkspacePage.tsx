@@ -54,6 +54,11 @@ export function EmailBuilderWorkspacePage() {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
   const [viewMode, setViewMode] = useState<BuilderViewMode>('desktop');
   const [editorMode, setEditorMode] = useState<EditorMode>('visual');
+  // Phase E1 (Export -> Validation nav) — set only when arriving at the
+  // Validate tab via ExportDeployDialog's "View in Validation" action;
+  // ValidationCenterPanel consumes it once (by id) to scroll/highlight
+  // that one finding. Not persisted, not a second validation state.
+  const [highlightValidationIssueId, setHighlightValidationIssueId] = useState<string | null>(null);
   // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — ephemeral
   // editor-viewport state only: never sent to the backend, never stored on
   // EmailDocument/EDM, never persisted to localStorage. Reset to 100 every
@@ -774,6 +779,7 @@ export function EmailBuilderWorkspacePage() {
             onApplySafeFix={handleUpdateProps}
             onApplySettingsFix={handleUpdateSettings}
             onApplyDocumentFix={builder.updateDocumentSettings}
+            highlightIssueId={highlightValidationIssueId}
           />
         ) : editorMode === 'ai' ? (
           <AIEngineerPanel
@@ -870,6 +876,11 @@ export function EmailBuilderWorkspacePage() {
           content={{ version: 1, modules: builder.modules }}
           onSaveAsTemplate={handleSaveAsTemplate}
           onClose={() => setExportDialogOpen(false)}
+          onViewValidation={(issueId) => {
+            setExportDialogOpen(false);
+            setHighlightValidationIssueId(issueId);
+            setEditorMode('validate');
+          }}
         />
       )}
 

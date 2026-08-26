@@ -197,6 +197,21 @@
   border-radius: var(--radius-md);
   padding: var(--space-3) var(--space-4);
   flex-wrap: wrap;
+  transition: border-color var(--transition-standard, 180ms ease), box-shadow var(--transition-standard, 180ms ease);
+}
+
+/* Phase E1 (Export -> Validation nav) — brief, self-clearing highlight
+   for a finding scrolled to from Export/Deploy. Never the sole indicator
+   of anything (the card's normal severity icon/text is unaffected). */
+.validation-center-panel__issue-card--highlighted {
+  border-color: var(--color-primary-blue);
+  box-shadow: 0 0 0 2px var(--color-info-bg, rgba(0, 130, 173, 0.15));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .validation-center-panel__issue-card {
+    transition: none;
+  }
 }
 
 .validation-center-panel__issue-icon {

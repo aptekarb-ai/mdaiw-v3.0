@@ -2097,6 +2097,46 @@ describe('EmailBuilderWorkspacePage — Feature 13 Export / Deploy', () => {
 
     await waitFor(() => expect(patchedModuleCount).toBe(1));
   });
+
+  // Phase E1 (Export -> Validation nav)
+  it('View in Validation closes the Export dialog and switches to the Validate tab, preserving builder state', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await openCategory(user, 'Images');
+    await user.click(await screen.findByRole('button', { name: 'Add Image' }));
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+
+    await user.click(screen.getByRole('button', { name: /View in Validation/ }));
+
+    expect(screen.queryByRole('dialog', { name: 'Export / Deploy' })).not.toBeInTheDocument();
+    const editorModeGroup = screen.getByRole('group', { name: 'Editor mode' });
+    expect(within(editorModeGroup).getByRole('button', { name: 'Validate' })).toHaveAttribute('aria-pressed', 'true');
+    await screen.findByText('Email Health Score');
+    // The image module added before opening Export is still present —
+    // builder state (the module tree) survived the round trip untouched.
+    expect(screen.getByText(/Issues Found \(/)).toBeInTheDocument();
+  });
+
+  it('View in Validation does not appear for a clean document (no issues to view)', async () => {
+    // Empty title/subject each independently trigger a warning on their
+    // own — a genuinely zero-issue document needs both set.
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({
+      content: { version: 1, modules: [] }, email_title: 'Test Email', email_subject: 'Test subject',
+    }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+
+    await user.click(screen.getByRole('button', { name: 'Export' }));
+    await screen.findByRole('dialog', { name: 'Export / Deploy' });
+
+    expect(screen.queryByRole('button', { name: /View in Validation/ })).not.toBeInTheDocument();
+  });
 });
 
 describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {

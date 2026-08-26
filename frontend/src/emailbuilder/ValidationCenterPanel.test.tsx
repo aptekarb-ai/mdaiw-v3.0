@@ -283,6 +283,46 @@ describe('ValidationCenterPanel', () => {
       expect(screen.queryByText('100')).not.toBeInTheDocument();
     });
   });
+
+  // Phase E1 (Export -> Validation nav)
+  describe('highlightIssueId', () => {
+    it('scrolls the matching issue card into view and applies the highlight class', async () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      renderPanel({ resetCssEnabled: false, highlightIssueId: 'document:reset-css-disabled' });
+
+      const card = screen.getByText('Email Reset CSS is disabled').closest('li')!;
+      await waitFor(() => expect(card.className).toContain('--highlighted'));
+      expect(scrollIntoView).toHaveBeenCalled();
+    });
+
+    it('clears the highlight after a short delay', async () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      renderPanel({ resetCssEnabled: false, highlightIssueId: 'document:reset-css-disabled' });
+
+      const card = screen.getByText('Email Reset CSS is disabled').closest('li')!;
+      await waitFor(() => expect(card.className).toContain('--highlighted'));
+      await waitFor(() => expect(card.className).not.toContain('--highlighted'), { timeout: 4000 });
+    }, 6000);
+
+    it('does nothing when the id does not match any current issue', () => {
+      const scrollIntoView = vi.fn();
+      Element.prototype.scrollIntoView = scrollIntoView;
+      renderPanel({ highlightIssueId: 'not-a-real-issue-id' });
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    });
+
+    it('never mutates content — no fix/navigation callback fires merely from highlighting', () => {
+      Element.prototype.scrollIntoView = vi.fn();
+      const { onApplySafeFix, onApplySettingsFix, onApplyDocumentFix, onNavigateToModule } = renderPanel({
+        resetCssEnabled: false, highlightIssueId: 'document:reset-css-disabled',
+      });
+      expect(onApplySafeFix).not.toHaveBeenCalled();
+      expect(onApplySettingsFix).not.toHaveBeenCalled();
+      expect(onApplyDocumentFix).not.toHaveBeenCalled();
+      expect(onNavigateToModule).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // Module-4 Final Gap Closure, Correction 4 (Feature 13) — pairs with

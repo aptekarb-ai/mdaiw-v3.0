@@ -21,6 +21,13 @@ export interface ExportSummary {
   responsiveStatus: 'Passed' | 'Needs attention';
   errorCount: number;
   warningCount: number;
+  // Phase E1 (Export -> Validation nav) — the SAME ValidationCenterPanel
+  // issue id (see emailValidation.ts's ValidationIssue.id), never a
+  // second identifier scheme. The most relevant issue to jump to: the
+  // first error if any exist (matching this file's own hasBlockingIssues
+  // definition), otherwise the first issue overall. null when there are
+  // no issues at all.
+  firstIssueId: string | null;
 }
 
 // A real (non-placeholder) <img> source only — "images used" should count
@@ -72,6 +79,7 @@ export function buildExportSummary(
   const errorCount = report.issues.filter((issue) => issue.severity === 'error').length;
   const warningCount = report.issues.length - errorCount;
   const responsiveCategory = report.categories.find((category) => category.id === 'responsive');
+  const firstIssue = report.issues.find((issue) => issue.severity === 'error') ?? report.issues[0] ?? null;
 
   return {
     emailName,
@@ -85,6 +93,7 @@ export function buildExportSummary(
     responsiveStatus: responsiveCategory?.status === 'good' ? 'Passed' : 'Needs attention',
     errorCount,
     warningCount,
+    firstIssueId: firstIssue?.id ?? null,
   };
 }
 

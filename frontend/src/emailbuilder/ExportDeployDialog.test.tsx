@@ -43,16 +43,17 @@ function renderDialog(overrides: {
 } = {}) {
   const onSaveAsTemplate = overrides.onSaveAsTemplate ?? vi.fn().mockResolvedValue(baseDocument({ id: 2, start_type: 'template' }));
   const onClose = vi.fn();
+  const onViewValidation = vi.fn();
   const document = overrides.document ?? baseDocument();
   const documentSettings = overrides.documentSettings ?? documentSettingsOf(document);
   const content = overrides.content ?? document.content;
   render(
     <ExportDeployDialog
       document={document} documentSettings={documentSettings} content={content}
-      onSaveAsTemplate={onSaveAsTemplate} onClose={onClose}
+      onSaveAsTemplate={onSaveAsTemplate} onClose={onClose} onViewValidation={onViewValidation}
     />,
   );
-  return { onSaveAsTemplate, onClose };
+  return { onSaveAsTemplate, onClose, onViewValidation };
 }
 
 describe('ExportDeployDialog', () => {
@@ -240,5 +241,55 @@ describe('ExportDeployDialog', () => {
     const { onClose } = renderDialog();
     await user.keyboard('{Escape}');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  // Phase E1 (Export -> Validation nav)
+  describe('View in Validation', () => {
+    it('does not appear for a clean document with no issues', () => {
+      // baseDocument()'s default empty title/subject each trigger a
+      // warning on their own (see emailValidation.ts's document:missing-
+      // title/-subject checks) — a genuinely zero-issue document needs
+      // both set, matching ValidationCenterPanel.test.tsx's own "clean
+      // document" fixture convention.
+      const document = baseDocument({ email_title: 'Test Email', email_subject: 'Test subject' });
+      renderDialog({ document, documentSettings: documentSettingsOf(document) });
+      expect(screen.queryByRole('button', { name: /View in Validation/ })).not.toBeInTheDocument();
+    });
+
+    it('appears when the document has a blocking error, and clicking it closes the dialog and hands off the first error issue id', async () => {
+      const user = userEvent.setup();
+      const image = createModule('image', 0);
+      const document = baseDocument({ content: { version: 1, modules: [image] } });
+      const { onClose, onViewValidation } = renderDialog({ document });
+
+      const link = screen.getByRole('button', { name: /View in Validation/ });
+      await user.click(link);
+
+      expect(onClose).toHaveBeenCalled();
+      expect(onViewValidation).toHaveBeenCalledTimes(1);
+      const [issueId] = onViewValidation.mock.calls[0];
+      expect(typeof issueId).toBe('string');
+      expect(issueId.length).toBeGreaterThan(0);
+    });
+
+    it('also appears for a warning-only document (no blocking gate, but still has issues)', () => {
+      const text = createModule('text', 0) as unknown as EmailModule<{ text: string; color?: string; backgroundColor?: string }>;
+      const badContrast = { ...text, props: { ...text.props, color: '#cccccc', backgroundColor: '#ffffff' } };
+      const document = baseDocument({ content: { version: 1, modules: [badContrast as unknown as EmailModule] } });
+      renderDialog({ document });
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // no blocking gate — warning only
+      expect(screen.getByRole('button', { name: /View in Validation/ })).toBeInTheDocument();
+    });
+
+    it('performs no validation mutation — clicking it never calls onSaveAsTemplate or touches export state', async () => {
+      const user = userEvent.setup();
+      const image = createModule('image', 0);
+      const document = baseDocument({ content: { version: 1, modules: [image] } });
+      const { onSaveAsTemplate } = renderDialog({ document });
+
+      await user.click(screen.getByRole('button', { name: /View in Validation/ }));
+      expect(onSaveAsTemplate).not.toHaveBeenCalled();
+    });
   });
 });

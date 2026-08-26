@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { renderEmailDocument } from './htmlRenderer';
 import { validateEmail, type ValidationIssue } from './emailValidation';
 import { signatureForIssueId } from './repairEngine';
@@ -31,6 +31,12 @@ interface ValidationCenterPanelProps {
   // builder.updateDocumentSettings path DocumentSettingsDialog and the AI
   // Engineer already use — never a new mutation pathway.
   onApplyDocumentFix: (patch: Record<string, unknown>) => void;
+  // Phase E1 (Export -> Validation nav) — when set, the matching issue
+  // card (by the SAME ValidationIssue.id this panel already keys its
+  // list on) is scrolled into view and briefly highlighted on mount/
+  // change. Purely a display effect: it navigates attention, it never
+  // mutates content, applies a fix, or re-runs validation differently.
+  highlightIssueId?: string | null;
 }
 
 const SCORE_CIRCUMFERENCE = 2 * Math.PI * 52;
@@ -67,11 +73,13 @@ const STATUS_LABEL: Record<'good' | 'needs-improvement' | 'needs-attention', str
 // real, reproducible check.
 export function ValidationCenterPanel({
   width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
-  onNavigateToModule, onApplySafeFix, onApplySettingsFix, onApplyDocumentFix,
+  onNavigateToModule, onApplySafeFix, onApplySettingsFix, onApplyDocumentFix, highlightIssueId,
 }: ValidationCenterPanelProps) {
   const [applyingFixId, setApplyingFixId] = useState<string | null>(null);
   const [applyingAll, setApplyingAll] = useState(false);
   const [revalidateNonce, setRevalidateNonce] = useState(0);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const issueCardRefs = useRef<Record<string, HTMLLIElement | null>>({});
   // Sub-phase 8 — advisory-only display ranking, fetched independently of
   // validation (validateEmail stays 100% pure/client-side). Empty on
   // mount, on any fetch failure, and until this user has recorded enough
@@ -141,6 +149,21 @@ export function ValidationCenterPanel({
       (issue) => signatureForIssueId(issue.id),
     );
   }, [report, ranking]);
+
+  // Phase E1 (Export -> Validation nav) — scrolls + briefly highlights
+  // the requested finding once per distinct highlightIssueId (not on
+  // every re-render/revalidate), and only if that id still exists in the
+  // current report. Self-clears after a short delay so returning to this
+  // tab later doesn't re-trigger a stale highlight.
+  useEffect(() => {
+    if (!highlightIssueId || !report) return;
+    if (!report.issues.some((issue) => issue.id === highlightIssueId)) return;
+    issueCardRefs.current[highlightIssueId]?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    setHighlightedId(highlightIssueId);
+    const timer = setTimeout(() => setHighlightedId(null), 2500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when the REQUESTED id changes, not on every revalidate
+  }, [highlightIssueId]);
 
   function applySafeFix(safeFix: NonNullable<ValidationIssue['safeFix']>) {
     if ('documentPatch' in safeFix) {
@@ -273,7 +296,15 @@ export function ValidationCenterPanel({
           ) : (
             <ul className="validation-center-panel__issue-list">
               {rankedIssues.map((issue) => (
-                <li key={issue.id} className="validation-center-panel__issue-card">
+                <li
+                  key={issue.id}
+                  ref={(element) => { issueCardRefs.current[issue.id] = element; }}
+                  className={
+                    issue.id === highlightedId
+                      ? 'validation-center-panel__issue-card validation-center-panel__issue-card--highlighted'
+                      : 'validation-center-panel__issue-card'
+                  }
+                >
                   <span
                     className={`mdaiw-icon mdaiw-icon--${issue.severity === 'error' ? 'error-circle' : 'warning'} validation-center-panel__issue-icon validation-center-panel__issue-icon--${issue.severity}`}
                     aria-hidden="true"
