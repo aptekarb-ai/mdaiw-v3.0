@@ -232,6 +232,31 @@ export function PropertiesPanel({
               {breadcrumb.slice(1).map((segment) => ` › ${segment}`).join('')}
             </p>
           )}
+          {showColumnEditor && selectedColumn ? (
+            // A selected COLUMN is not a module: it has exactly one
+            // relevant property group (width/background/vertical align/
+            // padding, all in ColumnEditor below), never three. The
+            // Content|Style|Settings tabs exist to separate a MODULE's
+            // distinct concerns — showing them here previously left every
+            // tab rendering the identical ColumnEditor (tab state was
+            // ignored in this branch), which is real, visible duplication:
+            // clicking Content, Style, or Settings all showed the exact
+            // same Width/Background color/Vertical alignment/Padding
+            // fields. One contextual panel, no tabs, no duplication.
+            <div className="properties-panel__body" aria-label={`Column ${selectedColumn.columnIndex + 1} settings`}>
+              <PropertySection title={`Column ${selectedColumn.columnIndex + 1} Settings`}>
+                <ColumnEditor
+                  module={module}
+                  column={selectedColumn.column}
+                  columnIndex={selectedColumn.columnIndex}
+                  viewport={viewport}
+                  onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)}
+                  onChangeColumnSettings={(patch) => onUpdateColumnSettings(module.id, selectedColumn.column.id, patch)}
+                />
+              </PropertySection>
+            </div>
+          ) : (
+          <>
           <div className="properties-panel__tabs" role="tablist" aria-label="Property tabs">
             {(['content', 'style', 'settings'] as const).map((tabKey) => (
               <button
@@ -259,18 +284,7 @@ export function PropertiesPanel({
             aria-labelledby={`properties-tab-${tab}`}
             className="properties-panel__body"
           >
-            {showColumnEditor && selectedColumn ? (
-              <PropertySection title={`Column ${selectedColumn.columnIndex + 1}`}>
-                <ColumnEditor
-                  module={module}
-                  column={selectedColumn.column}
-                  columnIndex={selectedColumn.columnIndex}
-                  viewport={viewport}
-                  onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)}
-                  onChangeColumnSettings={(patch) => onUpdateColumnSettings(module.id, selectedColumn.column.id, patch)}
-                />
-              </PropertySection>
-            ) : tab === 'settings' ? (
+            {tab === 'settings' ? (
               <>
                 <PropertySection title="Visibility">
                   <VisibilitySettings
@@ -331,6 +345,8 @@ export function PropertiesPanel({
               <ModuleEditor module={module} tab={tab} viewport={viewport} onUpdateProps={onUpdateProps} />
             )}
           </div>
+          </>
+          )}
         </>
       )}
     </aside>

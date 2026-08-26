@@ -706,6 +706,150 @@ describe('EmailBuilderWorkspacePage — Feature 05 Layout Builder', () => {
   });
 });
 
+// Column Properties UI Deduplication — a selected COLUMN previously still
+// showed the Content|Style|Settings module tabs, but the panel body
+// ignored `tab` in that state and always rendered the same ColumnEditor —
+// so clicking any of the 3 tabs showed the identical Width/Background
+// color/Vertical alignment/Padding fields. Fixed: no tabs at all while a
+// column is selected, one contextual "Column N Settings" panel only.
+describe('EmailBuilderWorkspacePage — Column Properties UI Deduplication', () => {
+  function propertiesPanel() {
+    return screen.getByRole('complementary', { name: 'Module properties' });
+  }
+
+  async function addTwoColumnsAndSelectColumn(user: ReturnType<typeof userEvent.setup>, columnIndex: 0 | 1) {
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(await screen.findByRole('button', { name: `Column ${columnIndex + 1}, empty` }));
+  }
+
+  it('selecting a column shows no Content/Style/Settings tabs, and each column property appears exactly once', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await addTwoColumnsAndSelectColumn(user, 0);
+
+    const panel = within(propertiesPanel());
+    expect(panel.queryByRole('tab', { name: 'Content' })).not.toBeInTheDocument();
+    expect(panel.queryByRole('tab', { name: 'Style' })).not.toBeInTheDocument();
+    expect(panel.queryByRole('tab', { name: 'Settings' })).not.toBeInTheDocument();
+    expect(panel.queryByRole('tablist')).not.toBeInTheDocument();
+
+    expect(panel.getByText('Column 1 Settings')).toBeInTheDocument();
+    expect(panel.getAllByLabelText(/^Width/)).toHaveLength(1);
+    expect(panel.getAllByLabelText('Background color hex value')).toHaveLength(1);
+    expect(panel.getAllByLabelText('Vertical alignment')).toHaveLength(1);
+    expect(panel.getAllByText(/Column Padding \(px\)/)).toHaveLength(1);
+  });
+
+  it('column property values are column-specific — Column 2 does not show Column 1\'s values', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await addTwoColumnsAndSelectColumn(user, 0);
+
+    const panel = within(propertiesPanel());
+    await user.clear(panel.getByLabelText('Background color hex value'));
+    await user.type(panel.getByLabelText('Background color hex value'), '#FF0000');
+    await waitFor(() => expect(panel.getByLabelText('Background color hex value')).toHaveValue('#FF0000'));
+
+    // Select Column 2 — its own (untouched, empty) background value shows,
+    // not Column 1's freshly-typed one.
+    await user.click(screen.getByRole('button', { name: 'Column 2, empty' }));
+    expect(panel.getByLabelText('Background color hex value')).toHaveValue('');
+  });
+
+  it('editing Column 2 does not modify Column 1', async () => {
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await addTwoColumnsAndSelectColumn(user, 1);
+
+    const panel = within(propertiesPanel());
+    const widthInput = panel.getByLabelText(/^Width/);
+    await user.clear(widthInput);
+    await user.type(widthInput, '30');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          // Column 1 (index 0) stays at its original 50; only Column 2 (index 1) changed.
+          expect.objectContaining({ props: expect.objectContaining({ columnWidths: [50, 30] }) }),
+        ]),
+      }),
+    })));
+  });
+
+  it('switching from a selected column back to a normal module restores the Content/Style/Settings tabs', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await addTwoColumnsAndSelectColumn(user, 0);
+
+    const panel = within(propertiesPanel());
+    expect(panel.queryByRole('tablist')).not.toBeInTheDocument();
+
+    // Add a top-level text module — becomes the new (normal module) selection.
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    expect(panel.getByRole('tab', { name: 'Content' })).toBeInTheDocument();
+    expect(panel.getByRole('tab', { name: 'Style' })).toBeInTheDocument();
+    expect(panel.getByRole('tab', { name: 'Settings' })).toBeInTheDocument();
+  });
+
+  it('selecting the LAYOUT itself (not a column) still shows normal tabs with no redundant structural controls across them', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+
+    const panel = within(propertiesPanel());
+    // Content tab: read-only structure overview (no editable width inputs).
+    expect(panel.getByText('Column structure')).toBeInTheDocument();
+    expect(panel.queryByRole('spinbutton')).not.toBeInTheDocument();
+
+    // Style tab: the one editable bulk column-widths control + gutter — a
+    // legitimately different view (all columns at once) from a single
+    // selected column's own Width field, not a duplicate of it. Scoped to
+    // the Column Widths group specifically (the tab also has a separate,
+    // legitimately distinct Column Gutter spinbutton alongside it).
+    await user.click(panel.getByRole('tab', { name: 'Style' }));
+    const widthsGroup = panel.getByText('Column Widths').closest('.properties-panel__field-group') as HTMLElement;
+    expect(within(widthsGroup).getAllByRole('spinbutton')).toHaveLength(2); // one per column, appearing once each
+
+    // Settings tab: module-level settings for the layout wrapper itself —
+    // no column widths/background/vertical-align controls appear here.
+    await user.click(panel.getByRole('tab', { name: 'Settings' }));
+    expect(panel.queryByText('Column Widths')).not.toBeInTheDocument();
+    expect(panel.queryByLabelText('Background color hex value')).not.toBeInTheDocument();
+  });
+
+  it('the rendered/exported HTML is unaffected — column width edited via the column-selected panel still renders the correct percentage', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await addTwoColumnsAndSelectColumn(user, 0);
+
+    const panel = within(propertiesPanel());
+    const widthInput = panel.getByLabelText(/^Width/);
+    await user.clear(widthInput);
+    await user.type(widthInput, '65');
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('width="65%"');
+  });
+});
+
 describe('EmailBuilderWorkspacePage — Module-4 Final Gap Closure, Correction 2 (Feature 05 Desktop column direction)', () => {
   function columnSettings() {
     return { desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 }, mobile: {}, backgroundColor: '', verticalAlign: 'top' as const };
