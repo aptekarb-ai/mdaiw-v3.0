@@ -1946,8 +1946,10 @@ from .ai_command import (  # noqa: E402
     CommandResult,
     FallbackEmailCommandProvider,
     RuleBasedEmailCommandProvider,
+    _contrast_ratio,
     _resolve_color,
     get_default_email_command_provider,
+    minimal_readable_foreground,
     requires_confirmation,
     requires_strong_confirmation,
     resolve_asset_references,
@@ -2339,6 +2341,96 @@ class RuleBasedEmailCommandProviderTests(TestCase):
         self.assertEqual(result.action, {
             'type': ActionType.INSERT_NESTED_MODULE, 'module_type': 'text', 'patch': {},
         })
+
+
+class MinimalReadableForegroundTests(TestCase):
+    """Pure math — mirrors emailValidation.ts's WCAG contrast formula
+    exactly, so the deterministic router's notion of AA-passing never
+    diverges from what Validation Center itself reports on revalidation."""
+
+    def test_contrast_ratio_matches_known_textbook_value(self):
+        # #999999 on #ffffff is a commonly-cited ~2.85:1 WCAG example.
+        ratio = _contrast_ratio('#999999', '#ffffff')
+        self.assertAlmostEqual(ratio, 2.85, delta=0.05)
+
+    def test_darkens_gray_text_on_white_to_reach_aa(self):
+        fix = minimal_readable_foreground('#999999', '#ffffff')
+        self.assertIsNotNone(fix)
+        self.assertEqual(fix['old_color'], '#999999')
+        self.assertGreaterEqual(fix['new_ratio'], 4.5)
+        self.assertLess(fix['old_ratio'], 4.5)
+        # Smallest practical adjustment — darkened, not flipped to black,
+        # and the result must actually satisfy AA against the real bg.
+        new_rgb = tuple(int(fix['new_color'][i:i + 2], 16) for i in (1, 3, 5))
+        self.assertLess(sum(new_rgb), sum((0x99, 0x99, 0x99)))
+        self.assertAlmostEqual(_contrast_ratio(fix['new_color'], '#ffffff'), fix['new_ratio'], delta=0.01)
+
+    def test_lightens_light_gray_text_on_black_to_reach_aa(self):
+        fix = minimal_readable_foreground('#666666', '#000000')
+        self.assertIsNotNone(fix)
+        self.assertGreaterEqual(fix['new_ratio'], 4.5)
+        new_rgb = tuple(int(fix['new_color'][i:i + 2], 16) for i in (1, 3, 5))
+        self.assertGreater(sum(new_rgb), sum((0x66, 0x66, 0x66)))
+
+    def test_declines_when_already_passing(self):
+        self.assertIsNone(minimal_readable_foreground('#000000', '#ffffff'))
+
+    def test_declines_when_foreground_already_at_lightness_extreme(self):
+        # White text against a background where white itself is
+        # insufficient — no headroom to go any lighter than white.
+        self.assertIsNone(minimal_readable_foreground('#ffffff', '#5b9bd5'))
+
+    def test_declines_on_non_hex_color(self):
+        self.assertIsNone(minimal_readable_foreground('rgb(1,2,3)', '#ffffff'))
+        self.assertIsNone(minimal_readable_foreground('#999999', 'transparent'))
+
+
+class WeakContrastDeterministicFixTests(TestCase):
+    """C-2 remediation — the deterministic (no-LLM) provider must be able
+    to fix weak text contrast on its own, with zero configuration."""
+
+    def setUp(self):
+        self.provider = RuleBasedEmailCommandProvider()
+
+    def test_no_selection_asks_to_select_a_module(self):
+        result = self.provider.resolve('fix this weak contrast', {})
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('Select a module', result.reply)
+
+    def test_proposes_a_real_wcag_compliant_color_for_text_module(self):
+        context = {'selected_module': _selected('text', color='#999999', backgroundColor='#ffffff')}
+        result = self.provider.resolve('fix this weak contrast', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_MODULE_PROPS)
+        self.assertEqual(result.action['module_type'], 'text')
+        new_color = result.action['patch']['color']
+        self.assertGreaterEqual(_contrast_ratio(new_color, '#ffffff'), 4.5)
+        self.assertIn('#999999', result.reply)
+        self.assertIn(new_color, result.reply)
+
+    def test_uses_textcolor_key_for_button_module(self):
+        context = {'selected_module': _selected('button', textColor='#999999', backgroundColor='#ffffff')}
+        result = self.provider.resolve('fix the text contrast', context)
+        self.assertEqual(result.action['module_type'], 'button')
+        self.assertIn('textColor', result.action['patch'])
+        self.assertGreaterEqual(_contrast_ratio(result.action['patch']['textColor'], '#ffffff'), 4.5)
+
+    def test_declines_when_background_image_present(self):
+        context = {'selected_module': _selected(
+            'text', color='#999999', backgroundColor='#ffffff', backgroundImage='https://cdn.example.com/bg.jpg',
+        )}
+        result = self.provider.resolve('fix this weak contrast', context)
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('background image', result.reply)
+
+    def test_declines_when_already_passing(self):
+        context = {'selected_module': _selected('text', color='#000000', backgroundColor='#ffffff')}
+        result = self.provider.resolve('fix this weak contrast', context)
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+
+    def test_proposed_action_survives_validate_action(self):
+        context = {'selected_module': _selected('text', color='#999999', backgroundColor='#ffffff')}
+        result = self.provider.resolve('fix this weak contrast', context)
+        self.assertIsNotNone(validate_action(result.action))
 
 
 class ResolveColorTests(TestCase):
@@ -5145,6 +5237,40 @@ class OpenAIEmailCommandProviderComposeTests(TestCase):
             result = provider.resolve('Build a newsletter with two content sections', {})
         self.assertEqual(result.action['type'], ActionType.COMPOSE_EMAIL)
         self.assertEqual(result.provider, 'deterministic')
+
+
+class AICommandSystemPromptGuardrailTests(TestCase):
+    """C-1/C-2/C-3 remediation contract — cannot be exercised through a
+    live LLM call in this environment (no API key configured), so this
+    verifies the guardrail text itself ships to the model in both
+    optional providers' system prompts, at the same parity the existing
+    'never invent image URLs' rule already established."""
+
+    def test_openai_prompt_forbids_inventing_link_urls(self):
+        self.assertIn('never invent a destination URL', ai_command_openai_module._SYSTEM_PROMPT)
+        self.assertIn('ask the user for the destination URL', ai_command_openai_module._SYSTEM_PROMPT)
+
+    def test_openai_prompt_requires_real_vml_new_outlook_honesty(self):
+        self.assertIn('never claim it will make New Outlook', ai_command_openai_module._SYSTEM_PROMPT)
+
+    def test_openai_prompt_requires_computed_contrast_with_before_after_reporting(self):
+        prompt = ai_command_openai_module._SYSTEM_PROMPT
+        self.assertIn('WCAG AA-compliant replacement', prompt)
+        self.assertIn('4.5:1', prompt)
+        self.assertIn('the old color, the proposed color, the old ratio, and the resulting ratio', prompt)
+
+    def test_local_prompt_forbids_inventing_link_urls(self):
+        self.assertIn('never invent a destination URL', ai_command_local_module._SYSTEM_PROMPT)
+        self.assertIn('ask the user for the destination URL', ai_command_local_module._SYSTEM_PROMPT)
+
+    def test_local_prompt_requires_real_vml_new_outlook_honesty(self):
+        self.assertIn('never claim it will make New Outlook', ai_command_local_module._SYSTEM_PROMPT)
+
+    def test_local_prompt_requires_computed_contrast_with_before_after_reporting(self):
+        prompt = ai_command_local_module._SYSTEM_PROMPT
+        self.assertIn('WCAG AA-compliant replacement', prompt)
+        self.assertIn('4.5:1', prompt)
+        self.assertIn('the old color, the proposed color, the old ratio, and the resulting ratio', prompt)
 
 
 class LocalEmailCommandProviderComposeTests(TestCase):

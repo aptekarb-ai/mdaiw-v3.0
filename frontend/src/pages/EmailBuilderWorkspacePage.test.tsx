@@ -131,10 +131,32 @@ describe('EmailBuilderWorkspacePage', () => {
     expect(await screen.findByText('Start building your email')).toBeInTheDocument();
   });
 
-  it('shows "Email not found" for a 404', async () => {
+  it('shows "Email not found" for a 404 with a recovery link back to the dashboard', async () => {
     vi.mocked(client.getEmailDocument).mockRejectedValue({ status: 404, message: 'Not found' });
     renderPage();
     expect(await screen.findByText('Email not found.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to Email Dashboard' })).toHaveAttribute(
+      'href',
+      '/email-builder',
+    );
+  });
+
+  it('shows a Try Again action on a load error, which retries the same document id', async () => {
+    vi.mocked(client.getEmailDocument).mockRejectedValueOnce({ status: 500, message: 'Server error' });
+    vi.mocked(client.getEmailDocument).mockResolvedValueOnce(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Server error');
+    expect(screen.getByRole('link', { name: 'Back to Email Dashboard' })).toHaveAttribute(
+      'href',
+      '/email-builder',
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Try Again' }));
+
+    expect(await screen.findByText('Start building your email')).toBeInTheDocument();
+    expect(client.getEmailDocument).toHaveBeenCalledTimes(2);
   });
 
   it('clicking a module in the panel adds it to the canvas', async () => {

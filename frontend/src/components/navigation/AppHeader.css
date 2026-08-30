@@ -61,21 +61,66 @@
 }
 
 .app-header__search button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--color-text-dark);
   cursor: pointer;
+}
+
+.app-header__search button:hover {
+  background: var(--color-white);
+}
+
+.app-header__search button:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
 }
 
 .app-header__actions {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-2);
+  /* .app-header__search caps at max-width: 420px, so once the viewport is
+     wider than menu-toggle + search(420px) + actions, plain flex leaves
+     this group sitting right after the search box instead of at the
+     header's own right edge. margin-left: auto consumes exactly that
+     leftover flex space — the standard flex idiom for "push to the end
+     of the row", not a fixed pixel offset tied to any viewport width. */
+  margin-left: auto;
 }
 
 .app-header__actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
   border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--color-text-dark);
   cursor: pointer;
+}
+
+.app-header__actions button:hover:not(:disabled) {
+  background: var(--color-background-light);
+}
+
+.app-header__actions button:focus-visible {
+  outline: 2px solid var(--color-primary-blue);
+  outline-offset: 2px;
+}
+
+.app-header__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .app-header__profile img {

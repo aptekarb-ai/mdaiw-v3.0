@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router';
+import { Link, useParams, useSearchParams } from 'react-router';
 import { getEmailDocument, updateEmailDocument } from '../api/client';
 import type { EmailDocument as EmailDocumentRecord } from '../emailbuilder/types';
 import { normalizeContent } from '../emailbuilder/edmMigration';
@@ -85,6 +85,11 @@ export function EmailBuilderWorkspacePage() {
 
   const builder = useEmailBuilderState();
   const savedModulesState = useSavedModules();
+  // Professional QA pass — a real network/server failure (never a 404,
+  // which has no sensible retry) must offer a way to try again without a
+  // full page reload. Bumping this re-runs the load effect below with the
+  // exact same id.
+  const [retryToken, setRetryToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,8 +130,8 @@ export function EmailBuilderWorkspacePage() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per id; builder is a stable-callback hook instance
-  }, [id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload on id change OR an explicit Try Again click; builder is a stable-callback hook instance
+  }, [id, retryToken]);
 
   // Module-4 Navigation Completion, Phase A — one-shot deep-link handling
   // for the standalone entry points. Applies at most once per page load
@@ -711,6 +716,9 @@ export function EmailBuilderWorkspacePage() {
     return (
       <div className="email-builder-workspace__status">
         <p>Email not found.</p>
+        <Link to="/email-builder" className="email-builder-workspace__status-link">
+          Back to Email Dashboard
+        </Link>
       </div>
     );
   }
@@ -719,6 +727,18 @@ export function EmailBuilderWorkspacePage() {
     return (
       <div className="email-builder-workspace__status" role="alert">
         <p>{loadError ?? 'We could not load this email. Please try again.'}</p>
+        <div className="email-builder-workspace__status-actions">
+          <button
+            type="button"
+            className="email-builder-workspace__status-retry"
+            onClick={() => setRetryToken((token) => token + 1)}
+          >
+            Try Again
+          </button>
+          <Link to="/email-builder" className="email-builder-workspace__status-link">
+            Back to Email Dashboard
+          </Link>
+        </div>
       </div>
     );
   }

@@ -13,13 +13,13 @@
 }
 
 .create-email-page__body {
-  display: grid;
-  grid-template-columns: 170px minmax(0, 1fr);
-  gap: var(--space-8);
-  align-items: start;
+  width: 100%;
 }
 
 .create-email-page__form {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -147,7 +147,8 @@
   border: 0;
 }
 
-.create-email-page__card:has(.create-email-page__radio-input:focus-visible) {
+.create-email-page__card:has(.create-email-page__radio-input:focus-visible),
+.create-email-page__width-chip:has(.create-email-page__radio-input:focus-visible) {
   outline: 2px solid var(--color-primary-blue);
   outline-offset: 2px;
 }
@@ -278,6 +279,31 @@
   box-shadow: 0 0 0 2px var(--color-info-bg), 0 0 0 4px rgba(0, 130, 173, 0.25);
 }
 
+/* AI Generate's brief textarea reuses this shared field wrapper but isn't
+   an <input>, so FormField's input[type='...'] rules never reach it — it
+   was rendering fully unstyled (native monospace, 0 radius, 2px padding).
+   Match the same input styling (FormField.css) instead of duplicating a
+   third form-control skin. */
+.create-email-page__field textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text-dark);
+  background: var(--color-white);
+  resize: vertical;
+}
+
+.create-email-page__field textarea:focus-visible {
+  outline: none;
+  border-color: var(--color-primary-blue);
+  box-shadow: 0 0 0 2px var(--color-info-bg), 0 0 0 4px rgba(0, 130, 173, 0.25);
+}
+
 .create-email-page__custom-width {
   display: flex;
   align-items: flex-end;
@@ -340,10 +366,6 @@
 }
 
 @media (max-width: 1023px) {
-  .create-email-page__body {
-    grid-template-columns: 1fr;
-  }
-
   .create-email-page__platform-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

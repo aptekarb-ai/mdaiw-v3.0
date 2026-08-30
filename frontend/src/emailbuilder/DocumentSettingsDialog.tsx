@@ -155,6 +155,10 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
         </div>
 
         <div className="document-settings-dialog__body">
+          <section className="document-settings-dialog__group" aria-labelledby="document-settings-group-metadata">
+            <h3 id="document-settings-group-metadata" className="document-settings-dialog__group-heading">
+              Email Metadata
+            </h3>
           <div className="document-settings-dialog__field">
             <label htmlFor="document-settings-title">Email Title</label>
             <input
@@ -235,7 +239,12 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
               Optional. Must be a public https:// (or http://) URL — pick from your Asset Manager or paste a link.
             </p>
           </div>
+          </section>
 
+          <section className="document-settings-dialog__group" aria-labelledby="document-settings-group-css">
+            <h3 id="document-settings-group-css" className="document-settings-dialog__group-heading">
+              CSS &amp; Rendering
+            </h3>
           <div className="document-settings-dialog__field">
             <label className="document-settings-dialog__checkbox-row">
               <input
@@ -304,7 +313,12 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
               Custom CSS), so it intentionally wins where specificity is equal.
             </p>
           </div>
+          </section>
 
+          <section className="document-settings-dialog__group" aria-labelledby="document-settings-group-compat">
+            <h3 id="document-settings-group-compat" className="document-settings-dialog__group-heading">
+              Email Client Compatibility
+            </h3>
           <div className="document-settings-dialog__field">
             <label className="document-settings-dialog__checkbox-row">
               <input
@@ -320,6 +334,7 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
               choice; this is the default for every other module.
             </p>
           </div>
+          </section>
         </div>
 
         <div className="document-settings-dialog__actions">

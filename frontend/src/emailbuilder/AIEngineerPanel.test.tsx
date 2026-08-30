@@ -786,4 +786,110 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
     expect(screen.getByText(/Ask the AI Engineer to add a module/)).toBeInTheDocument();
     expect(screen.queryByText('add a button')).not.toBeInTheDocument();
   });
+
+  // C-3 remediation — placeholder-link conversational completion. The AI
+  // must never invent a destination URL; once it asks for one, a later
+  // bare-URL reply must be understood as the answer to THAT specific
+  // repair (targeting the real moduleId, never whatever's selected) —
+  // without a second network round trip, reusing the existing
+  // pendingRepair confirmation card unchanged.
+  describe('placeholder-link conversational completion', () => {
+    function buttonModuleWithPlaceholderLink() {
+      const button = createModule('button', 0);
+      return { ...button, props: { ...button.props, href: '' } };
+    }
+
+    it('a bare URL reply after the AI asks for one proposes the repair without a second network call', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(response({
+        reply: "I won't guess a destination for this link. What URL should it go to?",
+        action: { type: 'NONE' },
+      }));
+      const button = buttonModuleWithPlaceholderLink();
+      renderPanel({ content: { version: 1, modules: [button] } });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'review the placeholder link issue');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText(/won't guess a destination/);
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'https://example.com/shop');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(await screen.findByText('Repair 1 issue')).toBeInTheDocument();
+      expect(screen.getByText('Placeholder link')).toBeInTheDocument();
+      expect(screen.getAllByText('https://example.com/shop').length).toBeGreaterThan(0);
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('Apply on the resulting repair card patches only the correct module', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(response({
+        reply: "I won't guess a destination for this link. What URL should it go to?",
+        action: { type: 'NONE' },
+      }));
+      const button = buttonModuleWithPlaceholderLink();
+      const { onApplyRepairAction } = renderPanel({ content: { version: 1, modules: [button] } });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'review the placeholder link issue');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText(/won't guess a destination/);
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'https://example.com/shop');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText('Repair 1 issue');
+
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      expect(onApplyRepairAction).toHaveBeenCalledWith([
+        { kind: 'module', issueId: 'links:placeholder-href', moduleId: button.id, propPatch: { href: 'https://example.com/shop' } },
+      ]);
+    });
+
+    it('rejects a javascript: URL and keeps the repair pending for a retry', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(response({
+        reply: "I won't guess a destination for this link. What URL should it go to?",
+        action: { type: 'NONE' },
+      }));
+      const button = buttonModuleWithPlaceholderLink();
+      renderPanel({ content: { version: 1, modules: [button] } });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'review the placeholder link issue');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText(/won't guess a destination/);
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'javascript://alert(1)');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(await screen.findByText(/isn't an allowed link type/)).toBeInTheDocument();
+      expect(screen.queryByText('Repair 1 issue')).not.toBeInTheDocument();
+
+      // Still pending — a real URL now completes it.
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'https://example.com/shop');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      expect(await screen.findByText('Repair 1 issue')).toBeInTheDocument();
+    });
+
+    it('"cancel" clears the pending repair instead of demanding a URL forever', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(response({
+        reply: "I won't guess a destination for this link. What URL should it go to?",
+        action: { type: 'NONE' },
+      }));
+      const button = buttonModuleWithPlaceholderLink();
+      renderPanel({ content: { version: 1, modules: [button] } });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'review the placeholder link issue');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText(/won't guess a destination/);
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'cancel');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(await screen.findByText(/no longer pending/)).toBeInTheDocument();
+      expect(screen.queryByText('Repair 1 issue')).not.toBeInTheDocument();
+    });
+  });
 });

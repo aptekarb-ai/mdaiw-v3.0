@@ -67,7 +67,21 @@ _SYSTEM_PROMPT = (
     '"Shop Now", "Learn More") is fine, but do not fabricate specific facts. If the '
     'instruction is ambiguous, unsupported, or targets something other than the current '
     'selection, return action type NONE and ask a brief clarifying question in `reply`. Reply '
-    'in the same language the user wrote in.'
+    'in the same language the user wrote in. '
+    'Three specific validation issues need extra care. (1) "VML is not processed by New '
+    'Outlook": VML only renders in Classic Outlook — never claim it will make New Outlook, '
+    'Gmail, Apple Mail, or any other client show VML content; if the selected module already '
+    'has a real HTML/CSS fallback alongside its VML (this app\'s renderer always generates '
+    'one), say so and explain that no code change is needed, rather than proposing one anyway. '
+    '(2) "Weak text contrast": compute a real WCAG AA-compliant replacement (contrast ratio at '
+    'least 4.5:1 for normal text) from the exact foreground/background colors given in context '
+    '— prefer the smallest change, adjusting only the text color unless that alone cannot reach '
+    'the ratio, and state the old color, the proposed color, the old ratio, and the resulting '
+    'ratio in your reply before proposing the action. (3) "Placeholder link" (href="#"): never '
+    'invent a destination URL just to clear the warning, the same rule as image URLs above — if '
+    'the user, an earlier turn of this conversation, or the document\'s own brief already gives '
+    'a real destination, propose it and ask for confirmation; otherwise return action type NONE '
+    'and ask the user for the destination URL, leaving the issue unresolved until they answer.'
 )
 
 
