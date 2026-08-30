@@ -52,7 +52,9 @@ export function renderEmailBody(document: RenderableEmail): string {
     .map((module, index) => {
       const number = String(index + 1);
       const definition = resolveModuleDefinition(module.type);
-      const rendered = resolveNestedModuleParentPlaceholder(renderModuleWithOuterStructure(module), number);
+      const rendered = resolveNestedModuleParentPlaceholder(
+        renderModuleWithOuterStructure(module, document.width), number,
+      );
       const commented = wrapModuleComment(rendered, `${number}: ${(definition?.label ?? module.type).toUpperCase()}`);
       return `<tr><td>${commented}</td></tr>`;
     })

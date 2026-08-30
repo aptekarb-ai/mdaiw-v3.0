@@ -22,7 +22,7 @@ import type {
   ButtonModuleProps, ButtonWidthMode, EmailColumn, EmailDocumentContent, EmailModule, ImageModuleProps,
   SpacerModuleProps, TextModuleProps,
 } from './edm';
-import { resolveOuterSpacing, resolveSpacing, resolveVisible } from './edm';
+import { resolveDesktopGutterPx, resolveMobileGutterPx, resolveOuterSpacing, resolveSpacing, resolveVisible } from './edm';
 import { percent, resolveDimension, widthCssValue, type DimensionValue, type ResponsiveDimension } from './dimensions';
 import { moduleResponsiveClassName, paddingStyle } from './registryCore';
 
@@ -182,23 +182,39 @@ function layoutRules(module: EmailModule): string[] {
   if (!stack) return [];
 
   const rules: string[] = [];
-  const gutterDesktop = module.settings.columnGutter?.desktop;
-  const gutterMobileExplicit = module.settings.columnGutter?.mobile;
-  // Mobile gutter: explicit override wins; otherwise stacking auto-
-  // collapses the horizontal gutter to 0 (instruction 23 — "should
-  // normally collapse to 0... do not leave a 20px spacer TD creating
-  // strange horizontal indentation on stacked columns").
-  const mobileGutterValue = gutterMobileExplicit
-    ? gutterMobileExplicit.value
-    : (gutterDesktop && gutterDesktop.value > 0 ? 0 : undefined);
+  // Independently Configurable Desktop/Mobile Gutter — columnGutterPx
+  // and mobileColumnGutterPx are two fully separate stored values
+  // (never derived from each other); Mobile width is ALWAYS 100%
+  // regardless of either — neither gutter value ever participates in
+  // Mobile column WIDTH math, only (optionally) in vertical spacing
+  // between stacked columns.
+  const gutterDesktopPx = resolveDesktopGutterPx(module.settings);
+  const mobileGutterPx = resolveMobileGutterPx(module.settings);
+  const gutterActive = gutterDesktopPx > 0 || mobileGutterPx > 0;
+  // The single display toggle (a layout-level checkbox beside the two
+  // gutter fields in ColumnEditor.tsx). Default true = no vertical
+  // gutter on Mobile, today's original behavior. Never mutates/resets
+  // either gutter value — purely which one of these two rules renders.
+  const hideGutterOnMobile = module.settings.hideGutterOnMobile !== false;
 
   columns.forEach((_column: EmailColumn, index: number) => {
     const colCls = columnResponsiveClassName(module.id, index);
     rules.push(`.${colCls}{display:block !important; width:100% !important;}`);
     if (index < columns.length - 1) {
       const gutCls = gutterResponsiveClassName(module.id, index);
-      if (mobileGutterValue !== undefined && gutterDesktop && mobileGutterValue !== gutterDesktop.value) {
-        rules.push(`.${gutCls}{display:none !important; width:0 !important; height:0 !important;}`);
+      if (gutterActive) {
+        if (hideGutterOnMobile) {
+          rules.push(`.${gutCls}{display:none !important; width:0 !important; height:0 !important;}`);
+        } else {
+          // The gutter becomes a real vertical spacer between the now-
+          // stacked columns, sized to the INDEPENDENT Mobile gutter
+          // value — never the Desktop one, never left as a horizontal-
+          // width element once columns stack.
+          rules.push(
+            `.${gutCls}{display:block !important; width:100% !important; `
+            + `height:${mobileGutterPx}px !important; font-size:0 !important; line-height:0 !important;}`,
+          );
+        }
       }
       // Mobile vertical gap between stacked columns (instruction 24) —
       // a real TD-compatible spacer via padding-bottom on every stacked

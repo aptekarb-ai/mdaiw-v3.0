@@ -1,6 +1,6 @@
 import { useState, type DragEvent, type KeyboardEvent } from 'react';
 import type { EmailColumn, EmailModule, EmailModuleType } from './edm';
-import { resolveColumnGutter, resolveOuterSpacing, resolveSpacing } from './edm';
+import { resolveDesktopGutterPx, resolveMobileGutterPx, resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
 import type { BuilderViewMode } from './registryCore';
 import { outerSpacingPx } from './dimensions';
@@ -51,10 +51,11 @@ export function LayoutCanvasModule({
   const columns = layout.columns ?? [];
   const columnWidths = (layout.props as { columnWidths: number[] }).columnWidths;
   const stacked = viewport === 'mobile' && layout.settings.mobileStack !== false;
-  const gutterPx = (() => {
-    const dimension = resolveColumnGutter(layout.settings, viewport);
-    return dimension.unit === 'px' ? dimension.value : 0;
-  })();
+  // Independently Configurable Desktop/Mobile Gutter — the canvas
+  // preview's own (non-stacked) side-by-side gap uses whichever gutter
+  // value belongs to the CURRENT viewport toggle, never derived from the
+  // other one.
+  const gutterPx = viewport === 'mobile' ? resolveMobileGutterPx(layout.settings) : resolveDesktopGutterPx(layout.settings);
 
   // Module-4 Final Gap Closure, Correction 2 (Feature 05) — the Desktop
   // visual sequence, as an array of ORIGINAL column indexes (never a

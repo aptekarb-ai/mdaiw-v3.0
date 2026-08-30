@@ -432,6 +432,15 @@
   gap: var(--space-3);
 }
 
+/* Column Widths UI refinement — visual separation from the Column
+   Gutter/Column Spacing section that immediately follows it in the
+   Style tab (both are rendered as plain sibling field-groups with no
+   PropertySection wrapper, so .properties-panel__body's gap:0 leaves
+   zero space between them otherwise). */
+.properties-panel__field-group--column-widths {
+  margin-bottom: 18px;
+}
+
 .properties-panel__column-width-input {
   display: flex;
   align-items: center;

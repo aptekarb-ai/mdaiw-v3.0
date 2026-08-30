@@ -152,7 +152,17 @@ export interface ModuleDefinition<Props = Record<string, unknown>> {
   supportsBulletproofCta?: boolean;
   supportsBulletproofBackground?: boolean;
   renderPreview: (module: EmailModule<Props>, viewport?: BuilderViewMode) => ReactNode;
-  renderEmailHtml: (module: EmailModule<Props>) => string;
+  // Column Width + Gutter Rendering Correction — `availableWidthPx` is the
+  // actual pixel width of THIS module's immediate parent container (the
+  // document width at top level, narrowed by any px/%-valued outer
+  // spacing already applied above it — see renderModuleWithOuterStructure
+  // below). Optional because only catalog/layoutCatalog.tsx's layout
+  // definitions actually use it (for gutter-aware column pixel math);
+  // every other module definition safely ignores the extra argument, and
+  // existing tests that call a non-layout definition's renderEmailHtml
+  // directly (bypassing the centralized entry point below, where a real
+  // value is always supplied) keep working unchanged.
+  renderEmailHtml: (module: EmailModule<Props>, availableWidthPx?: number) => string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the registry is intentionally heterogeneous (each entry has its own Props shape); callers narrow via getModuleDefinition() + a type-specific cast where they need one.
@@ -355,12 +365,49 @@ export function moduleResponsiveClassName(moduleId: string): string {
   return `m-eb-${moduleId.replace(/[^a-zA-Z0-9]/g, '')}`;
 }
 
-export function renderModuleWithOuterStructure(module: EmailModule): string {
+// Column Width + Gutter Rendering Correction — the pixel width actually
+// available to a module's OWN content, after this module's own outer
+// spacer columns (left/right) are subtracted from its immediate parent's
+// width. Handles both px-valued sides (fixed subtraction) and %-valued
+// sides (proportional subtraction) — "immediate parent width" must stay
+// accurate whichever unit outer spacing happens to use, since a layout
+// module's own column/gutter pixel math (see catalog/layoutCatalog.tsx)
+// depends on it being correct, not just approximate.
+// Column Width Display + Responsive Gutter UI Correction — exported so
+// computeLayoutAvailableWidthPx (below) and the Properties panel can
+// compute the EXACT SAME "available width" the real renderer uses for a
+// layout module's own column/gutter math, rather than a second, UI-only
+// approximation.
+export function narrowWidthByOuterSpacing(widthPx: number, outerSpacing: OuterSpacingSides): number {
+  const sideReduction = (side: DimensionValue): number => {
+    if (side.value <= 0) return 0;
+    return side.unit === 'px' ? side.value : (widthPx * side.value) / 100;
+  };
+  const reduced = widthPx - sideReduction(outerSpacing.left) - sideReduction(outerSpacing.right);
+  return Math.max(0, Math.round(reduced));
+}
+
+// Column Width Display + Responsive Gutter UI Correction — the single
+// function the Properties panel calls to learn a top-level layout
+// module's real available pixel width (document width, narrowed by that
+// module's own Desktop outer spacing) — the SAME value
+// renderModuleWithOuterStructure computes right before calling
+// definition.renderEmailHtml. A layout module is always top-level in
+// this architecture (a layout can never nest inside another layout's
+// column — see layoutModel.ts's isLayoutModuleType/one-level-nesting
+// guarantee), so "immediate parent width" for a layout is always
+// documentWidthPx narrowed this same way, never a deeper recursive case.
+export function computeLayoutAvailableWidthPx(module: EmailModule, documentWidthPx: number): number {
+  return narrowWidthByOuterSpacing(documentWidthPx, resolveOuterSpacing(module.settings, 'desktop'));
+}
+
+export function renderModuleWithOuterStructure(module: EmailModule, availableWidthPx: number): string {
   const definition = resolveModuleDefinition(module.type);
   if (!definition) return '';
   const resolvedOuterSpacing = resolveOuterSpacing(module.settings, 'desktop');
   const mobileOuterSpacing = resolveOuterSpacing(module.settings, 'mobile');
-  return wrapWithOuterSpacing(definition.renderEmailHtml(module), resolvedOuterSpacing, {
+  const innerWidthPx = narrowWidthByOuterSpacing(availableWidthPx, resolvedOuterSpacing);
+  return wrapWithOuterSpacing(definition.renderEmailHtml(module, innerWidthPx), resolvedOuterSpacing, {
     mobileOuterSpacing,
     className: moduleResponsiveClassName(module.id),
   });

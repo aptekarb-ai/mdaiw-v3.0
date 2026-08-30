@@ -202,6 +202,24 @@ function normalizeOutlookVml(raw: unknown): EmailModuleSettings['outlookVml'] {
   return typeof raw === 'boolean' ? raw : undefined;
 }
 
+// Configurable Mobile Gutter Behavior — same "undefined (not a default
+// value) when absent/invalid" convention as normalizeOutlookVml above, so
+// the conditional spread below omits the key entirely on every
+// pre-existing document that never opted out of the default (true =
+// hide on mobile, today's exact existing behavior).
+function normalizeHideGutterOnMobile(raw: unknown): EmailModuleSettings['hideGutterOnMobile'] {
+  return typeof raw === 'boolean' ? raw : undefined;
+}
+
+// Independently Configurable Desktop/Mobile Gutter — same "undefined
+// when absent/invalid" convention as the normalizers above, so these two
+// genuinely independent numeric fields each survive Save + Reload on
+// their own (this exact allowlist-drop bug already happened once this
+// session for hideGutterOnMobile — see edmMigration.test.ts).
+function normalizeGutterPx(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : undefined;
+}
+
 function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const settings = (rawSettings ?? {}) as Record<string, unknown>;
   const columnGutter = normalizeColumnGutter(settings.columnGutter);
@@ -214,6 +232,9 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const mobileColumnGap = normalizeMobileColumnGap(settings.mobileColumnGap);
   const outlookVml = normalizeOutlookVml(settings.outlookVml);
   const desktopColumnDirection = normalizeDesktopColumnDirection(settings.desktopColumnDirection);
+  const hideGutterOnMobile = normalizeHideGutterOnMobile(settings.hideGutterOnMobile);
+  const columnGutterPx = normalizeGutterPx(settings.columnGutterPx);
+  const mobileColumnGutterPx = normalizeGutterPx(settings.mobileColumnGutterPx);
 
   if ('desktop' in settings) {
     // Already the current shape — still backfill any field an even-older
@@ -236,6 +257,9 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
       ...(mobileColumnGap ? { mobileColumnGap } : {}),
       ...(outlookVml !== undefined ? { outlookVml } : {}),
       ...(desktopColumnDirection ? { desktopColumnDirection } : {}),
+      ...(hideGutterOnMobile !== undefined ? { hideGutterOnMobile } : {}),
+      ...(columnGutterPx !== undefined ? { columnGutterPx } : {}),
+      ...(mobileColumnGutterPx !== undefined ? { mobileColumnGutterPx } : {}),
     };
   }
 
@@ -257,6 +281,9 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
     ...(mobileColumnGap ? { mobileColumnGap } : {}),
     ...(outlookVml !== undefined ? { outlookVml } : {}),
     ...(desktopColumnDirection ? { desktopColumnDirection } : {}),
+    ...(hideGutterOnMobile !== undefined ? { hideGutterOnMobile } : {}),
+    ...(columnGutterPx !== undefined ? { columnGutterPx } : {}),
+    ...(mobileColumnGutterPx !== undefined ? { mobileColumnGutterPx } : {}),
   };
 }
 

@@ -226,3 +226,146 @@ describe('renderResponsiveStyles', () => {
     expect(css).not.toContain('<script');
   });
 });
+
+// Configurable Mobile Gutter Behavior — a layout-level `hideGutterOnMobile`
+// setting governing how Mobile renders the ALREADY-configured desktop
+// gutter (never itself, never mutated).
+describe('renderResponsiveStyles — Independently Configurable Desktop/Mobile Gutter', () => {
+  function layoutWithGutters(
+    type: string, desktopPx: number, mobilePx: number, hideGutterOnMobile?: boolean,
+  ) {
+    const layout = createModule(type as never, 0);
+    layout.settings = {
+      ...layout.settings,
+      columnGutterPx: desktopPx,
+      mobileColumnGutterPx: mobilePx,
+      ...(hideGutterOnMobile !== undefined ? { hideGutterOnMobile } : {}),
+    };
+    return layout;
+  }
+
+  it('default (undefined) hides the vertical gutter on mobile — identical to the pre-existing behavior', () => {
+    const layout = layoutWithGutters('layout-2col-50-50', 20, 20);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).toContain(`.${cls}-gut0{display:none !important; width:0 !important; height:0 !important;}`);
+  });
+
+  it('explicit hideGutterOnMobile: true hides the gutter, same as default', () => {
+    const layout = layoutWithGutters('layout-2col-50-50', 20, 20, true);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).toContain(`.${cls}-gut0{display:none !important; width:0 !important; height:0 !important;}`);
+  });
+
+  it('hideGutterOnMobile: false shows the gutter as a full-width vertical spacer sized to the INDEPENDENT Mobile gutter value, never the Desktop one', () => {
+    const layout = layoutWithGutters('layout-2col-50-50', 30, 12, false);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).toContain(`.${cls}-gut0{display:block !important; width:100% !important; height:12px !important; font-size:0 !important; line-height:0 !important;}`);
+    expect(css).not.toContain('height:30px');
+    expect(css).not.toContain(`.${cls}-gut0{display:none`);
+  });
+
+  it('editing the Mobile gutter never changes what the Desktop gutter renders, and vice versa', () => {
+    // Desktop gutter is exercised at the HTML-render level (layoutCatalog)
+    // — here, confirm the RESPONSIVE layer only ever reads the Mobile
+    // value for its own vertical-spacer height, regardless of how large
+    // or small Desktop's independently-configured value is.
+    const same = layoutWithGutters('layout-2col-50-50', 5, 5, false);
+    const different = layoutWithGutters('layout-2col-50-50', 5, 50, false);
+    const clsSame = moduleResponsiveClassName(same.id);
+    const clsDifferent = moduleResponsiveClassName(different.id);
+    expect(renderResponsiveStyles(withModules([same]))).toContain(`.${clsSame}-gut0{display:block !important; width:100% !important; height:5px`);
+    expect(renderResponsiveStyles(withModules([different]))).toContain(`.${clsDifferent}-gut0{display:block !important; width:100% !important; height:50px`);
+  });
+
+  it('hidden gutter (true) produces no vertical spacing rule (no height set at all)', () => {
+    const layout = layoutWithGutters('layout-2col-50-50', 20, 20, true);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).not.toContain(`.${cls}-gut0{display:block`);
+    expect(css).not.toMatch(new RegExp(`${cls}-gut0\\{[^}]*height:20px`));
+  });
+
+  it('zero Desktop and zero Mobile gutter: no gutter CSS rule at all, regardless of hideGutterOnMobile', () => {
+    for (const hide of [true, false, undefined]) {
+      const layout = layoutWithGutters('layout-2col-50-50', 0, 0, hide);
+      const cls = moduleResponsiveClassName(layout.id);
+      const css = renderResponsiveStyles(withModules([layout]));
+      expect(css, `hideGutterOnMobile=${hide}`).not.toContain(`${cls}-gut0`);
+    }
+  });
+
+  it('zero Desktop gutter but a nonzero Mobile gutter still renders a vertical spacer when shown (they are genuinely independent)', () => {
+    const layout = layoutWithGutters('layout-2col-50-50', 0, 18, false);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).toContain(`.${cls}-gut0{display:block !important; width:100% !important; height:18px !important;`);
+  });
+
+  it('a nonzero Desktop gutter with a zero Mobile gutter renders height:0 when shown (still a distinct cell, still independent)', () => {
+    const layout = layoutWithGutters('layout-2col-50-50', 20, 0, false);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).toContain(`.${cls}-gut0{display:block !important; width:100% !important; height:0px !important;`);
+  });
+
+  it.each([
+    ['layout-3col', 2], ['layout-4col', 3], ['layout-5col', 4], ['layout-6col', 5],
+  ] as const)('%s: every one of the %d gutters becomes a vertical spacer sized to the Mobile value when hideGutterOnMobile is false', (type, gutterCount) => {
+    const layout = layoutWithGutters(type, 30, 15, false);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    for (let i = 0; i < gutterCount; i += 1) {
+      expect(css, `gutter ${i}`).toContain(
+        `.${cls}-gut${i}{display:block !important; width:100% !important; height:15px !important; font-size:0 !important; line-height:0 !important;}`,
+      );
+    }
+  });
+
+  it.each([
+    ['layout-3col', 2], ['layout-4col', 3], ['layout-5col', 4], ['layout-6col', 5],
+  ] as const)('%s: every one of the %d gutters is hidden when hideGutterOnMobile is true (default)', (type, gutterCount) => {
+    const layout = layoutWithGutters(type, 30, 15, true);
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    for (let i = 0; i < gutterCount; i += 1) {
+      expect(css, `gutter ${i}`).toContain(`.${cls}-gut${i}{display:none !important; width:0 !important; height:0 !important;}`);
+    }
+  });
+
+  it('columns still stack to full width regardless of hideGutterOnMobile or either gutter value — Desktop pixel widths never leak into Mobile', () => {
+    for (const hide of [true, false]) {
+      const layout = layoutWithGutters('layout-2col-50-50', 469, 20, hide);
+      const cls = moduleResponsiveClassName(layout.id);
+      const css = renderResponsiveStyles(withModules([layout]));
+      expect(css, `hide=${hide}`).toContain(`.${cls}-col0{display:block !important; width:100% !important;}`);
+      expect(css, `hide=${hide}`).toContain(`.${cls}-col1{display:block !important; width:100% !important;}`);
+      expect(css, `hide=${hide}`).not.toContain('469');
+    }
+  });
+
+  it('legacy documents (pre-independent-fields, the old columnGutter.desktop/mobile shape) still resolve a sane gutter via the resolver fallback', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = {
+      ...layout.settings,
+      columnGutter: { desktop: { value: 20, unit: 'px' }, mobile: { value: 5, unit: 'px' } },
+      hideGutterOnMobile: false,
+    };
+    const cls = moduleResponsiveClassName(layout.id);
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).toContain(`.${cls}-gut0{display:block !important; width:100% !important; height:5px !important;`);
+  });
+
+  it('never emits flex, grid, div, or script for either gutter mode', () => {
+    for (const hide of [true, false]) {
+      const layout = layoutWithGutters('layout-3col', 20, 10, hide);
+      const css = renderResponsiveStyles(withModules([layout]));
+      expect(css).not.toMatch(/display:\s*flex/);
+      expect(css).not.toMatch(/display:\s*grid/);
+      expect(css).not.toContain('<div');
+      expect(css).not.toContain('<script');
+    }
+  });
+});

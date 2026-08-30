@@ -258,18 +258,25 @@ export function ValidationCenterPanel({
       <div className="validation-center-panel__body">
         <div className="validation-center-panel__score-column">
           <h3>Email Health Score</h3>
-          <div className="validation-center-panel__gauge" role="img" aria-label={`Health score ${report.score} out of 100`}>
-            <svg viewBox="0 0 120 120" width="120" height="120">
-              <circle cx="60" cy="60" r="52" fill="none" stroke="var(--color-border)" strokeWidth="10" />
-              <circle
-                cx="60" cy="60" r="52" fill="none" stroke={scoreColor(report.score)} strokeWidth="10"
-                strokeDasharray={SCORE_CIRCUMFERENCE} strokeDashoffset={dashOffset} strokeLinecap="round"
-                transform="rotate(-90 60 60)"
-              />
-            </svg>
-            <div className="validation-center-panel__gauge-text">
-              <span className="validation-center-panel__gauge-score">{report.score}</span>
-              <span className="validation-center-panel__gauge-max">/100</span>
+          {/* Health Score gauge alignment fix — heading stays left-aligned
+              (untouched above); the gauge itself is centered by a
+              dedicated full-width flex wrapper, never by a hard-coded
+              margin/offset on the gauge itself, so centering stays
+              correct regardless of the card's actual width. */}
+          <div className="validation-center-panel__gauge-wrapper">
+            <div className="validation-center-panel__gauge" role="img" aria-label={`Health score ${report.score} out of 100`}>
+              <svg viewBox="0 0 120 120" width="120" height="120">
+                <circle cx="60" cy="60" r="52" fill="none" stroke="var(--color-border)" strokeWidth="10" />
+                <circle
+                  cx="60" cy="60" r="52" fill="none" stroke={scoreColor(report.score)} strokeWidth="10"
+                  strokeDasharray={SCORE_CIRCUMFERENCE} strokeDashoffset={dashOffset} strokeLinecap="round"
+                  transform="rotate(-90 60 60)"
+                />
+              </svg>
+              <div className="validation-center-panel__gauge-text">
+                <span className="validation-center-panel__gauge-score">{report.score}</span>
+                <span className="validation-center-panel__gauge-max">/100</span>
+              </div>
             </div>
           </div>
           <p className="validation-center-panel__gauge-message">{scoreMessage(report.score)}</p>

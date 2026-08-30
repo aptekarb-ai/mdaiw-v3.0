@@ -4,7 +4,7 @@ import type {
   EmailModuleSettings, HorizontalAlign, ImageModuleProps, ModuleVisibility, TextModuleProps,
 } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
-import { IMAGE_WIDTH_PX_BOUNDS, getPath, setPath, type BuilderViewMode } from './registryCore';
+import { IMAGE_WIDTH_PX_BOUNDS, computeLayoutAvailableWidthPx, getPath, setPath, type BuilderViewMode } from './registryCore';
 import { PaddingControls } from './PaddingControls';
 import { OuterSpacingControls } from './OuterSpacingControls';
 import { ResponsiveDimensionField } from './DimensionControl';
@@ -41,6 +41,13 @@ interface PropertiesPanelProps {
   // module several levels different from the layout itself.
   breadcrumbLayoutId: string | null;
   viewport: BuilderViewMode;
+  // Column Width Display + Responsive Gutter UI Correction — the
+  // document's own width (px), threaded down so the Style tab can show
+  // the SAME effective column/gutter pixel widths the renderer actually
+  // produces, via registryCore.tsx's computeLayoutAvailableWidthPx +
+  // layoutModel.ts's resolveColumnPixelWidths — never a second
+  // calculation.
+  documentWidth: number;
   onUpdateProps: (id: string, patch: Record<string, unknown>) => void;
   onUpdateSettings: (id: string, patch: Partial<EmailModuleSettings>) => void;
   onUpdateColumnWidths: (layoutId: string, widths: number[]) => void;
@@ -174,12 +181,17 @@ function ResetMobileOverridesSection({ module, viewport, onUpdateSettings, onUpd
 }
 
 export function PropertiesPanel({
-  module, selectedColumn, breadcrumb, breadcrumbLayoutId, viewport, onUpdateProps, onUpdateSettings,
+  module, selectedColumn, breadcrumb, breadcrumbLayoutId, viewport, documentWidth, onUpdateProps, onUpdateSettings,
   onUpdateColumnWidths, onUpdateColumnSettings, onSelectColumn, onSelectModule, collapsed, onToggleCollapsed,
 }: PropertiesPanelProps) {
   const [tab, setTab] = useState<PropertiesTab>('content');
   const isLayout = Boolean(module?.columns);
   const showColumnEditor = Boolean(module && selectedColumn && selectedColumn.layoutId === module.id);
+  // Column Width Display + Responsive Gutter UI Correction — computed
+  // once per render, reused by both the per-column editor and the
+  // layout-level bulk widths/gutter editors below, so every effective-
+  // px readout in this panel is derived from the exact same value.
+  const layoutAvailableWidthPx = module && isLayout ? computeLayoutAvailableWidthPx(module, documentWidth) : documentWidth;
 
   if (collapsed) {
     return (
@@ -250,6 +262,7 @@ export function PropertiesPanel({
                   column={selectedColumn.column}
                   columnIndex={selectedColumn.columnIndex}
                   viewport={viewport}
+                  availableWidthPx={layoutAvailableWidthPx}
                   onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)}
                   onChangeColumnSettings={(patch) => onUpdateColumnSettings(module.id, selectedColumn.column.id, patch)}
                 />
@@ -337,8 +350,20 @@ export function PropertiesPanel({
                 <LayoutStructureOverview module={module} onSelectColumn={(columnId) => onSelectColumn(module.id, columnId)} />
               ) : (
                 <>
-                  <ColumnWidthsEditor module={module} onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)} />
-                  <ColumnGutterEditor settings={module.settings} viewport={viewport} onChange={(patch) => onUpdateSettings(module.id, patch)} />
+                  <ColumnWidthsEditor
+                    module={module}
+                    viewport={viewport}
+                    availableWidthPx={layoutAvailableWidthPx}
+                    onChangeWidths={(widths) => onUpdateColumnWidths(module.id, widths)}
+                  />
+                  {/* Independently Configurable Desktop/Mobile Gutter — a
+                      gutter between columns is meaningless for a single-
+                      column layout (there is no second column to space
+                      away from), so the entire control is hidden rather
+                      than shown disabled. */}
+                  {(module.columns?.length ?? 0) > 1 && (
+                    <ColumnGutterEditor settings={module.settings} viewport={viewport} onChange={(patch) => onUpdateSettings(module.id, patch)} />
+                  )}
                 </>
               )
             ) : (

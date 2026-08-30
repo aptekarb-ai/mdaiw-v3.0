@@ -832,7 +832,7 @@ describe('EmailBuilderWorkspacePage — Column Properties UI Deduplication', () 
     expect(panel.queryByLabelText('Background color hex value')).not.toBeInTheDocument();
   });
 
-  it('the rendered/exported HTML is unaffected — column width edited via the column-selected panel still renders the correct percentage', async () => {
+  it('the rendered/exported HTML is unaffected — column width edited via the column-selected panel still renders the correct deterministic pixel width', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
     renderPage();
@@ -846,7 +846,10 @@ describe('EmailBuilderWorkspacePage — Column Properties UI Deduplication', () 
 
     await user.click(screen.getByRole('button', { name: 'Code' }));
     const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
-    expect(textarea.value).toContain('width="65%"');
+    // Column Width + Gutter Rendering Correction: ratios [65, 50] (column
+    // 1 edited, column 2 untouched), no gutter, 700px document ->
+    // available=700, col0 = round(700 * 65/115) = 396px.
+    expect(textarea.value).toContain('width="396"');
   });
 });
 
@@ -1002,6 +1005,351 @@ describe('EmailBuilderWorkspacePage — Module-4 Final Gap Closure, Correction 2
         ]),
       }),
     })));
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Independently Configurable Desktop/Mobile Gutter', () => {
+  // Desktop and Mobile gutter fields are mode-aware and never both visible
+  // in the DOM at once — the Mobile (px) field and "Hide gutter on mobile"
+  // checkbox live under the "Column Spacing" group and only render while
+  // the builder's own Desktop/Mobile viewport toggle is set to Mobile; the
+  // Desktop (px) field lives under "Column Gutter" and only renders in
+  // Desktop viewport. This helper switches viewport as needed and always
+  // returns to Desktop viewport afterward.
+  async function addLayoutWithGutters(user: ReturnType<typeof userEvent.setup>, desktopPx: string, mobilePx: string) {
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    const desktopInput = screen.getByLabelText('Desktop (px)');
+    await user.clear(desktopInput);
+    await user.type(desktopInput, desktopPx);
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    // The Mobile (px) input is disabled while "Hide gutter on mobile" is
+    // checked (the default) — uncheck it first so the field is editable.
+    await user.click(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' }));
+    const mobileInput = screen.getByLabelText('Mobile (px)');
+    await user.clear(mobileInput);
+    await user.type(mobileInput, mobilePx);
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+
+    return { desktopInput };
+  }
+
+  it('shows only the Desktop (px) field under "Column Gutter" while in Desktop viewport', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    expect(screen.getByText('Column Gutter')).toBeInTheDocument();
+    expect(screen.getByLabelText('Desktop (px)')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Mobile (px)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Column Spacing')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Hide gutter on mobile' })).not.toBeInTheDocument();
+  });
+
+  it('shows only the Mobile (px) field and "Hide gutter on mobile" under "Column Spacing" while in Mobile viewport', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    expect(screen.getByText('Column Spacing')).toBeInTheDocument();
+    expect(screen.getByLabelText('Mobile (px)')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Desktop (px)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Column Gutter')).not.toBeInTheDocument();
+  });
+
+  it('the entire gutter configuration is hidden for a single-column layout, in both Desktop and Mobile viewport', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 1 Column' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    expect(screen.queryByText('Column Gutter')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Desktop (px)')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(screen.queryByText('Column Spacing')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Mobile (px)')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Hide gutter on mobile' })).not.toBeInTheDocument();
+  });
+
+  it('the "Hide gutter on mobile" checkbox is checked by default (preserves current responsive behavior)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' })).toBeChecked();
+  });
+
+  it('editing the Mobile gutter does not change the Desktop value, and editing Desktop does not change Mobile — switching Desktop → Mobile → Desktop preserves both', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    const { desktopInput } = await addLayoutWithGutters(user, '30', '12');
+    expect(desktopInput).toHaveValue(30);
+
+    // Edit Mobile; Desktop (only reachable in Desktop viewport) must be untouched.
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    const mobileInput = screen.getByLabelText('Mobile (px)');
+    expect(mobileInput).toHaveValue(12);
+    await user.clear(mobileInput);
+    await user.type(mobileInput, '5');
+    expect(mobileInput).toHaveValue(5);
+
+    // Switch back to Desktop; Desktop value must still be 30.
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(screen.getByLabelText('Desktop (px)')).toHaveValue(30);
+
+    // Edit Desktop; Mobile (only reachable in Mobile viewport) must be untouched.
+    const desktopInputAgain = screen.getByLabelText('Desktop (px)');
+    await user.clear(desktopInputAgain);
+    await user.type(desktopInputAgain, '45');
+    expect(desktopInputAgain).toHaveValue(45);
+
+    // Switch to Mobile again; Mobile must still be 5 (the earlier edit).
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(screen.getByLabelText('Mobile (px)')).toHaveValue(5);
+  });
+
+  it('unchecking "Hide gutter on mobile" and saving persists both independent gutter values correctly', async () => {
+    const document1 = baseDocument();
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    // addLayoutWithGutters unchecks "Hide gutter on mobile" itself as part
+    // of making the Mobile (px) field editable to set 12.
+    await addLayoutWithGutters(user, '30', '12');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' })).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({
+            settings: expect.objectContaining({
+              hideGutterOnMobile: false,
+              columnGutterPx: 30,
+              mobileColumnGutterPx: 12,
+            }),
+          }),
+        ]),
+      }),
+    })));
+  });
+
+  it('Undo/Redo: unchecking is one normal history operation', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    const checkbox = () => screen.getByRole('checkbox', { name: 'Hide gutter on mobile' });
+    await user.click(checkbox());
+    expect(checkbox()).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(checkbox()).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(checkbox()).not.toBeChecked();
+  });
+
+  it('a reloaded document with hideGutterOnMobile: false shows the checkbox unchecked and both gutter fields correctly populated (save/reload persistence)', async () => {
+    const document1 = baseDocument({
+      content: {
+        version: 1,
+        modules: [{
+          id: 'layout-1', type: 'layout-2col-50-50', order: 0,
+          props: { columnWidths: [50, 50] },
+          settings: {
+            ...createResponsiveSettings(),
+            columnGutterPx: 30,
+            mobileColumnGutterPx: 12,
+            hideGutterOnMobile: false,
+          },
+        }],
+      },
+    });
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('August Newsletter');
+    // Select the layout module itself (its own row), not a column inside
+    // it — clicking anywhere in an empty column would select the COLUMN,
+    // not the layout this setting belongs to.
+    await waitFor(() => expect(document.querySelector('.email-canvas__module')).toBeTruthy());
+    (document.querySelector('.email-canvas__module') as HTMLElement).click();
+    await waitFor(() => expect(document.querySelector('.properties-panel')?.textContent).not.toContain('Select a module'));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    expect(screen.getByLabelText('Desktop (px)')).toHaveValue(30);
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    expect(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' })).not.toBeChecked();
+    expect(screen.getByLabelText('Mobile (px)')).toHaveValue(12);
+  });
+
+  it('Preview tab and Code tab stay consistent with each other for the same document (both derive from the same renderer), showing the exact independent values', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    // addLayoutWithGutters already unchecks "Hide gutter on mobile" as part
+    // of setting the Mobile (px) value to 12, and returns to Desktop viewport.
+    await addLayoutWithGutters(user, '30', '12');
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    expect(codeHtml).toContain('width="30"'); // desktop gutter cell
+    expect(codeHtml).toMatch(/gut0\{display:block !important; width:100% !important; height:12px !important;/); // mobile vertical spacer
+
+    await user.click(screen.getByRole('button', { name: 'Preview' }));
+    const iframe = await screen.findByTitle('Desktop preview') as HTMLIFrameElement;
+    expect(iframe.srcdoc).toContain('width="30"');
+    expect(iframe.srcdoc).toMatch(/gut0\{display:block !important; width:100% !important; height:12px !important;/);
+  });
+
+  it('the exact worked example (700px / 70-30 ratios / desktop gutter 30) renders 469 + 30 + 201, independent of the Mobile gutter, and the Properties panel shows the identical effective px values before Code/Export is even opened', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 70/30' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    const desktopInput = screen.getByLabelText('Desktop (px)');
+    await user.clear(desktopInput);
+    await user.type(desktopInput, '30');
+
+    // The Properties panel's Column Widths editor must show the SAME
+    // resolver output the renderer uses — not a second calculation. The
+    // effective px is folded into the column label itself.
+    expect(screen.getByText('Column 1 (469px)')).toBeInTheDocument();
+    expect(screen.getByText('Column 2 (201px)')).toBeInTheDocument();
+    expect(screen.getByText('Effective total: 700px ✓')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    expect(codeHtml).toContain('width="469"');
+    expect(codeHtml).toContain('width="30"');
+    expect(codeHtml).toContain('width="201"');
+  });
+
+  it('the effective px readout recalculates immediately when the Desktop gutter changes, and the sum invariant (columns + gutters === available width) always holds', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 70/30' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    // No gutter configured yet — columns fill the full 700px.
+    expect(screen.getByText('Column 1 (490px)')).toBeInTheDocument();
+    expect(screen.getByText('Column 2 (210px)')).toBeInTheDocument();
+    expect(screen.getByText('Effective total: 700px ✓')).toBeInTheDocument();
+
+    const desktopInput = screen.getByLabelText('Desktop (px)');
+    await user.clear(desktopInput);
+    await user.type(desktopInput, '50');
+
+    // 700 - 50 = 650 available; 70% of 650 = 455, remainder = 195.
+    expect(screen.getByText('Column 1 (455px)')).toBeInTheDocument();
+    expect(screen.getByText('Column 2 (195px)')).toBeInTheDocument();
+    expect(screen.getByText('Effective total: 700px ✓')).toBeInTheDocument();
+  });
+
+  it('the effective px readout recalculates immediately when a column ratio changes', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    expect(screen.getByText('Column 1 (350px)')).toBeInTheDocument(); // both columns start at an even 50/50 split
+    expect(screen.getByText('Column 2 (350px)')).toBeInTheDocument();
+
+    // Ratios need not sum to 100 while being edited — the resolver
+    // normalizes by the actual sum, exactly like the renderer does.
+    // [80, 50] over 700px: 700 * 80/130 = 430.77 → rounds to 431, and the
+    // second (final) column absorbs the exact remainder, 269.
+    const column1Input = screen.getByRole('spinbutton', { name: /^Column 1/ });
+    fireEvent.change(column1Input, { target: { value: '80' } });
+
+    expect(screen.getByText('Column 1 (431px)')).toBeInTheDocument();
+    expect(screen.getByText('Column 2 (269px)')).toBeInTheDocument();
+  });
+
+  it('Mobile viewport shows "100% stacked" and vertical spacing instead of misleading Desktop ratios, and the original Desktop ratios are preserved when switching back', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 70/30' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    expect(screen.getByRole('spinbutton', { name: /^Column 1/ })).toHaveValue(70);
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    expect(screen.getByText('Column 1 — 100% stacked')).toBeInTheDocument();
+    expect(screen.getByText('Column 2 — 100% stacked')).toBeInTheDocument();
+    expect(screen.getByText('Vertical spacing — hidden')).toBeInTheDocument();
+    expect(screen.queryByText(/Column \d+ \(\d+px\)/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton', { name: /^Column 1/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(screen.getByRole('spinbutton', { name: /^Column 1/ })).toHaveValue(70);
+    expect(screen.getByRole('spinbutton', { name: /^Column 2/ })).toHaveValue(30);
+  });
+
+  it('a 6-column layout keeps the sum invariant (all column px + total gutter px === available width) with deterministic rounding', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 6 Columns' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    const desktopInput = screen.getByLabelText('Desktop (px)');
+    await user.clear(desktopInput);
+    await user.type(desktopInput, '10');
+
+    // Properties UI: the effective per-column px folded into each column
+    // label must itself sum (with the 5 gutters between 6 columns) back to
+    // exactly 700px — the same invariant resolveColumnPixelWidths
+    // guarantees the renderer.
+    expect(screen.getByText('Effective total: 700px ✓')).toBeInTheDocument();
+    const columnPxTexts = screen.getAllByText(/^Column \d+ \(\d+px\)$/)
+      .map((el) => Number(el.textContent!.match(/\((\d+)px\)/)![1]));
+    expect(columnPxTexts).toHaveLength(6);
+    expect(columnPxTexts.reduce((sum, px) => sum + px, 0) + 10 * 5).toBe(700);
+
+    // And Code/Export must render exactly those same per-column px values.
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    for (const px of columnPxTexts) {
+      expect(codeHtml).toContain(`width="${px}"`);
+    }
   });
 });
 
@@ -2624,8 +2972,11 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
 
     await user.click(screen.getByRole('button', { name: 'Code' }));
     const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
-    expect(textarea.value).toContain('width="70%"');
-    expect(textarea.value).toContain('width="30%"');
+    // Column Width + Gutter Rendering Correction: ratios [70, 30], no
+    // gutter, 700px document -> 490px + 210px (deterministic pixels, not
+    // percentages).
+    expect(textarea.value).toContain('width="490"');
+    expect(textarea.value).toContain('width="210"');
   });
 
   it('INSERT_NESTED_MODULE inserts a module into the selected column', async () => {

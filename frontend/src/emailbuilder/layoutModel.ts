@@ -105,6 +105,45 @@ export function balanceColumnWidths(count: number): number[] {
   return widths;
 }
 
+export interface ColumnPixelResolution {
+  columnPx: number[];
+  gutterPx: number;
+}
+
+// Column Width + Gutter Rendering Correction — the ONE deterministic
+// pixel resolver every desktop multi-column renderer path uses (see
+// catalog/layoutCatalog.tsx). Percent-only column widths ("width=40%")
+// plus a separate fixed-px gutter <td> in the SAME row sum to MORE than
+// the parent (100% + gutter), overflowing the structure — the defect
+// this closes. Gutter space is subtracted from the parent BEFORE ratio
+// allocation, so every column + gutter cell's declared pixel width
+// always sums to EXACTLY parentWidthPx, never approximately and never
+// over. Columns 0..N-2 round independently; the FINAL column receives
+// whatever pixels remain, so the sum is exact regardless of individual
+// rounding (matches the brief's worked examples: 700/[70,30]/gutter30 ->
+// 469+30+201; 700/[33,33,34]/gutter20 -> 218+20+218+20+224).
+export function resolveColumnPixelWidths(
+  ratios: number[], gutterPx: number, parentWidthPx: number,
+): ColumnPixelResolution {
+  const count = ratios.length;
+  if (count === 0) return { columnPx: [], gutterPx: 0 };
+  const safeGutterPx = Math.max(0, Math.round(gutterPx));
+  const totalGutterPx = safeGutterPx * (count - 1);
+  const availableColumnPx = Math.max(0, Math.round(parentWidthPx) - totalGutterPx);
+  const ratioSum = ratios.reduce((sum, r) => sum + r, 0) || 1;
+
+  const columnPx: number[] = [];
+  let allocated = 0;
+  for (let i = 0; i < count - 1; i += 1) {
+    const px = Math.round((availableColumnPx * ratios[i]) / ratioSum);
+    columnPx.push(px);
+    allocated += px;
+  }
+  columnPx.push(Math.max(0, availableColumnPx - allocated));
+
+  return { columnPx, gutterPx: safeGutterPx };
+}
+
 export interface ColumnWidthValidation {
   valid: boolean;
   total: number;

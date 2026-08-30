@@ -76,11 +76,22 @@
   color: var(--color-text-dark);
 }
 
+/* Health Score gauge alignment fix — a dedicated, full-width flex
+   wrapper is the ONE thing responsible for horizontal centering. No
+   hard-coded left margin/pixel offset anywhere in this rule; centering
+   stays correct no matter how the card/sidebar width changes. */
+.validation-center-panel__gauge-wrapper {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
 .validation-center-panel__gauge {
   position: relative;
   width: 120px;
   height: 120px;
-  margin: 0 auto;
+  flex-shrink: 0;
 }
 
 .validation-center-panel__gauge svg circle {

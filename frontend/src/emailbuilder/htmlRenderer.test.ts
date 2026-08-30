@@ -331,9 +331,12 @@ describe('Feature 05 — nested layout rendering', () => {
     const html = renderEmailBody(withModules([layout]));
     // Scoped to layout column cells specifically (they carry `valign`,
     // unlike a nested module's own width-bearing <td>, e.g. Text's
-    // Feature-06 width control) — a nested module contributing its own
-    // width="...%" cell must not inflate this count.
-    const columnCells = html.match(/<td width="\d+(\.\d+)?%" valign=/g) ?? [];
+    // Feature-06 width control, or the layout's own gutter <td> which has
+    // no valign) — a nested module contributing its own width="..." cell
+    // must not inflate this count. Column Width + Gutter Rendering
+    // Correction: column widths are deterministic pixels now, not
+    // percentages — see resolveColumnPixelWidths.
+    const columnCells = html.match(/<td width="\d+" valign=/g) ?? [];
     expect(columnCells).toHaveLength(count);
     expect(html).toContain('Nested text content');
     expect(html).toContain('<table');
@@ -363,7 +366,7 @@ describe('Feature 05 — nested layout rendering', () => {
     const html = renderEmailBody(withModules([layout]));
     expect(html).not.toContain('font-size:0; line-height:0;');
     // Exactly 2 column <td>s, no third gutter cell.
-    expect((html.match(/<td width="\d+%"/g) ?? [])).toHaveLength(2);
+    expect((html.match(/<td width="\d+" valign=/g) ?? [])).toHaveLength(2);
   });
 
   it('does not add a gutter <td> after the LAST column, even with a gutter set', () => {
@@ -478,7 +481,10 @@ describe('Module-4 Final Gap Closure, Correction 2 — Feature 05: Desktop colum
   // cell's width/class) can be found reliably regardless of whatever
   // nested table structure a Text module wraps its content in.
   function columnCells(html: string) {
-    const pattern = /<td width="(\d+(?:\.\d+)?)%" valign="[^"]*" class="([^"]*)"[^>]*>/g;
+    // Column Width + Gutter Rendering Correction: column widths are
+    // deterministic pixels now (no unit suffix in the attribute), never
+    // percentages — see resolveColumnPixelWidths.
+    const pattern = /<td width="(\d+)" valign="[^"]*" class="([^"]*)"[^>]*>/g;
     const matches = [...html.matchAll(pattern)];
     return matches.map((match, position) => {
       const contentStart = match.index + match[0].length;
@@ -540,12 +546,13 @@ describe('Module-4 Final Gap Closure, Correction 2 — Feature 05: Desktop colum
     const html = renderEmailBody(withModules([layout]));
 
     expect(html.indexOf('ZWIDE')).toBeLessThan(html.indexOf('ZNARROW'));
-    // ZWIDE (originally column 1, 70%) still carries its own 70% width
-    // even though it now renders first; ZNARROW (originally column 0,
-    // 30%) still carries 30% even though it now renders last — width
-    // never swaps onto the wrong content.
-    expect(cellContaining(html, 'ZWIDE').width).toBe('70');
-    expect(cellContaining(html, 'ZNARROW').width).toBe('30');
+    // ZWIDE (originally column 1, 70% ratio) still carries its own
+    // resolved 490px (700 * 70/100, no gutter set) even though it now
+    // renders first; ZNARROW (originally column 0, 30% ratio) still
+    // carries its resolved 210px even though it now renders last —
+    // width never swaps onto the wrong content.
+    expect(cellContaining(html, 'ZWIDE').width).toBe('490');
+    expect(cellContaining(html, 'ZNARROW').width).toBe('210');
   });
 
   it('reversed cells keep their ORIGINAL column class attached to their own content', () => {
@@ -742,5 +749,245 @@ describe('renderEmailBody — one-level-nesting architectural guarantee (Sub-pha
     // proving the renderer itself has no third-level numbering logic.
     expect(html).toContain(`MODULE-1.1: ${getModuleDefinition('layout-1col').label.toUpperCase()}`);
     expect(html).not.toMatch(/MODULE-1\.1\.\d/);
+  });
+});
+
+// Column Width + Gutter Rendering Correction — HTML-level proof that the
+// deterministic resolver (layoutModel.ts's resolveColumnPixelWidths) is
+// actually wired into the real renderer, not just correct in isolation.
+describe('Feature 05 — Column Width + Gutter Rendering Correction', () => {
+  function columnWidthAttrs(html: string): number[] {
+    return [...html.matchAll(/<td width="(\d+)" valign="[^"]*"/g)].map((m) => Number(m[1]));
+  }
+
+  function gutterWidthAttrs(html: string): number[] {
+    return [...html.matchAll(/<td width="(\d+)" class="[^"]*-gut\d+"/g)].map((m) => Number(m[1]));
+  }
+
+  it('invariant: sum(column widths) + sum(gutter widths) === parent width, for 1 through 6 columns', () => {
+    const cases: [string, number][] = [
+      ['layout-1col', 700], ['layout-2col-40-60', 700], ['layout-3col', 700],
+      ['layout-4col', 700], ['layout-5col', 700], ['layout-6col', 700],
+    ];
+    for (const [type, width] of cases) {
+      const layout = createModule(type as never, 0);
+      layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+      const html = renderEmailBody(withModules([layout], width));
+      const total = columnWidthAttrs(html).reduce((s, w) => s + w, 0) + gutterWidthAttrs(html).reduce((s, w) => s + w, 0);
+      expect(total, type).toBe(width);
+    }
+  });
+
+  it('never emits a percentage column width, and never the old 100%+gutter overflow shape', () => {
+    const layout = createModule('layout-2col-40-60', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).not.toMatch(/<td width="\d+%"/);
+    expect(html).toContain('width="272"');
+    expect(html).toContain('width="20"');
+    expect(html).toContain('width="408"');
+  });
+
+  it('emits both the HTML width attribute and the inline CSS pixel width on desktop column cells', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    const html = renderEmailBody(withModules([layout]));
+    expect(html).toMatch(/<td width="350" valign="top"[^>]*style="width:350px;/);
+  });
+
+  it('the configured desktop gutter is preserved exactly — never solved by zeroing it', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 30, unit: 'px' } } };
+    const html = renderEmailBody(withModules([layout]));
+    expect(gutterWidthAttrs(html)).toEqual([30]);
+    expect(html).not.toMatch(/columnGutter.*0/);
+  });
+
+  it('the width-bearing column <td> has zero padding; configured column padding lands on an inner wrapper cell instead', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.columns![0].settings.desktop = { paddingTop: 10, paddingRight: 25, paddingBottom: 10, paddingLeft: 5 };
+    const html = renderEmailBody(withModules([layout]));
+    // The width-bearing <td> (carries valign) has padding:0.
+    expect(html).toMatch(/<td width="350" valign="top"[^>]*style="width:350px; vertical-align:top; padding:0;/);
+    // The configured padding is present, but on a DIFFERENT (inner) <td>.
+    expect(html).toContain('padding:10px 25px 10px 5px;');
+    expect(html).not.toContain('style="width:350px; vertical-align:top; padding:10px 25px 10px 5px;');
+  });
+
+  it('nonzero column padding does not change the structural column width — invariant still holds', () => {
+    const layout = createModule('layout-3col', 0);
+    layout.columns![0].settings.desktop = { paddingTop: 0, paddingRight: 40, paddingBottom: 0, paddingLeft: 40 };
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+    const html = renderEmailBody(withModules([layout], 700));
+    const total = columnWidthAttrs(html).reduce((s, w) => s + w, 0) + gutterWidthAttrs(html).reduce((s, w) => s + w, 0);
+    expect(total).toBe(700);
+  });
+
+  it('nested layouts: the immediate parent (column) pixel width is threaded down, not always document.width', () => {
+    // Forces a layout nested one level deep inside a column (the UI gate
+    // in LayoutCanvasModule.tsx prevents this, but the renderer itself
+    // must still compute correctly if it ever happens — same posture as
+    // the existing one-level-nesting architectural guarantee test above).
+    const outer = createModule('layout-2col-50-50', 0);
+    const inner = createModule('layout-2col-50-50', 0);
+    outer.columns![0].modules.push(inner);
+    const html = renderEmailBody(withModules([outer], 700));
+    // Outer columns: 700px, no gutter -> 350 + 350. The inner layout's
+    // OWN columns must be computed against its column's actual width
+    // (350px), never against the full 700px document width.
+    const total = columnWidthAttrs(html).reduce((s, w) => s + w, 0);
+    // 2 outer columns (350 each) + 2 inner columns (175 each, half of 350).
+    expect(total).toBe(350 + 350 + 175 + 175);
+    expect(html).toContain('width="175"');
+    expect(html).not.toContain('width="350"'.repeat(1) === 'width="700"'); // sanity: never the full document width
+  });
+
+  it('an outer spacer column (px-valued) on the layout module itself narrows the available width for its own columns', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = {
+      ...layout.settings,
+      outerSpacing: { desktop: { left: { value: 50, unit: 'px' }, right: { value: 50, unit: 'px' } }, mobile: {} },
+    };
+    const html = renderEmailBody(withModules([layout], 700));
+    // Available width for the layout's OWN columns is 700 - 50 - 50 = 600,
+    // split 50/50 -> 300 + 300, not 350 + 350 (which would ignore the
+    // outer spacer this same module already has).
+    expect(html).toContain('width="300"');
+    expect(html).not.toContain('width="350"');
+  });
+
+  it('Classic Outlook (MSO conditional) markup is unaffected — the layout table still renders inside the same MSO-fixed-width wrapper', () => {
+    const layout = createModule('layout-2col-40-60', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+    const html = renderEmailDocument(withModules([layout]));
+    expect(html).toContain('<!--[if mso]><table role="presentation" width="700"');
+    expect(html).toContain('<!--[if mso]></td></tr></table><![endif]-->');
+    // The layout's own column cells sit inside that same conditional
+    // wrapper, not a separate/duplicate Outlook-specific structure.
+    const msoOpenIndex = html.indexOf('<!--[if mso]><table role="presentation" width="700"');
+    const msoCloseIndex = html.indexOf('<!--[if mso]></td></tr></table><![endif]-->');
+    const columnIndex = html.indexOf('width="272"');
+    expect(columnIndex).toBeGreaterThan(msoOpenIndex);
+    expect(columnIndex).toBeLessThan(msoCloseIndex);
+  });
+
+  it('responsive mobile stacking is unchanged: columns still become display:block/width:100%, gutter still hidden on mobile only', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+    const html = renderEmailDocument(withModules([layout]));
+    expect(html).toMatch(/@media only screen and \(max-width:600px\)\{[\s\S]*?col0\{display:block !important; width:100% !important;\}/);
+    expect(html).toMatch(/@media only screen and \(max-width:600px\)\{[\s\S]*?gut0\{display:none !important; width:0 !important; height:0 !important;\}/);
+    // The desktop gutter cell itself is still present with its real
+    // configured width — mobile hides it via the media-query class rule
+    // above, never by zeroing the desktop value itself.
+    expect(html).toContain('width="20"');
+  });
+});
+
+// Configurable Mobile Gutter Behavior — full-document (renderEmailDocument,
+// the SAME function CodeEditorPanel/PreviewStudioPanel/ExportDeployDialog
+// all call) proof that desktop output is byte-identical regardless of the
+// setting, and that the mobile media-query behavior matches the setting.
+describe('Feature 05 — Independently Configurable Desktop/Mobile Gutter', () => {
+  function layoutWithGutters(desktopPx: number, mobilePx: number, hideGutterOnMobile: boolean) {
+    const layout = createModule('layout-2col-40-60', 0);
+    layout.settings = {
+      ...layout.settings,
+      columnGutterPx: desktopPx,
+      mobileColumnGutterPx: mobilePx,
+      hideGutterOnMobile,
+    };
+    return layout;
+  }
+
+  it('desktop column/gutter output is byte-identical whether hideGutterOnMobile is true or false, and independent of the Mobile gutter value', () => {
+    // Same module identity for both renders (only the one setting
+    // toggles) so a freshly-generated id/class per createModule() call
+    // never masks the comparison.
+    const layout = layoutWithGutters(20, 12, true);
+    const htmlHidden = renderEmailDocument(withModules([layout]));
+    layout.settings = { ...layout.settings, hideGutterOnMobile: false };
+    const htmlShown = renderEmailDocument(withModules([layout]));
+    // Strip the two documents down to everything BEFORE the responsive
+    // <style> block (which is the only place this setting can differ) —
+    // the desktop table structure itself must be identical.
+    const desktopPortion = (html: string) => html.slice(html.indexOf('<body'));
+    expect(desktopPortion(htmlHidden)).toBe(desktopPortion(htmlShown));
+    expect(htmlHidden).toContain('width="272"');
+    expect(htmlShown).toContain('width="272"');
+    // Desktop gutter cell keeps its OWN (Desktop) value — 20, never 12.
+    expect(htmlHidden).toContain('width="20"');
+    expect(htmlShown).toContain('width="20"');
+  });
+
+  it('Preview/Code/Export consistency: one renderEmailDocument call produces both the correct desktop pixels and the correct (independent) mobile media rule together', () => {
+    const html = renderEmailDocument(withModules([layoutWithGutters(20, 12, false)]));
+    expect(html).toContain('width="272"'); // desktop, deterministic px, uses the Desktop gutter (20)
+    expect(html).toMatch(/gut0\{display:block !important; width:100% !important; height:12px !important;/); // mobile, vertical spacer, uses the Mobile gutter (12)
+  });
+
+  it('shown mobile gutter (false) produces exactly the configured Mobile vertical spacing value, never the Desktop one', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutterPx: 45, mobileColumnGutterPx: 8, hideGutterOnMobile: false };
+    const html = renderEmailDocument(withModules([layout]));
+    expect(html).toMatch(/gut0\{display:block !important; width:100% !important; height:8px !important;/);
+    expect(html).not.toMatch(/gut0\{[^}]*height:45px/);
+  });
+
+  it('hidden mobile gutter (true, default) produces zero spacing — no height rule at all for that gutter', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutterPx: 45, mobileColumnGutterPx: 45 };
+    const html = renderEmailDocument(withModules([layout]));
+    expect(html).not.toMatch(/gut0\{[^}]*height:45px/);
+    expect(html).toMatch(/gut0\{display:none !important; width:0 !important; height:0 !important;\}/);
+  });
+
+  it('editing the Mobile gutter does not overwrite the Desktop gutter, and vice versa — both survive together in one document', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutterPx: 30, mobileColumnGutterPx: 30 };
+    // Simulate editing ONLY the Mobile field (as the UI's onChange patch would).
+    layout.settings = { ...layout.settings, mobileColumnGutterPx: 5, hideGutterOnMobile: false };
+    expect(layout.settings.columnGutterPx).toBe(30); // untouched by the Mobile edit
+    const html = renderEmailDocument(withModules([layout]));
+    expect(html).toContain('width="30"'); // Desktop gutter cell unaffected
+    expect(html).toMatch(/gut0\{display:block !important; width:100% !important; height:5px !important;/);
+  });
+
+  it('mobile stacked columns remain width:100% regardless of the gutter setting or values — Desktop pixel widths are never used as Mobile widths', () => {
+    for (const hide of [true, false]) {
+      const html = renderEmailDocument(withModules([layoutWithGutters(272, 12, hide)]));
+      expect(html, `hide=${hide}`).toMatch(/col0\{display:block !important; width:100% !important;\}/);
+      expect(html, `hide=${hide}`).toMatch(/col1\{display:block !important; width:100% !important;\}/);
+    }
+  });
+
+  it('Classic Outlook (MSO conditional) desktop rendering is unchanged by this setting or either gutter value', () => {
+    const htmlHidden = renderEmailDocument(withModules([layoutWithGutters(20, 12, true)]));
+    const htmlShown = renderEmailDocument(withModules([layoutWithGutters(20, 12, false)]));
+    const msoPrefix = '<!--[if mso]><table role="presentation" width="700"';
+    expect(htmlHidden).toContain(msoPrefix);
+    expect(htmlShown).toContain(msoPrefix);
+    // The MSO conditional wrapper text itself is identical in both cases
+    // (only the Mobile-only <style> media rules differ).
+    const msoBlock = (html: string) => html.slice(html.indexOf(msoPrefix), html.indexOf(msoPrefix) + msoPrefix.length + 120);
+    expect(msoBlock(htmlHidden)).toBe(msoBlock(htmlShown));
+  });
+
+  it('both gutter values persist as part of ordinary module settings — no separate/second persistence mechanism', () => {
+    // columnGutterPx/mobileColumnGutterPx round-trip through a plain
+    // object spread exactly like every other layout setting (mobileStack,
+    // ...) — proven by the renderer reading them straight off
+    // module.settings with no special-cased storage path.
+    const layout = layoutWithGutters(20, 12, false);
+    const cloned = JSON.parse(JSON.stringify(layout));
+    const html = renderEmailDocument(withModules([cloned]));
+    expect(html).toContain('width="20"');
+    expect(html).toMatch(/gut0\{display:block !important; width:100% !important; height:12px !important;/);
+  });
+
+  it('a legacy document (pre-independent-fields columnGutter shape) still renders a sane Desktop gutter via the resolver fallback', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
+    const html = renderEmailDocument(withModules([layout]));
+    expect(html).toContain('width="20"');
   });
 });

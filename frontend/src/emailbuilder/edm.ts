@@ -135,7 +135,37 @@ export interface EmailModuleSettings {
   // see docs/module-4 Feature-05 brief section 8. Desktop is the static-
   // HTML-export source of truth, same convention as outerSpacing/padding;
   // `mobile` is an explicit override only, absent = inherits desktop.
+  // Deprecated — superseded by the independent columnGutterPx/
+  // mobileColumnGutterPx pair below. Kept only so an already-normalized
+  // document from before that split (this same Feature 05 arc, never
+  // shipped to real users) still resolves a sane gutter value — see
+  // resolveDesktopGutterPx/resolveMobileGutterPx's legacy fallback. Never
+  // written by the UI or the renderer anymore.
   columnGutter?: ResponsiveDimension;
+  // Layout modules only — Independently Configurable Desktop/Mobile
+  // Gutter. Desktop gutter, in px, always a real fixed-width spacer <td>
+  // between adjacent columns (see catalog/layoutCatalog.tsx's
+  // resolveColumnPixelWidths call). Undefined = 0 (no gutter), the same
+  // default as before this field existed.
+  columnGutterPx?: number;
+  // Layout modules only — the Mobile gutter, in px, fully INDEPENDENT of
+  // columnGutterPx (never derived/defaulted from it, never overwritten
+  // by editing the desktop value or vice versa). On Mobile this becomes
+  // real VERTICAL spacing between stacked columns (a block-level spacer
+  // <td> with an explicit height) — it never participates in Mobile
+  // column WIDTH math, which is always a flat 100% regardless of any
+  // gutter value (see responsiveStyles.ts's layoutRules). Preserved even
+  // while hideGutterOnMobile is true, so unchecking it restores exactly
+  // this value — hiding never clears it. Undefined = 0.
+  mobileColumnGutterPx?: number;
+  // Layout modules only — whether the gutter is rendered as vertical
+  // spacing on Mobile at all. true (default) = no vertical gutter,
+  // today's original auto-collapse behavior. false = render exactly
+  // mobileColumnGutterPx between adjacent stacked columns. Never
+  // mutates/resets either gutter value — purely a display toggle.
+  // Desktop rendering is completely independent of this setting either
+  // way. Undefined = true (backward compatible).
+  hideGutterOnMobile?: boolean;
   // Layout modules only (Feature 05) — the order columns are shown in
   // when mobileStack is on, as an array of desktop column indexes (e.g.
   // [1, 0] shows desktop column 2 first). Canvas-preview + data-model
@@ -250,20 +280,28 @@ export function isMobileOuterSpacingOverridden(settings: EmailModuleSettings, si
   return side in settings.outerSpacing.mobile;
 }
 
-const ZERO_GUTTER: DimensionValue = { value: 0, unit: 'px' };
+// Layout modules only — resolves settings.columnGutterPx, defaulting to
+// 0 (no gutter) when the module has none set at all (e.g. a non-layout
+// module, or a document normalized before this field existed). Falls
+// back to the deprecated `columnGutter.desktop` shape only when the new
+// field is genuinely absent, so an already-normalized document from
+// earlier in this same feature arc still resolves correctly.
+export function resolveDesktopGutterPx(settings: EmailModuleSettings): number {
+  if (typeof settings.columnGutterPx === 'number') return Math.max(0, Math.round(settings.columnGutterPx));
+  const legacy = settings.columnGutter?.desktop;
+  return legacy && legacy.unit === 'px' ? Math.max(0, Math.round(legacy.value)) : 0;
+}
 
-// Layout modules only — resolves settings.columnGutter for the given
-// viewport, defaulting to 0px (no gutter) when the module has none set at
-// all (e.g. a non-layout module, or an older document normalized before
-// Feature 05). Desktop is the static-HTML-export source of truth, same
-// convention as resolveOuterSpacing/resolveSpacing above.
-export function resolveColumnGutter(
-  settings: EmailModuleSettings, viewport: 'desktop' | 'mobile',
-): DimensionValue {
-  const gutter = settings.columnGutter;
-  if (!gutter) return ZERO_GUTTER;
-  if (viewport === 'mobile' && gutter.mobile) return gutter.mobile;
-  return gutter.desktop;
+// Layout modules only — resolves settings.mobileColumnGutterPx. This is
+// a genuinely INDEPENDENT value (never derived from columnGutterPx) —
+// see EmailModuleSettings.mobileColumnGutterPx's own docstring. Falls
+// back to the deprecated `columnGutter.mobile` shape only when the new
+// field is absent; otherwise defaults to 0, same convention as the
+// desktop resolver above.
+export function resolveMobileGutterPx(settings: EmailModuleSettings): number {
+  if (typeof settings.mobileColumnGutterPx === 'number') return Math.max(0, Math.round(settings.mobileColumnGutterPx));
+  const legacyMobile = settings.columnGutter?.mobile;
+  return legacyMobile && legacyMobile.unit === 'px' ? Math.max(0, Math.round(legacyMobile.value)) : 0;
 }
 
 export interface EmailModule<Props = Record<string, unknown>> {

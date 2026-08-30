@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   balanceColumnWidths, cloneColumnsWithNewIds, createColumn, createEmptyColumns, duplicateNestedModule,
   findModuleById, findModulePath, insertNestedModule, isLayoutModuleType, moveModuleBetweenColumns,
-  removeNestedModule, reorderNestedModule, updateColumnSettings, updateColumnWidths, updateNestedModuleProps,
-  validateColumnWidths,
+  removeNestedModule, reorderNestedModule, resolveColumnPixelWidths, updateColumnSettings, updateColumnWidths,
+  updateNestedModuleProps, validateColumnWidths,
 } from './layoutModel';
 import { createResponsiveSettings } from './registryCore';
 import type { EmailModule } from './edm';
@@ -27,6 +27,95 @@ function layoutWith(columnsModules: EmailModule[][]): EmailModule {
     })),
   };
 }
+
+// Column Width + Gutter Rendering Correction — the ONE deterministic
+// pixel resolver every desktop multi-column renderer path uses. Every
+// fixture asserts the exact invariant this correction exists to
+// guarantee: sum(columnPx) + sum(gutterPx * (N-1)) === parentWidthPx,
+// never approximately.
+describe('layoutModel — resolveColumnPixelWidths', () => {
+  function assertInvariant(ratios: number[], gutterPx: number, parentWidthPx: number) {
+    const { columnPx, gutterPx: resolvedGutterPx } = resolveColumnPixelWidths(ratios, gutterPx, parentWidthPx);
+    const totalGutter = resolvedGutterPx * Math.max(0, ratios.length - 1);
+    const sum = columnPx.reduce((total, px) => total + px, 0) + totalGutter;
+    expect(sum).toBe(parentWidthPx);
+    return columnPx;
+  }
+
+  it('700 / 70-30 / gutter 30 -> 469 + 30 + 201 (exact brief example)', () => {
+    const columnPx = assertInvariant([70, 30], 30, 700);
+    expect(columnPx).toEqual([469, 201]);
+  });
+
+  it('700 / 40-60 / gutter 20 -> 272 + 20 + 408 (exact brief example)', () => {
+    const columnPx = assertInvariant([40, 60], 20, 700);
+    expect(columnPx).toEqual([272, 408]);
+  });
+
+  it('700 / 33-33-34 / gutter 20 -> 218 + 20 + 218 + 20 + 224 (exact brief example, 3 columns / 2 gutters)', () => {
+    const columnPx = assertInvariant([33, 33, 34], 20, 700);
+    expect(columnPx).toEqual([218, 218, 224]);
+  });
+
+  it('600 / 40-60 / gutter 20 -> 232 + 20 + 348', () => {
+    const columnPx = assertInvariant([40, 60], 20, 600);
+    expect(columnPx).toEqual([232, 348]);
+  });
+
+  it('700 / 50-50 / gutter 20 -> 340 + 20 + 340', () => {
+    const columnPx = assertInvariant([50, 50], 20, 700);
+    expect(columnPx).toEqual([340, 340]);
+  });
+
+  it('zero gutter: 700 / 50-50 / gutter 0 -> 350 + 350, no space subtracted', () => {
+    const columnPx = assertInvariant([50, 50], 0, 700);
+    expect(columnPx).toEqual([350, 350]);
+  });
+
+  it('1 column: gutter is irrelevant (N-1=0 gutters) — the single column receives the full parent width', () => {
+    const columnPx = assertInvariant([100], 20, 700);
+    expect(columnPx).toEqual([700]);
+  });
+
+  it('4 columns, even ratios, 3 gutters: 700 / 25-25-25-25 / gutter 20 -> 160 x4 (no rounding needed)', () => {
+    const columnPx = assertInvariant([25, 25, 25, 25], 20, 700);
+    expect(columnPx).toEqual([160, 160, 160, 160]);
+  });
+
+  it('5 columns, even ratios, 4 gutters: 700 / 20x5 / gutter 20 -> 124 x5 (no rounding needed)', () => {
+    const columnPx = assertInvariant([20, 20, 20, 20, 20], 20, 700);
+    expect(columnPx).toEqual([124, 124, 124, 124, 124]);
+  });
+
+  it('6 columns, uneven ratios (the real layout-6col catalog ratios), 5 gutters: deterministic rounding, remainder on the last column', () => {
+    const columnPx = assertInvariant([17, 17, 16, 17, 16, 17], 20, 700);
+    expect(columnPx).toEqual([102, 102, 96, 102, 96, 102]);
+  });
+
+  it('a different document width (1000px) still satisfies the invariant for every catalog ratio set', () => {
+    assertInvariant([70, 30], 30, 1000);
+    assertInvariant([33, 33, 34], 20, 1000);
+    assertInvariant([17, 17, 16, 17, 16, 17], 15, 1000);
+  });
+
+  it('a narrow document width (320px, the minimum custom width) still satisfies the invariant, never going negative', () => {
+    const columnPx = assertInvariant([50, 50], 20, 320);
+    expect(columnPx.every((px) => px >= 0)).toBe(true);
+  });
+
+  it('rounding is deterministic — the same inputs always produce the same outputs', () => {
+    const a = resolveColumnPixelWidths([33, 33, 34], 20, 700);
+    const b = resolveColumnPixelWidths([33, 33, 34], 20, 700);
+    expect(a).toEqual(b);
+  });
+
+  it('does not mutate the ratios array or otherwise touch the semantic ratio values', () => {
+    const ratios = [40, 60];
+    const original = [...ratios];
+    resolveColumnPixelWidths(ratios, 20, 700);
+    expect(ratios).toEqual(original);
+  });
+});
 
 describe('layoutModel — column width balancing/validation', () => {
   it('balances 2/3/4/6 columns matching the brief\'s examples', () => {

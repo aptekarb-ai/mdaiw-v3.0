@@ -1,13 +1,14 @@
 import type { EmailModuleType, LayoutModuleProps } from '../edm';
-import { ZERO_SPACING, resolveColumnGutter, resolveSpacing } from '../edm';
+import { ZERO_SPACING, resolveDesktopGutterPx, resolveMobileGutterPx, resolveSpacing } from '../edm';
 import { widthCssValue } from '../dimensions';
 import {
-  GENERIC_ONLY, NESTED_MODULE_PARENT_PLACEHOLDER, createResponsiveSettings, moduleTable, paddingStyle,
-  renderModuleWithOuterStructure, resolveModuleDefinition, wrapModuleComment,
+  GENERIC_ONLY, NESTED_MODULE_PARENT_PLACEHOLDER, cell, createResponsiveSettings, moduleTable, moduleTableRow,
+  paddingStyle, renderModuleWithOuterStructure, resolveModuleDefinition, wrapModuleComment,
   type ModuleDefinition,
 } from '../registryCore';
 import { columnResponsiveClassName, gutterResponsiveClassName } from '../responsiveStyles';
-import { createEmptyColumns } from '../layoutModel';
+import { createEmptyColumns, resolveColumnPixelWidths } from '../layoutModel';
+import { DEFAULT_EMAIL_WIDTH } from '../widthOptions';
 
 function layoutDefinition(
   type: EmailModuleType, label: string, columnWidths: number[], tags: string[],
@@ -58,20 +59,43 @@ function layoutDefinition(
     // Left/Right Outer Spacer settings are honored exactly like a
     // top-level module's, independently of the parent Layout's own outer
     // spacer values. No div-wrapping special case.
-    renderEmailHtml: (module) => {
+    renderEmailHtml: (module, availableWidthPx) => {
       const columns = module.columns ?? createEmptyColumns(module.props.columnWidths.length);
-      const gutterDimension = resolveColumnGutter(module.settings, 'desktop');
-      const gutterPx = gutterDimension.unit === 'px' ? Math.round(gutterDimension.value) : 0;
+      const gutterPx = resolveDesktopGutterPx(module.settings);
 
-      // Feature 07 — mobile gutter override may want a gutter even when
-      // Desktop's is 0 (or vice versa collapse a nonzero Desktop gutter
-      // to 0) — emit the gutter <td> whenever EITHER viewport needs one,
-      // same OR-active convention as wrapWithOuterSpacing's outer spacer
-      // cells, so the responsive <style> block always has a real <td> to
-      // target.
-      const mobileGutterDimension = resolveColumnGutter(module.settings, 'mobile');
-      const mobileGutterPx = mobileGutterDimension.unit === 'px' ? Math.round(mobileGutterDimension.value) : 0;
+      // Independently Configurable Desktop/Mobile Gutter — the Mobile
+      // gutter is a fully separate value that may be nonzero even when
+      // Desktop's is 0 (or vice versa) — emit the gutter <td> whenever
+      // EITHER viewport needs one, same OR-active convention as
+      // wrapWithOuterSpacing's outer spacer cells, so the responsive
+      // <style> block always has a real <td> to target. Whether the
+      // Mobile gutter actually renders as vertical spacing is decided
+      // entirely by responsiveStyles.ts (hideGutterOnMobile) — this file
+      // only decides whether the CELL exists, never its Mobile behavior.
+      const mobileGutterPx = resolveMobileGutterPx(module.settings);
       const gutterActive = gutterPx > 0 || mobileGutterPx > 0;
+
+      // Column Width + Gutter Rendering Correction — the ONE deterministic
+      // pixel resolver (layoutModel.ts's resolveColumnPixelWidths) turns
+      // the semantic ratios (module.props.columnWidths — untouched by
+      // this, still the persisted source of truth) into exact column
+      // pixel widths, with the configured DESKTOP gutter subtracted from
+      // `availableWidthPx` (the immediate parent's real pixel width,
+      // threaded down from renderModuleWithOuterStructure — never a
+      // hard-coded document.width) BEFORE ratio allocation. This is what
+      // makes columns + gutters sum to exactly availableWidthPx instead
+      // of the old `width="N%"` + separate fixed-px gutter <td> in the
+      // same row summing to MORE than the parent (100% + gutter). The
+      // gutter itself is never zeroed to solve this — its configured
+      // pixel value is preserved and actually subtracted correctly.
+      // Defensive fallback only — the centralized entry point
+      // (registryCore.tsx's renderModuleWithOuterStructure, the ONLY
+      // caller in production/exported HTML) always supplies a real
+      // value; this covers direct definition.renderEmailHtml(module)
+      // calls some tests use to inspect a single module's raw output.
+      const { columnPx } = resolveColumnPixelWidths(
+        module.props.columnWidths, gutterPx, availableWidthPx ?? DEFAULT_EMAIL_WIDTH,
+      );
 
       // Module-4 Final Gap Closure, Correction 2 (Feature 05) — the
       // Desktop visual sequence as an array of ORIGINAL column indexes.
@@ -98,25 +122,39 @@ function layoutDefinition(
       let nestedModuleIndex = 0;
       const cells = desktopOrderedIndexes.map((index, position) => {
         const column = columns[index];
-        const width = module.props.columnWidths[index] ?? 0;
+        const widthPx = columnPx[index] ?? 0;
         const spacing = resolveSpacing(column.settings, 'desktop');
         const valign = column.settings.verticalAlign;
         const background = column.settings.backgroundColor ? `background-color:${column.settings.backgroundColor};` : '';
-        const innerHtml = column.modules.length === 0
+        const innerContent = column.modules.length === 0
           ? '&nbsp;'
           : column.modules.map((nested) => {
             nestedModuleIndex += 1;
             const nestedDefinition = resolveModuleDefinition(nested.type);
             const nestedLabel = `${NESTED_MODULE_PARENT_PLACEHOLDER}.${nestedModuleIndex}: `
               + (nestedDefinition?.label ?? nested.type).toUpperCase();
-            return wrapModuleComment(renderModuleWithOuterStructure(nested), nestedLabel);
+            return wrapModuleComment(renderModuleWithOuterStructure(nested, widthPx), nestedLabel);
           }).join('');
+        // Column Width + Gutter Rendering Correction — the width-bearing
+        // structural <td> below carries ONLY width/valign/background and
+        // explicit padding:0. User-configured column padding is applied
+        // on an INNER single-cell table instead (the exact same nested-
+        // table pattern wrapWithOuterSpacing already uses for outer
+        // spacer columns) — padding on the SAME cell as a declared pixel
+        // width would grow that cell beyond its allocated share in
+        // standard content-box table-cell rendering, which this app
+        // deliberately does not override via box-sizing:border-box
+        // (Outlook does not reliably honor it).
+        const innerHtml = moduleTableRow(cell(innerContent, paddingStyle(spacing)));
         // class is appended AFTER width/valign (never before) so the
-        // existing `<td width="N%" valign="...` literal-prefix tests
+        // existing `<td width="N" valign="...` literal-prefix tests
         // stay byte-identical whether or not Feature 07 needs a class here.
+        // Both the HTML width attribute AND the inline CSS pixel width
+        // are emitted (Classic Outlook honors the attribute; modern
+        // clients honor the CSS) — never a bare percentage.
         const columnCell = (
-          `<td width="${width}%" valign="${valign}" class="${columnResponsiveClassName(module.id, index)}" `
-          + `style="width:${width}%; vertical-align:${valign}; ${background}${paddingStyle(spacing)}">`
+          `<td width="${widthPx}" valign="${valign}" class="${columnResponsiveClassName(module.id, index)}" `
+          + `style="width:${widthPx}px; vertical-align:${valign}; padding:0; ${background}">`
           + `${innerHtml}</td>`
         );
         const isLastRendered = position === desktopOrderedIndexes.length - 1;

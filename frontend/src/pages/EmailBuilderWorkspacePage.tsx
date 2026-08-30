@@ -838,6 +838,7 @@ export function EmailBuilderWorkspacePage() {
           breadcrumb={breadcrumb}
           breadcrumbLayoutId={breadcrumbLayoutId}
           viewport={viewMode}
+          documentWidth={document.width}
           onUpdateProps={handleUpdateProps}
           onUpdateSettings={handleUpdateSettings}
           onUpdateColumnWidths={builder.updateColumnWidths}

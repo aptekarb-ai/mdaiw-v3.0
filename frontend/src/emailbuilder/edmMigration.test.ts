@@ -69,6 +69,100 @@ describe('normalizeModule — Feature 07 responsive settings survive normalizati
     expect(normalized.settings.outlookVml).toBeUndefined();
   });
 
+  // Configurable Mobile Gutter Behavior — same allowlist regression class
+  // as outlookVml above, found live in this same session: a reloaded
+  // document with hideGutterOnMobile: false silently reverted to the
+  // default (true) because normalizeSettings() never carried the key.
+  it('preserves hideGutterOnMobile through normalization when explicitly false', () => {
+    const normalized = normalizeModule(rawModule({ hideGutterOnMobile: false }));
+    expect(normalized.settings.hideGutterOnMobile).toBe(false);
+  });
+
+  it('preserves hideGutterOnMobile through normalization when explicitly true', () => {
+    const normalized = normalizeModule(rawModule({ hideGutterOnMobile: true }));
+    expect(normalized.settings.hideGutterOnMobile).toBe(true);
+  });
+
+  it('a document with no hideGutterOnMobile key normalizes with it absent — no destructive default injected', () => {
+    const normalized = normalizeModule(rawModule({}));
+    expect(normalized.settings.hideGutterOnMobile).toBeUndefined();
+  });
+
+  it('a non-boolean hideGutterOnMobile value is dropped (normalizes to undefined)', () => {
+    const normalized = normalizeModule(rawModule({ hideGutterOnMobile: 'yes' }));
+    expect(normalized.settings.hideGutterOnMobile).toBeUndefined();
+  });
+
+  it('legacy flat settings shape also preserves hideGutterOnMobile when present', () => {
+    const legacy = {
+      id: 'm4',
+      type: 'layout-2col-50-50',
+      order: 0,
+      props: { columnWidths: [50, 50] },
+      settings: {
+        paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+        columnGutter: { desktop: { value: 20, unit: 'px' } },
+        hideGutterOnMobile: false,
+      },
+    } as unknown as EmailModule;
+    const normalized = normalizeModule(legacy);
+    expect(normalized.settings.hideGutterOnMobile).toBe(false);
+  });
+
+  // Independently Configurable Desktop/Mobile Gutter — same allowlist
+  // regression class again: columnGutterPx and mobileColumnGutterPx are
+  // two SEPARATE fields, both must independently survive normalization,
+  // neither may leak into or default from the other.
+  it('preserves columnGutterPx and mobileColumnGutterPx independently through normalization', () => {
+    const normalized = normalizeModule(rawModule({ columnGutterPx: 30, mobileColumnGutterPx: 12 }));
+    expect(normalized.settings.columnGutterPx).toBe(30);
+    expect(normalized.settings.mobileColumnGutterPx).toBe(12);
+  });
+
+  it('preserves columnGutterPx and mobileColumnGutterPx when only one is set (the other stays undefined, not defaulted from it)', () => {
+    const desktopOnly = normalizeModule(rawModule({ columnGutterPx: 30 }));
+    expect(desktopOnly.settings.columnGutterPx).toBe(30);
+    expect(desktopOnly.settings.mobileColumnGutterPx).toBeUndefined();
+
+    const mobileOnly = normalizeModule(rawModule({ mobileColumnGutterPx: 12 }));
+    expect(mobileOnly.settings.mobileColumnGutterPx).toBe(12);
+    expect(mobileOnly.settings.columnGutterPx).toBeUndefined();
+  });
+
+  it('preserves a zero value for either gutter (0 is a real, meaningful value, not "unset")', () => {
+    const normalized = normalizeModule(rawModule({ columnGutterPx: 0, mobileColumnGutterPx: 0 }));
+    expect(normalized.settings.columnGutterPx).toBe(0);
+    expect(normalized.settings.mobileColumnGutterPx).toBe(0);
+  });
+
+  it('a document with neither key normalizes with both absent — no destructive default injected', () => {
+    const normalized = normalizeModule(rawModule({}));
+    expect(normalized.settings.columnGutterPx).toBeUndefined();
+    expect(normalized.settings.mobileColumnGutterPx).toBeUndefined();
+  });
+
+  it('a non-numeric value for either field is dropped (normalizes to undefined)', () => {
+    const normalized = normalizeModule(rawModule({ columnGutterPx: '30', mobileColumnGutterPx: null }));
+    expect(normalized.settings.columnGutterPx).toBeUndefined();
+    expect(normalized.settings.mobileColumnGutterPx).toBeUndefined();
+  });
+
+  it('legacy flat settings shape also preserves columnGutterPx/mobileColumnGutterPx when present', () => {
+    const legacy = {
+      id: 'm5',
+      type: 'layout-2col-50-50',
+      order: 0,
+      props: { columnWidths: [50, 50] },
+      settings: {
+        paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+        columnGutterPx: 30, mobileColumnGutterPx: 12,
+      },
+    } as unknown as EmailModule;
+    const normalized = normalizeModule(legacy);
+    expect(normalized.settings.columnGutterPx).toBe(30);
+    expect(normalized.settings.mobileColumnGutterPx).toBe(12);
+  });
+
   it('legacy flat settings shape also preserves outlookVml when present', () => {
     const legacy = {
       id: 'm3',

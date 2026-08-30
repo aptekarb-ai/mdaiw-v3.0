@@ -1,13 +1,12 @@
 import type {
   ColumnContainerSettings, ColumnVerticalAlign, EmailColumn, EmailModule, EmailModuleSettings, LayoutColumnDirection,
 } from './edm';
-import { MAX_PADDING, MIN_PADDING, resolveColumnGutter, resolveSpacing } from './edm';
+import { MAX_PADDING, MIN_PADDING, resolveDesktopGutterPx, resolveMobileGutterPx, resolveSpacing } from './edm';
 import type { BuilderViewMode } from './registryCore';
-import { ResponsiveDimensionField } from './DimensionControl';
 import { ColorControl } from './ColorControl';
 import {
   COLUMN_GUTTER_PX_BOUNDS, COLUMN_VALIGN_OPTIONS, LOW_COLUMN_WIDTH_WARNING_PERCENT, MIN_COLUMN_WIDTH_PERCENT,
-  balanceColumnWidths, hasLowWidthWarning, validateColumnWidths,
+  balanceColumnWidths, hasLowWidthWarning, resolveColumnPixelWidths, validateColumnWidths,
 } from './layoutModel';
 
 function clampPadding(raw: number): number {
@@ -90,12 +89,26 @@ export function LayoutStructureOverview({ module, onSelectColumn }: {
 
 // --- Style tab: column widths + gutter -----------------------------------
 
-export function ColumnWidthsEditor({ module, onChangeWidths }: {
-  module: EmailModule; onChangeWidths: (widths: number[]) => void;
+// Column Width Display + Responsive Gutter UI Correction — mode-aware.
+// Desktop (or Mobile with stacking explicitly OFF, since the exported
+// HTML then genuinely stays side-by-side there too — no CSS override
+// exists to change it): shows the SAME effective pixel widths
+// layoutCatalog.tsx's renderEmailHtml actually emits (via the identical
+// resolveColumnPixelWidths call, never a second algorithm), alongside
+// the editable source ratio. Mobile WITH stacking: ratios are
+// meaningless as rendered widths (every stacked column is a flat 100%
+// regardless of ratio — see responsiveStyles.ts), so this shows that
+// truthfully instead of a misleading 50/50 readout; the ratios
+// themselves are untouched underneath and reappear exactly as before
+// when switching back to Desktop.
+export function ColumnWidthsEditor({ module, viewport, availableWidthPx, onChangeWidths }: {
+  module: EmailModule; viewport: BuilderViewMode; availableWidthPx: number; onChangeWidths: (widths: number[]) => void;
 }) {
   const widths = (module.props as { columnWidths: number[] }).columnWidths;
   const validation = validateColumnWidths(widths);
   const lowWarning = hasLowWidthWarning(widths);
+  const stacksOnMobile = module.settings.mobileStack !== false;
+  const showStackedMobileView = viewport === 'mobile' && stacksOnMobile;
 
   function setWidth(index: number, value: number) {
     const next = widths.slice();
@@ -103,13 +116,39 @@ export function ColumnWidthsEditor({ module, onChangeWidths }: {
     onChangeWidths(next);
   }
 
+  if (showStackedMobileView) {
+    const mobileGutterPx = resolveMobileGutterPx(module.settings);
+    const hideGutterOnMobile = module.settings.hideGutterOnMobile !== false;
+    return (
+      <div className="properties-panel__field-group">
+        <span className="properties-panel__field-group-label">Column Widths</span>
+        <p className="properties-panel__hint">
+          Columns stack to full width on Mobile. The Desktop ratios below stay stored and are restored exactly when you switch back.
+        </p>
+        <ul className="properties-panel__mobile-width-summary">
+          {widths.map((_, index) => (
+            <li key={index}>Column {index + 1} — 100% stacked</li>
+          ))}
+          {widths.length > 1 && (
+            <li>Vertical spacing — {hideGutterOnMobile ? 'hidden' : `${mobileGutterPx}px`}</li>
+          )}
+        </ul>
+      </div>
+    );
+  }
+
+  const gutterPx = resolveDesktopGutterPx(module.settings);
+  const { columnPx } = resolveColumnPixelWidths(widths, gutterPx, availableWidthPx);
+  const totalGutterPx = gutterPx * Math.max(0, widths.length - 1);
+  const effectiveTotalPx = columnPx.reduce((sum, px) => sum + px, 0) + totalGutterPx;
+
   return (
-    <div className="properties-panel__field-group">
+    <div className="properties-panel__field-group properties-panel__field-group--column-widths">
       <span className="properties-panel__field-group-label">Column Widths</span>
       <div className="properties-panel__column-widths">
         {widths.map((width, index) => (
           <label key={index} className="properties-panel__field">
-            <span>Column {index + 1}</span>
+            <span>Column {index + 1} ({columnPx[index] ?? 0}px)</span>
             <div className="properties-panel__column-width-input">
               <input
                 type="number"
@@ -126,6 +165,9 @@ export function ColumnWidthsEditor({ module, onChangeWidths }: {
       </div>
       <p className={validation.totalError ? 'properties-panel__validation properties-panel__validation--error' : 'properties-panel__validation'}>
         Total: {validation.total}%{validation.totalError ? ' — must equal 100%' : ''}
+      </p>
+      <p className="properties-panel__hint">
+        Effective total: {effectiveTotalPx}px{effectiveTotalPx === availableWidthPx ? ' ✓' : ''}
       </p>
       {validation.belowMinimum.length > 0 && (
         <p className="properties-panel__validation properties-panel__validation--error">
@@ -144,19 +186,77 @@ export function ColumnWidthsEditor({ module, onChangeWidths }: {
   );
 }
 
+function clampGutterPx(raw: number): number {
+  if (!Number.isFinite(raw)) return COLUMN_GUTTER_PX_BOUNDS.pxMin;
+  return Math.min(COLUMN_GUTTER_PX_BOUNDS.pxMax, Math.max(COLUMN_GUTTER_PX_BOUNDS.pxMin, Math.round(raw)));
+}
+
+// Column Width Display + Responsive Gutter UI Correction — mode-aware:
+// only ONE of Desktop/Mobile is ever shown at a time, driven by the
+// builder's own Desktop/Mobile viewport toggle (never both fields
+// together). Desktop and Mobile remain two genuinely separate stored
+// values (columnGutterPx/mobileColumnGutterPx, never derived from each
+// other) — switching modes only changes which field is VISIBLE, it never
+// reads, writes or clears the other one. The caller (PropertiesPanel.tsx)
+// hides this whole control for a 1-column layout, where a gutter is
+// meaningless.
 export function ColumnGutterEditor({ settings, viewport, onChange }: {
   settings: EmailModuleSettings; viewport: BuilderViewMode; onChange: (patch: Partial<EmailModuleSettings>) => void;
 }) {
-  const current = settings.columnGutter ?? { desktop: resolveColumnGutter(settings, 'desktop') };
+  const desktopPx = resolveDesktopGutterPx(settings);
+  const mobilePx = resolveMobileGutterPx(settings);
+  const hideGutterOnMobile = settings.hideGutterOnMobile !== false;
+  const isMobile = viewport === 'mobile';
+
+  if (isMobile) {
+    return (
+      <div className="properties-panel__field-group">
+        <span className="properties-panel__field-group-label">Column Spacing</span>
+        <label className="properties-panel__field">
+          <span>Mobile (px)</span>
+          <input
+            type="number"
+            min={COLUMN_GUTTER_PX_BOUNDS.pxMin}
+            max={COLUMN_GUTTER_PX_BOUNDS.pxMax}
+            value={mobilePx}
+            disabled={hideGutterOnMobile}
+            onChange={(event) => onChange({ mobileColumnGutterPx: clampGutterPx(Number(event.target.value)) })}
+          />
+        </label>
+        <label className="properties-panel__checkbox-field">
+          <input
+            type="checkbox"
+            checked={hideGutterOnMobile}
+            onChange={(event) => onChange({ hideGutterOnMobile: event.target.checked })}
+          />
+          <span>Hide gutter on mobile</span>
+        </label>
+        {/* The stored Mobile value is NEVER cleared when hidden — only
+            the input above is visually disabled — so unchecking this
+            always restores exactly what was configured before. */}
+        <p className="properties-panel__hint">
+          {hideGutterOnMobile
+            ? `No vertical spacing between stacked columns. Uncheck to restore ${mobilePx}px.`
+            : `${mobilePx}px of vertical spacing between stacked columns.`}
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <ResponsiveDimensionField
-      label="Column Gutter"
-      dimension={current}
-      viewport={viewport}
-      pxBounds={COLUMN_GUTTER_PX_BOUNDS}
-      allowedUnits={['px']}
-      onChange={(next) => onChange({ columnGutter: next })}
-    />
+    <div className="properties-panel__field-group">
+      <span className="properties-panel__field-group-label">Column Gutter</span>
+      <label className="properties-panel__field">
+        <span>Desktop (px)</span>
+        <input
+          type="number"
+          min={COLUMN_GUTTER_PX_BOUNDS.pxMin}
+          max={COLUMN_GUTTER_PX_BOUNDS.pxMax}
+          value={desktopPx}
+          onChange={(event) => onChange({ columnGutterPx: clampGutterPx(Number(event.target.value)) })}
+        />
+      </label>
+    </div>
   );
 }
 
@@ -278,16 +378,28 @@ export function DesktopDirectionSettings({ module, onChange }: {
 // --- Column-selected editor ------------------------------------------------
 
 export function ColumnEditor({
-  module, column, columnIndex, viewport, onChangeWidths, onChangeColumnSettings,
+  module, column, columnIndex, viewport, availableWidthPx, onChangeWidths, onChangeColumnSettings,
 }: {
   module: EmailModule;
   column: EmailColumn;
   columnIndex: number;
   viewport: BuilderViewMode;
+  // Column Width Display + Responsive Gutter UI Correction — the layout's
+  // real available pixel width (registryCore.tsx's
+  // computeLayoutAvailableWidthPx), used ONLY to display the effective
+  // rendered width beside the editable ratio — never to compute a
+  // second, independent width value.
+  availableWidthPx: number;
   onChangeWidths: (widths: number[]) => void;
   onChangeColumnSettings: (patch: Partial<ColumnContainerSettings>) => void;
 }) {
   const widths = (module.props as { columnWidths: number[] }).columnWidths;
+  const stacksOnMobile = module.settings.mobileStack !== false;
+  const showStackedMobileView = viewport === 'mobile' && stacksOnMobile;
+  const gutterPx = resolveDesktopGutterPx(module.settings);
+  const { columnPx } = resolveColumnPixelWidths(widths, gutterPx, availableWidthPx);
+  const effectivePx = columnPx[columnIndex] ?? 0;
+  const ratio = widths[columnIndex] ?? 0;
 
   return (
     <>
@@ -300,7 +412,7 @@ export function ColumnEditor({
               min={0}
               max={100}
               step={0.01}
-              value={widths[columnIndex] ?? 0}
+              value={ratio}
               onChange={(event) => {
                 const next = widths.slice();
                 next[columnIndex] = Number(event.target.value);
@@ -310,6 +422,19 @@ export function ColumnEditor({
             <span>%</span>
           </div>
         </label>
+        {/* Column Width Display + Responsive Gutter UI Correction — the
+            persisted value stays the ratio (the input above); this is a
+            READ-ONLY derived readout of what the renderer actually
+            produces, from the exact same resolveColumnPixelWidths call
+            layoutCatalog.tsx uses — never a second calculation, and the
+            ratio itself is never converted to px as the stored value. */}
+        {showStackedMobileView ? (
+          <p className="properties-panel__hint">100% stacked on Mobile — the {ratio}% Desktop ratio is preserved.</p>
+        ) : (
+          <p className="properties-panel__column-effective-width">
+            {effectivePx}px <span className="properties-panel__hint">({ratio}% layout ratio)</span>
+          </p>
+        )}
         <ColorControl
           label="Background color"
           value={column.settings.backgroundColor}
