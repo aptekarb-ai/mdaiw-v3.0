@@ -12,6 +12,7 @@ import { renderEmailDocument } from './htmlRenderer';
 import { validateEmail } from './emailValidation';
 import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
 import { affectedClientLabel, signatureForIssueId, type RepairCandidate } from './repairEngine';
+import { createConsumedHandoffTracker, type AIEngineerHandoff } from './aiEngineerHandoff';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { findModuleById } from './layoutModel';
 import {
@@ -58,13 +59,20 @@ interface AIEngineerPanelProps {
   // AIEditorContext below for why this does not yet drive a real
   // column-scoped edit action).
   selectedColumn: { layoutId: string; columnId: string } | null;
-  // E7 -> E9/E10 cross-feature integration — set once when the user
-  // arrives here via "Ask AI Engineer"/"Review N more with AI Engineer";
-  // sent as the first user turn, then the caller is told to clear it via
-  // onInitialPromptConsumed so a later tab switch never resends it.
-  initialPrompt?: string | null;
-  initialIssueId?: string;
-  onInitialPromptConsumed?: () => void;
+  // E7 -> E9/E10 cross-feature integration — a one-shot handoff created
+  // when the user clicks "Ask AI Engineer"/"Review N more with AI
+  // Engineer" in Validation Center. Consumed here by id via
+  // onConsumeAiEngineerHandoff (the caller's own idempotency tracker,
+  // which survives this panel's own mount/unmount — see
+  // aiEngineerHandoff.ts's module docstring for why that ownership
+  // matters), then reported back via onHandoffConsumed. If the caller
+  // omits onConsumeAiEngineerHandoff, this panel falls back to a
+  // same-instance ref guard — safe for a standalone render (e.g. tests)
+  // but NOT a substitute for the caller-owned tracker across a real
+  // remount; production always wires the real one.
+  aiEngineerHandoff?: AIEngineerHandoff | null;
+  onConsumeAiEngineerHandoff?: (handoffId: string) => boolean;
+  onHandoffConsumed?: () => void;
   // Sub-phase 4, item 2 — full module tree + document settings, so this
   // panel can compute the SAME ValidationReport Validation Center shows
   // (validateEmail on the real rendered HTML — item 7: one canonical rule
@@ -223,7 +231,7 @@ export function AIEngineerPanel({
   documentId, editorMode, platform, width, selectedModule, selectedColumn, content,
   emailTitle, emailSubject, faviconUrl,
   resetCssEnabled, customCssEnabled, customCss, outlookVml,
-  initialPrompt, initialIssueId, onInitialPromptConsumed,
+  aiEngineerHandoff, onConsumeAiEngineerHandoff, onHandoffConsumed,
   onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction,
 }: AIEngineerPanelProps) {
   const [subView, setSubView] = useState<'chat' | 'history'>('chat');
@@ -277,14 +285,14 @@ export function AIEngineerPanel({
   // deterministically — see handleSend's local-intent branch below. This
   // is a genuinely bounded, real mechanism (not a claim that the
   // deterministic router understands arbitrary pronoun reference); it
-  // resets whenever a fresh initialIssueId arrives or the document
+  // resets whenever a fresh handoff issueId arrives or the document
   // changes.
   // A plain ref, not React state: nothing in this component's JSX
   // displays it, and handleSend() is sometimes invoked in the SAME tick
-  // as a change to it (the initialPrompt effect below) — React state
+  // as a change to it (the handoff-consuming effect below) — React state
   // updates are async/batched, so a ref is what guarantees handleSend
   // always reads the value that was JUST set, not a stale one.
-  const lastDiscussedIssueIdRef = useRef<string | null>(initialIssueId ?? null);
+  const lastDiscussedIssueIdRef = useRef<string | null>(aiEngineerHandoff?.issueId ?? null);
   function setLastDiscussedIssueId(id: string | null) {
     lastDiscussedIssueIdRef.current = id;
   }
@@ -335,19 +343,40 @@ export function AIEngineerPanel({
     voice.cancel();
   }
 
-  // E7 -> E9/E10 cross-feature integration — a seed prompt arriving from
-  // Validation Center's "Ask AI Engineer" is sent as the first user turn
-  // exactly once, then reported back as consumed. initialIssueId (when
-  // present) is applied first so the seeded message's own local-intent
-  // match (if it matches 'explain-selected-issue'-style phrasing) already
-  // has the right issue in context.
+  // Same-instance fallback guard ONLY — used when the caller doesn't wire
+  // onConsumeAiEngineerHandoff (e.g. a standalone test render). This ref
+  // is reset on every remount, so it does NOT protect against a real
+  // AIEngineerPanel unmount/remount (tab switch) the way the caller's own
+  // tracker does — see aiEngineerHandoff.ts's module docstring. Production
+  // (EmailBuilderWorkspacePage) always passes the real tracker.
+  const fallbackConsumedHandoffTrackerRef = useRef(createConsumedHandoffTracker());
+
+  // E7 -> E9/E10 cross-feature integration — a one-shot handoff arriving
+  // from Validation Center's "Ask AI Engineer"/"Review N more with AI
+  // Engineer" is sent as the first user turn EXACTLY once, then reported
+  // back as consumed. Consumption is guarded by the handoff's own unique
+  // id (never by message text — a user may legitimately send the same
+  // text twice) via onConsumeAiEngineerHandoff, a compare-and-swap that
+  // returns true only for the very first caller to see this id. This is
+  // what makes the effect body safe under React StrictMode's dev-only
+  // double-invocation of a mount's effects: both invocations run
+  // synchronously against the SAME tracker (no re-render needed in
+  // between, unlike clearing state), so only the first can ever pass.
+  // issueId (when present) is applied first so the seeded message's own
+  // local-intent match (if it matches 'explain-selected-issue'-style
+  // phrasing) already has the right issue in context.
   useEffect(() => {
-    if (!initialPrompt) return;
-    if (initialIssueId) setLastDiscussedIssueId(initialIssueId);
-    void handleSend(initialPrompt);
-    onInitialPromptConsumed?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new initialPrompt value only, not on every render
-  }, [initialPrompt]);
+    const handoff = aiEngineerHandoff;
+    if (!handoff) return;
+    if (handoff.documentId !== documentId) return; // a different document's handoff can never be consumed here
+    const tryConsume = onConsumeAiEngineerHandoff
+      ?? ((id: string) => fallbackConsumedHandoffTrackerRef.current.tryConsume(id));
+    if (!tryConsume(handoff.id)) return; // already consumed — StrictMode's second invoke, or a stale remount
+    if (handoff.issueId) setLastDiscussedIssueId(handoff.issueId);
+    void handleSend(handoff.prompt);
+    onHandoffConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new handoff object only; the id-based tryConsume guard above (not this dependency array) is what makes re-invocation safe
+  }, [aiEngineerHandoff]);
 
   // Sub-phase 4, item 2/7 — the SAME validateEmail() call Validation
   // Center makes, over the SAME rendered HTML — one canonical report, so

@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +7,7 @@ import { requestAICommand } from '../api/client';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { createModule } from './moduleFactory';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
+import { createAIEngineerHandoff, createConsumedHandoffTracker } from './aiEngineerHandoff';
 import type { AICommandResponse } from './aiCommand';
 
 vi.mock('../api/client', () => ({ requestAICommand: vi.fn() }));
@@ -734,7 +736,11 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
 
     // A second "Ask AI Engineer" seed, exactly like Validation Center's
     // Explain modal produces.
-    renderPanel({ initialPrompt: 'Explain this issue and, if possible, fix it: Email title is empty — The document <title> is empty.' });
+    const tracker = createConsumedHandoffTracker();
+    renderPanel({
+      aiEngineerHandoff: createAIEngineerHandoff(1, 'Explain this issue and, if possible, fix it: Email title is empty — The document <title> is empty.'),
+      onConsumeAiEngineerHandoff: tracker.tryConsume,
+    });
 
     expect(await screen.findByText(/Email title is empty/)).toBeInTheDocument();
     // The FIRST exchange must still be present — not silently dropped.
@@ -890,6 +896,203 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
 
       expect(await screen.findByText(/no longer pending/)).toBeInTheDocument();
       expect(screen.queryByText('Repair 1 issue')).not.toBeInTheDocument();
+    });
+  });
+
+  // Bug fix — "Review N more with AI Engineer" inserted its handoff prompt
+  // twice (two user messages, two /ai-command/ requests, two assistant
+  // replies) from a single click. Root cause: the effect that consumed
+  // the seed prompt had no idempotency guard at all, so React StrictMode's
+  // dev-only double-invocation of a fresh mount's effects sent it twice
+  // (both invocations run synchronously, before the parent's state-clearing
+  // update from the first send could propagate as a new render). The
+  // handoff is now an explicit one-shot event with a unique id, consumed
+  // via a compare-and-swap tracker owned by whichever component never
+  // unmounts across an AI Engineer tab switch (EmailBuilderWorkspacePage
+  // in production) — see aiEngineerHandoff.ts.
+  describe('AI Engineer handoff (Validation -> AI Engineer one-shot event)', () => {
+    function handoffResponse(overrides: Partial<AICommandResponse> = {}): AICommandResponse {
+      return response({ reply: 'Handoff acknowledged.', action: { type: 'NONE' }, requires_confirmation: false, ...overrides });
+    }
+
+    it('one click (one handoff) sends exactly one handoff message, one request, and one reply', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+
+      expect(await screen.findByText('Handoff acknowledged.')).toBeInTheDocument();
+      expect(screen.getAllByText(handoff.prompt)).toHaveLength(1);
+      expect(screen.getAllByText('Handoff acknowledged.')).toHaveLength(1);
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('React StrictMode double-invoking the mount effect still sends exactly one request', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const onApplyAction = vi.fn().mockReturnValue(true);
+      const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
+      const onApplyRepairAction = vi.fn().mockReturnValue(true);
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+
+      render(
+        <AIEngineerPanel
+          documentId={1}
+          editorMode="ai"
+          platform="generic"
+          width={700}
+          selectedModule={null}
+          selectedColumn={null}
+          content={{ version: 1, modules: [] }}
+          emailTitle="Test Email"
+          emailSubject="Test subject"
+          faviconUrl=""
+          resetCssEnabled
+          customCssEnabled={false}
+          customCss=""
+          onApplyAction={onApplyAction}
+          onApplyDocumentSettingAction={onApplyDocumentSettingAction}
+          onApplyRepairAction={onApplyRepairAction}
+          aiEngineerHandoff={handoff}
+          onConsumeAiEngineerHandoff={tracker.tryConsume}
+        />,
+        { wrapper: StrictMode },
+      );
+
+      expect(await screen.findByText('Handoff acknowledged.')).toBeInTheDocument();
+      expect(screen.getAllByText(handoff.prompt)).toHaveLength(1);
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('unmounting and remounting with the SAME still-pending handoff (tab switch before the parent cleared it) does not resend', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+
+      const first = renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await screen.findByText('Handoff acknowledged.');
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+      first.unmount();
+
+      // Same tracker instance (the real owner never unmounts on a tab
+      // switch), same handoff object — simulates Validate -> AI Engineer
+      // -> Validate -> AI Engineer without another Review click.
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      // Give any errant effect a tick to fire before asserting it didn't.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('a re-render with the same handoff object does not resend', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+      const onApplyAction = vi.fn().mockReturnValue(true);
+      const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
+      const onApplyRepairAction = vi.fn().mockReturnValue(true);
+
+      const ui = (
+        <AIEngineerPanel
+          documentId={1}
+          editorMode="ai"
+          platform="generic"
+          width={700}
+          selectedModule={null}
+          selectedColumn={null}
+          content={{ version: 1, modules: [] }}
+          emailTitle="Test Email"
+          emailSubject="Test subject"
+          faviconUrl=""
+          resetCssEnabled
+          customCssEnabled={false}
+          customCss=""
+          onApplyAction={onApplyAction}
+          onApplyDocumentSettingAction={onApplyDocumentSettingAction}
+          onApplyRepairAction={onApplyRepairAction}
+          aiEngineerHandoff={handoff}
+          onConsumeAiEngineerHandoff={tracker.tryConsume}
+        />
+      );
+      const { rerender } = render(ui);
+      await screen.findByText('Handoff acknowledged.');
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+      rerender(ui);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('clicking Review a second intentional time (a new handoff, new id) sends exactly one new request/message pair', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const handoffA = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+      const handoffB = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 3 issues.');
+      expect(handoffA.id).not.toBe(handoffB.id);
+
+      const first = renderPanel({ aiEngineerHandoff: handoffA, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await screen.findByText(handoffA.prompt);
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+      first.unmount();
+
+      renderPanel({ aiEngineerHandoff: handoffB, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await screen.findByText(handoffB.prompt);
+      expect(requestAICommand).toHaveBeenCalledTimes(2);
+    });
+
+    it('existing multi-turn history remains intact across a handoff', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const first = renderPanel();
+      const user = userEvent.setup();
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText('Handoff acknowledged.');
+      first.unmount();
+
+      const handoff = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+
+      expect(await screen.findByText(handoff.prompt)).toBeInTheDocument();
+      expect(screen.getByText('add a button')).toBeInTheDocument();
+    });
+
+    it('a handoff created for a DIFFERENT document is never consumed here', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createAIEngineerHandoff(999, 'Review and, where safe, propose fixes for these 2 issues.');
+      renderPanel({ documentId: 1, aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requestAICommand).not.toHaveBeenCalled();
+      expect(screen.queryByText(handoff.prompt)).not.toBeInTheDocument();
+      // The id was never consumed, so the SAME handoff could still be
+      // honored by the document it actually belongs to.
+      expect(tracker.tryConsume(handoff.id)).toBe(true);
+    });
+
+    it('Clear Conversation empties the transcript and does not replay the just-consumed handoff', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(handoffResponse());
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createAIEngineerHandoff(1, 'Review and, where safe, propose fixes for these 2 issues.');
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await screen.findByText('Handoff acknowledged.');
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+      const user = userEvent.setup();
+      await user.click(screen.getByRole('button', { name: 'Clear conversation' }));
+
+      expect(screen.queryByText(handoff.prompt)).not.toBeInTheDocument();
+      expect(screen.queryByText('Handoff acknowledged.')).not.toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
     });
   });
 });

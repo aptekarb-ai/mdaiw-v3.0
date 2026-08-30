@@ -15,6 +15,7 @@ import { PreviewStudioPanel } from '../emailbuilder/PreviewStudioPanel';
 import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
 import { AIEngineerPanel } from '../emailbuilder/AIEngineerPanel';
 import type { AICommandAction, RepairActionItem } from '../emailbuilder/aiCommand';
+import { createAIEngineerHandoff, createConsumedHandoffTracker, type AIEngineerHandoff } from '../emailbuilder/aiEngineerHandoff';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { DocumentSettingsDialog, type DocumentSettingsInput } from '../emailbuilder/DocumentSettingsDialog';
 import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
@@ -61,12 +62,23 @@ export function EmailBuilderWorkspacePage() {
   const [highlightValidationIssueId, setHighlightValidationIssueId] = useState<string | null>(null);
   // Cross-feature integration (E7 -> E9/E10) — set only when arriving at
   // the AI Engineer tab via Validation Center's "Ask AI Engineer" action
-  // on an issue's explanation; AIEngineerPanel consumes it once (sends it
-  // as the first user turn, and — when issueId is present — resolves it
-  // back to the real ValidationIssue for E10 referent tracking) then
-  // reports back via onInitialPromptConsumed so a later tab switch never
-  // re-sends a stale prompt.
-  const [aiEngineerSeed, setAiEngineerSeed] = useState<{ prompt: string; issueId?: string } | null>(null);
+  // on an issue's explanation, or "Review N more with AI Engineer".
+  // Modeled as an explicit one-shot handoff (unique id), not "whenever
+  // these fields are non-null, send a message" — that shape is what
+  // previously let React StrictMode's dev-only double-invoke of
+  // AIEngineerPanel's mount effect send the same seed prompt twice (two
+  // messages, two /ai-command/ requests). consumedHandoffIdsRef lives HERE
+  // (this component never unmounts across an 'ai' tab switch), so it is
+  // the one true idempotency guard — AIEngineerPanel remounting when the
+  // user tabs away and back can never re-consume an id already recorded
+  // here, and StrictMode's two synchronous effect invocations both see the
+  // SAME ref, so only the first can ever win. See aiEngineerHandoff.ts.
+  const [aiEngineerHandoff, setAiEngineerHandoff] = useState<AIEngineerHandoff | null>(null);
+  const consumedHandoffTrackerRef = useRef(createConsumedHandoffTracker());
+  const tryConsumeAiEngineerHandoff = useCallback(
+    (handoffId: string) => consumedHandoffTrackerRef.current.tryConsume(handoffId),
+    [],
+  );
   // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — ephemeral
   // editor-viewport state only: never sent to the backend, never stored on
   // EmailDocument/EDM, never persisted to localStorage. Reset to 100 every
@@ -390,9 +402,10 @@ export function EmailBuilderWorkspacePage() {
   // or backend-routed command flow can pick it up exactly like the user
   // had typed it themselves — never a second, parallel explanation path.
   const handleAskAiEngineerAboutIssue = useCallback((prompt: string, issueId?: string) => {
-    setAiEngineerSeed({ prompt, issueId });
+    if (!document) return;
+    setAiEngineerHandoff(createAIEngineerHandoff(document.id, prompt, issueId));
     setEditorMode('ai');
-  }, []);
+  }, [document]);
 
   const handleSaveAsTemplate = useCallback(async (templateName: string) => {
     if (!document) throw new Error('No document loaded');
@@ -841,9 +854,9 @@ export function EmailBuilderWorkspacePage() {
             customCssEnabled={builder.documentSettings.custom_css_enabled}
             customCss={builder.documentSettings.custom_css}
             outlookVml={builder.documentSettings.outlook_vml_enabled}
-            initialPrompt={aiEngineerSeed?.prompt ?? null}
-            initialIssueId={aiEngineerSeed?.issueId}
-            onInitialPromptConsumed={() => setAiEngineerSeed(null)}
+            aiEngineerHandoff={aiEngineerHandoff}
+            onConsumeAiEngineerHandoff={tryConsumeAiEngineerHandoff}
+            onHandoffConsumed={() => setAiEngineerHandoff(null)}
             onApplyAction={handleApplyAiAction}
             onApplyDocumentSettingAction={handleApplyDocumentSettingAiAction}
             onApplyRepairAction={handleApplyRepairAction}
