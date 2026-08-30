@@ -91,20 +91,42 @@
   position: relative;
   width: 120px;
   height: 120px;
-  flex-shrink: 0;
+  flex: 0 0 120px;
+}
+
+.validation-center-panel__gauge svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .validation-center-panel__gauge svg circle {
   transition: stroke-dashoffset var(--transition-standard, 180ms ease);
 }
 
+/* Score-text centering fix — align-items: baseline (the previous rule)
+   aligns "48" and "/100" along their text baseline, not the container's
+   true geometric center; since the two spans use different font sizes,
+   baseline alignment sits visibly off-center (varies with font metrics,
+   not with score value). center is what actually centers the group
+   inside the same 120x120 box the SVG fills — the ONE positioning
+   container both share, so this never drifts regardless of score
+   digits, sidebar width, or zoom. 48/"100" reads as one centered group
+   via white-space: nowrap, not two independently positioned elements. */
 .validation-center-panel__gauge-text {
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: center;
+  white-space: nowrap;
+  pointer-events: none;
   gap: 2px;
+}
+
+.validation-center-panel__gauge-score,
+.validation-center-panel__gauge-max {
+  line-height: 1;
 }
 
 .validation-center-panel__gauge-score {
