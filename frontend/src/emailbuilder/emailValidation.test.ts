@@ -40,6 +40,34 @@ describe('validateEmail', () => {
     expect(accCategory.status).toBe('needs-attention');
   });
 
+  // C-3 remediation — a placeholder link must identify its module (via
+  // moduleId, from the real module tree, not a flat HTML regex count) so
+  // it can offer "Go to module" and route through "Review with AI
+  // Engineer" (which requires fixType === 'manual' && moduleId — see
+  // ValidationCenterPanel.tsx's aiAssistableIssues filter) instead of
+  // being a dead-end Explain-only issue.
+  it('flags a placeholder link with the real affected moduleId, routable to AI Engineer', () => {
+    const button = createModule('button', 0);
+    const content = contentWith([button]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+
+    const issue = report.issues.find((i) => i.id === 'links:placeholder-href');
+    expect(issue).toBeDefined();
+    expect(issue!.severity).toBe('error');
+    expect(issue!.fixType).toBe('manual');
+    expect(issue!.moduleId).toBe(button.id);
+  });
+
+  it('does not flag a link once a real destination URL is set', () => {
+    const button = createModule('button', 0) as EmailModule<Record<string, unknown>>;
+    button.props = { ...button.props, href: 'https://example.com/shop' };
+    const content = contentWith([button]);
+    const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'links:placeholder-href')).toBe(false);
+  });
+
   it('flags weak text/background contrast with a safe-fix that snaps to a readable color', () => {
     const badContrast = textModule({ color: '#cccccc', backgroundColor: '#ffffff' });
     const content = contentWith([badContrast]);
@@ -517,6 +545,35 @@ describe('validateEmail', () => {
   it('Sub-phase 3: does not flag New Outlook when there is no VML at all (a real generated document)', () => {
     const content = contentWith([createModule('text', 0)]);
     const html = renderEmailDocument({ width: 700, content });
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-new:vml-not-processed')).toBe(false);
+  });
+
+  // C-1 remediation — a real document's own Layout Background VML
+  // (renderVmlBackground) always places the plain background HTML
+  // unconditionally outside its VML comment block, so New Outlook already
+  // sees real content; this must NOT be flagged as "New Outlook shows
+  // nothing at all" just because a '<v:' tag is present somewhere.
+  it('does not flag New Outlook for a real Layout Background VML fallback (a proper HTML/CSS fallback already exists)', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = {
+      ...layout.settings, outlookVml: true, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/parent-bg.jpg',
+    };
+    const content = contentWith([layout]);
+    const html = renderEmailDocument({ width: 700, content });
+    expect(html).toContain('<v:rect');
+    const report = validateEmail(html, content, 'generic');
+    expect(report.issues.some((i) => i.id === 'outlook-new:vml-not-processed')).toBe(false);
+  });
+
+  // A real bulletproof VML button (renderVmlButton) always pairs its
+  // v:roundrect with a genuine HTML fallback — must not be flagged either.
+  it('does not flag New Outlook for a real bulletproof VML button (its HTML fallback is always present)', () => {
+    const button = createModule('button', 0);
+    button.settings = { ...button.settings, outlookVml: true };
+    const content = contentWith([button]);
+    const html = renderEmailDocument({ width: 700, content });
+    expect(html).toContain('<v:roundrect');
     const report = validateEmail(html, content, 'generic');
     expect(report.issues.some((i) => i.id === 'outlook-new:vml-not-processed')).toBe(false);
   });

@@ -44,6 +44,150 @@ from .knowledge.rules import find_rule
 MAX_MESSAGE_LENGTH = 500
 MAX_GENERATED_MODULES = 5
 
+# --- C-2 remediation: deterministic (no-LLM) weak-text-contrast fix -----
+#
+# Mirrors emailValidation.ts's own contrastRatio()/relativeLuminance()
+# formula exactly (same WCAG 2.x math, same 6-digit-hex-only scope) so the
+# deterministic router's notion of "passes AA" never diverges from what
+# Validation Center itself will report on revalidation. This is a
+# DIFFERENT algorithm from emailValidation.ts's jointlySafeReadableColor
+# (which only ever snaps to pure black/white and requires the result to
+# also survive dark-mode inversion) — this one nudges the EXISTING
+# foreground color's own lightness by the smallest amount that clears the
+# threshold, preserving hue/brand intent, per the "smallest practical
+# adjustment" requirement. Never a second repair engine: this only ever
+# produces a prop value for the SAME UPDATE_MODULE_PROPS action every
+# other style command already returns, going through the same
+# validate_action()/mutation/undo/revalidate path.
+WCAG_AA_NORMAL_TEXT_RATIO = 4.5
+_HEX_COLOR_RE = re.compile(r'^#?([0-9a-fA-F]{6})$')
+
+
+def _hex_to_rgb(value):
+    if not isinstance(value, str):
+        return None
+    match = _HEX_COLOR_RE.match(value.strip())
+    if not match:
+        return None
+    hex_digits = match.group(1)
+    return tuple(int(hex_digits[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb):
+    r, g, b = (max(0, min(255, round(c))) for c in rgb)
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+def _relative_luminance(rgb):
+    def channel(c):
+        s = c / 255
+        return s / 12.92 if s <= 0.03928 else ((s + 0.055) / 1.055) ** 2.4
+    r, g, b = rgb
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def _contrast_ratio(hex_a, hex_b):
+    rgb_a = _hex_to_rgb(hex_a)
+    rgb_b = _hex_to_rgb(hex_b)
+    if rgb_a is None or rgb_b is None:
+        return None
+    lum_a = _relative_luminance(rgb_a)
+    lum_b = _relative_luminance(rgb_b)
+    lighter, darker = max(lum_a, lum_b), min(lum_a, lum_b)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _rgb_to_hsl(rgb):
+    r, g, b = (c / 255 for c in rgb)
+    mx, mn = max(r, g, b), min(r, g, b)
+    lightness = (mx + mn) / 2
+    if mx == mn:
+        return 0.0, 0.0, lightness
+    d = mx - mn
+    saturation = d / (2 - mx - mn) if lightness > 0.5 else d / (mx + mn)
+    if mx == r:
+        hue = (g - b) / d + (6 if g < b else 0)
+    elif mx == g:
+        hue = (b - r) / d + 2
+    else:
+        hue = (r - g) / d + 4
+    return hue / 6, saturation, lightness
+
+
+def _hue_to_rgb_channel(p, q, t):
+    if t < 0:
+        t += 1
+    if t > 1:
+        t -= 1
+    if t < 1 / 6:
+        return p + (q - p) * 6 * t
+    if t < 1 / 2:
+        return q
+    if t < 2 / 3:
+        return p + (q - p) * (2 / 3 - t) * 6
+    return p
+
+
+def _hsl_to_rgb(hue, saturation, lightness):
+    if saturation == 0:
+        channel = lightness * 255
+        return channel, channel, channel
+    q = lightness * (1 + saturation) if lightness < 0.5 else lightness + saturation - lightness * saturation
+    p = 2 * lightness - q
+    r = _hue_to_rgb_channel(p, q, hue + 1 / 3)
+    g = _hue_to_rgb_channel(p, q, hue)
+    b = _hue_to_rgb_channel(p, q, hue - 1 / 3)
+    return r * 255, g * 255, b * 255
+
+
+def minimal_readable_foreground(foreground_hex, background_hex, target=WCAG_AA_NORMAL_TEXT_RATIO):
+    """The smallest same-hue lightness adjustment to `foreground_hex` that
+    reaches `target` contrast against `background_hex`, or None when this
+    cannot be resolved automatically:
+      - either color isn't a plain 6-digit hex (unknown/transparent/
+        gradient background, or any color this deterministic check can't
+        reason about) — never guessed;
+      - the pair already passes (nothing to fix);
+      - the foreground is already at the lightness extreme in its natural
+        direction (e.g. already pure white against a background it still
+        can't clear) — pushing further isn't possible, and flipping to
+        the opposite pole would be a large change, not the smallest
+        practical one, so this declines rather than forcing it.
+    Returns {'old_color', 'new_color', 'old_ratio', 'new_ratio'} on success.
+    """
+    fg_rgb = _hex_to_rgb(foreground_hex)
+    bg_rgb = _hex_to_rgb(background_hex)
+    if fg_rgb is None or bg_rgb is None:
+        return None
+    old_ratio = _contrast_ratio(foreground_hex, background_hex)
+    if old_ratio is None or old_ratio >= target:
+        return None
+
+    hue, saturation, lightness = _rgb_to_hsl(fg_rgb)
+    fg_lum = _relative_luminance(fg_rgb)
+    bg_lum = _relative_luminance(bg_rgb)
+    # Push the foreground's lightness AWAY from the background's own
+    # luminance — the direction that can plausibly increase contrast
+    # without crossing over the background (which would be a much bigger
+    # perceptual change than "smallest practical adjustment").
+    direction = 1 if fg_lum >= bg_lum else -1
+
+    step = 0.01
+    new_lightness = lightness
+    for _ in range(100):
+        new_lightness += direction * step
+        if new_lightness < 0.0 or new_lightness > 1.0:
+            return None
+        candidate_rgb = _hsl_to_rgb(hue, saturation, new_lightness)
+        candidate_hex = _rgb_to_hex(candidate_rgb)
+        new_ratio = _contrast_ratio(candidate_hex, background_hex)
+        if new_ratio is not None and new_ratio >= target:
+            return {
+                'old_color': foreground_hex, 'new_color': candidate_hex,
+                'old_ratio': round(old_ratio, 2), 'new_ratio': round(new_ratio, 2),
+            }
+    return None
+
 # Words a user might say that map onto one of the deterministic router's
 # INSERT_MODULE vocabulary. Deliberately still bounded to the original
 # "basic" 5 types — expanding NL insert recognition to the full 53-type
@@ -1093,6 +1237,22 @@ _CLEAR_FAVICON_PATTERN = re.compile(r'\b(clear|remove|delete)\b.*\bfavicon\b', r
 _SET_FAVICON_PATTERN = re.compile(r'\bfavicon\b\s*(.*)$', re.IGNORECASE | re.DOTALL)
 _FAVICON_VALUE_PREFIX_PATTERN = re.compile(r'^(?:url\s+)?(?:to|as)?\s*:?\s*', re.IGNORECASE)
 
+# C-3 remediation — "fix this placeholder link" (href="#") must never
+# invent a destination URL. Scoped narrowly to "placeholder link" or an
+# explicit fix/link combination so it doesn't collide with unrelated
+# link-styling commands (e.g. "make the link blue").
+_PLACEHOLDER_LINK_FIX_PATTERN = re.compile(
+    r'\bplaceholder\s+link\b|\bfix\b.*\b(?:this|the|it)\b.*\blink\b|\blink\b.*\bfix\b',
+    re.IGNORECASE,
+)
+_URL_IN_TEXT_PATTERN = re.compile(r'https?://\S+', re.IGNORECASE)
+
+# C-2 remediation — "fix this weak contrast" / "fix the text contrast".
+_WEAK_CONTRAST_FIX_PATTERN = re.compile(
+    r'\b(?:weak|low|poor)\s+(?:text\s+)?contrast\b|\bfix\b.*\bcontrast\b|\bcontrast\b.*\bfix\b',
+    re.IGNORECASE,
+)
+
 # Sub-phase 3, item 13 — deterministic, zero-OpenAI-token "explain X"
 # intent, sourced entirely from knowledge/rules.py's 9 Outlook/MSO
 # explainer entries. Never mutates the document (action is always NONE) —
@@ -1568,6 +1728,105 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
             return CommandResult(
                 reply=f'I will set the favicon to {url}.',
                 action={'type': ActionType.SET_FAVICON, 'url': url}, confidence=0.85,
+            )
+
+        # C-3 remediation — never guess a destination for a placeholder
+        # link; ask for it unless the user already gave one in this same
+        # message, and only ever write it through the module's own
+        # manifest-allow-listed 'href' field (never a second, parallel
+        # link-mutation path — same UPDATE_MODULE_PROPS every other
+        # property change already goes through).
+        if _PLACEHOLDER_LINK_FIX_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            href_field = module_capabilities.get_editable_field(selected_type, 'href')
+            if href_field is None:
+                return CommandResult(
+                    reply=f'The selected {selected_type} module does not have a link to fix.',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            url_match = _URL_IN_TEXT_PATTERN.search(text)
+            if not url_match:
+                return CommandResult(
+                    reply=(
+                        "I won't guess a destination for this link. What URL should it go to? "
+                        '(e.g. "use https://example.com/shop")'
+                    ),
+                    action={'type': ActionType.NONE}, confidence=0.4,
+                )
+            url = _clean_url_value(url_match.group(0))
+            if not url:
+                return CommandResult(
+                    reply="That URL doesn't look valid — please give a full https:// (or http://) link.",
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=f"I will set the selected {selected_type} module's link to {url}. Please confirm.",
+                action={
+                    'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
+                    'module_type': selected_type, 'patch': {'href': url},
+                },
+                confidence=0.85,
+            )
+
+        # C-2 remediation — deterministic (no-LLM) weak-text-contrast fix.
+        # Computes a real WCAG AA-compliant color via
+        # minimal_readable_foreground() and proposes it through the same
+        # UPDATE_MODULE_PROPS path every other style command uses — never
+        # a second repair engine. Declines (explain-only) rather than
+        # guess when the module's background isn't a plain resolvable
+        # color (a background image makes the flat backgroundColor prop
+        # not the true effective background) or when no smaller-than-
+        # extreme adjustment can reach the threshold.
+        if _WEAK_CONTRAST_FIX_PATTERN.search(lowered):
+            if not selected_type:
+                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+            props = selected.get('props') if isinstance(selected, dict) else None
+            props = props if isinstance(props, dict) else {}
+            # Different module types name their text-color field
+            # differently (e.g. Text uses 'color', Button uses
+            # 'textColor') — same fallback order emailValidation.ts's own
+            # contrast check already uses, never a hardcoded single key.
+            color_key = 'color' if module_capabilities.get_editable_field(selected_type, 'color') else (
+                'textColor' if module_capabilities.get_editable_field(selected_type, 'textColor') else None
+            )
+            if color_key is None:
+                return CommandResult(
+                    reply=f'The selected {selected_type} module does not have a text color I can adjust.',
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            if props.get('backgroundImage'):
+                return CommandResult(
+                    reply=(
+                        "I can't reliably compute contrast here — this module has a background image, so its "
+                        'true effective background is not just the flat background color. Please pick a color '
+                        'manually with the contrast in mind.'
+                    ),
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            foreground = props.get(color_key)
+            background = props.get('backgroundColor')
+            fix = minimal_readable_foreground(foreground, background) if foreground and background else None
+            if fix is None:
+                return CommandResult(
+                    reply=(
+                        "I can't compute a safe automatic fix here — either the current color isn't a plain "
+                        'value I can reason about, or the contrast already can\'t be closed with a small change '
+                        'to the text color alone. Please choose a color manually.'
+                    ),
+                    action={'type': ActionType.NONE}, confidence=0.3,
+                )
+            return CommandResult(
+                reply=(
+                    f"The current text color {fix['old_color']} has a contrast ratio of {fix['old_ratio']}:1 "
+                    f"against {background} — WCAG AA needs at least {WCAG_AA_NORMAL_TEXT_RATIO}:1. I will change "
+                    f"the text color to {fix['new_color']} (ratio {fix['new_ratio']}:1). Please confirm."
+                ),
+                action={
+                    'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
+                    'module_type': selected_type, 'patch': {color_key: fix['new_color']},
+                },
+                confidence=0.85,
             )
 
         # Sub-phase 6, work package D — VML fallback toggle ("enable

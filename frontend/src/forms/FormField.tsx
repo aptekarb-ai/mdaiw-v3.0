@@ -8,7 +8,7 @@ interface FormFieldProps extends InputHTMLAttributes<HTMLInputElement> {
   required?: boolean;
 }
 
-export function FormField({ id, label, error, required, ...inputProps }: FormFieldProps) {
+export function FormField({ id, label, error, required, type = 'text', ...inputProps }: FormFieldProps) {
   return (
     <div className="form-field">
       <label htmlFor={id}>
@@ -22,6 +22,7 @@ export function FormField({ id, label, error, required, ...inputProps }: FormFie
       </label>
       <input
         id={id}
+        type={type}
         aria-invalid={Boolean(error)}
         aria-describedby={error ? `${id}-error` : undefined}
         {...inputProps}

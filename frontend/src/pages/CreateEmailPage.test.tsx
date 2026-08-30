@@ -40,6 +40,18 @@ describe('CreateEmailPage', () => {
     expect(screen.getByText(/Configure your email environment, width, and starting point/)).toBeInTheDocument();
   });
 
+  // Setup/Choose Template/Configure/Start Building were never real states —
+  // every non-blank Start From hands off to its own page instead of moving
+  // through steps 2-4 here. The numbered stepper was removed rather than
+  // manufacturing fake steps to justify keeping it.
+  it('does not render a numbered wizard stepper (no real multi-step flow exists on this page)', () => {
+    renderPage();
+    expect(screen.queryByRole('list', { name: /progress/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('Choose Template')).not.toBeInTheDocument();
+    expect(screen.queryByText('Configure')).not.toBeInTheDocument();
+    expect(screen.queryByText('Start Building')).not.toBeInTheDocument();
+  });
+
   it('defaults to the Generic platform', () => {
     renderPage();
     expect(screen.getByRole('radio', { name: /Generic/ })).toBeChecked();
@@ -96,7 +108,7 @@ describe('CreateEmailPage', () => {
     renderPage();
     await fillValidForm(user);
     await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    await user.click(screen.getByRole('button', { name: /Create Email/ }));
+    await user.click(screen.getByRole('button', { name: /Create Blank Email/ }));
     expect(await screen.findByText('Enter a custom width.')).toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
@@ -107,7 +119,7 @@ describe('CreateEmailPage', () => {
     await fillValidForm(user);
     await user.click(screen.getByRole('radio', { name: 'Custom' }));
     await user.type(screen.getByLabelText(/Custom width/i), '50');
-    await user.click(screen.getByRole('button', { name: /Create Email/ }));
+    await user.click(screen.getByRole('button', { name: /Create Blank Email/ }));
     expect(await screen.findByText(/Width must be between 320 and 1200 pixels/)).toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
@@ -125,7 +137,7 @@ describe('CreateEmailPage', () => {
     await fillValidForm(user);
     await user.click(screen.getByRole('radio', { name: 'Custom' }));
     await user.type(screen.getByLabelText(/Custom width/i), '900');
-    await user.click(screen.getByRole('button', { name: /Create Email/ }));
+    await user.click(screen.getByRole('button', { name: /Create Blank Email/ }));
     await waitFor(() =>
       expect(client.createEmailDocument).toHaveBeenCalledWith(
         expect.objectContaining({ width: 900 }),
@@ -136,7 +148,7 @@ describe('CreateEmailPage', () => {
   it('requires an email name before submitting', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('button', { name: /Create Email/ }));
+    await user.click(screen.getByRole('button', { name: /Create Blank Email/ }));
     expect(await screen.findByText('Email name is required.')).toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
@@ -152,7 +164,7 @@ describe('CreateEmailPage', () => {
     const user = userEvent.setup();
     renderPage();
     await fillValidForm(user);
-    await user.click(screen.getByRole('button', { name: /Create Email/ }));
+    await user.click(screen.getByRole('button', { name: /Create Blank Email/ }));
 
     await waitFor(() =>
       expect(client.createEmailDocument).toHaveBeenCalledWith({
@@ -172,7 +184,7 @@ describe('CreateEmailPage', () => {
     const user = userEvent.setup();
     renderPage();
     await fillValidForm(user);
-    await user.click(screen.getByRole('button', { name: /Create Email/ }));
+    await user.click(screen.getByRole('button', { name: /Create Blank Email/ }));
 
     expect(await screen.findByText('This email name is already in use.')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Create New Email' })).toBeInTheDocument();
@@ -201,6 +213,24 @@ describe('CreateEmailPage', () => {
     }
   });
 
+  it('shows a CTA label describing exactly what happens next, for each Start From option', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    expect(screen.getByRole('button', { name: 'Create Blank Email →' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /^Template/ }));
+    expect(screen.getByRole('button', { name: 'Choose Template →' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /^Existing HTML/ }));
+    expect(screen.getByRole('button', { name: 'Import HTML →' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /^AI Generate/ }));
+    expect(screen.getByRole('button', { name: 'Generate with AI →' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('radio', { name: /^Blank Email/ }));
+    expect(screen.getByRole('button', { name: 'Create Blank Email →' })).toBeInTheDocument();
+  });
+
   // Phase C (Import HTML) — Existing HTML is no longer disabled; it hands
   // off to the shared Import HTML page, same shape as Template.
   it('selecting Existing HTML and submitting hands off to the shared Import HTML page, without creating a document', async () => {
@@ -220,7 +250,7 @@ describe('CreateEmailPage', () => {
     renderPage();
     await user.click(screen.getByRole('radio', { name: /^AI Generate/ }));
     expect(screen.getByRole('radio', { name: /^AI Generate/ })).toBeChecked();
-    await user.click(screen.getByRole('button', { name: 'Generate →' }));
+    await user.click(screen.getByRole('button', { name: 'Generate with AI →' }));
     expect(await screen.findByText('AI Generate page')).toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });

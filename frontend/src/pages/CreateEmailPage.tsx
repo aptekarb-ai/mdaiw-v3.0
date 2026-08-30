@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { FormField } from '../forms/FormField';
-import { CreateEmailStepper } from '../emailbuilder/CreateEmailStepper';
 import { PLATFORM_OPTIONS, DEFAULT_PLATFORM } from '../emailbuilder/platformOptions';
 import {
   CUSTOM_WIDTH_MAX,
@@ -200,8 +199,6 @@ export function CreateEmailPage() {
       </header>
 
       <div className="create-email-page__body">
-        <CreateEmailStepper currentStep={1} />
-
         <form className="create-email-page__form" onSubmit={handleSubmit} noValidate>
           <h2>Email Setup</h2>
 
@@ -351,8 +348,8 @@ export function CreateEmailPage() {
               {submitting && <span className="mdaiw-icon mdaiw-icon--spinner create-email-page__spinner" aria-hidden="true" />}
               {startType === 'template' ? 'Choose Template →'
                 : startType === 'html' ? 'Import HTML →'
-                : startType === 'ai' ? 'Generate →'
-                : submitting ? 'Creating…' : 'Create Email →'}
+                : startType === 'ai' ? 'Generate with AI →'
+                : submitting ? 'Creating…' : 'Create Blank Email →'}
             </button>
           </div>
         </form>

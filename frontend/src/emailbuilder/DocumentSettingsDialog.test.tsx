@@ -76,6 +76,17 @@ describe('DocumentSettingsDialog', () => {
     expect(screen.getByDisplayValue('https://cdn.example.com/fav.png')).toBeInTheDocument();
   });
 
+  // Visual QA — the six fields previously ran together as one flat list
+  // with no hierarchy. Grouped into named sections so the dialog reads as
+  // "Email Metadata" / "CSS & Rendering" / "Email Client Compatibility"
+  // rather than an undifferentiated form.
+  it('groups fields under Email Metadata, CSS & Rendering, and Email Client Compatibility headings', () => {
+    render(<DocumentSettingsDialog documentSettings={settings()} documentName="August Newsletter" onApply={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'Email Metadata', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'CSS & Rendering', level: 3 })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Email Client Compatibility', level: 3 })).toBeInTheDocument();
+  });
+
   it('Cancel calls onClose without calling onApply (item 1 — Cancel creates no history entry)', async () => {
     const user = userEvent.setup();
     const onApply = vi.fn();

@@ -67,6 +67,26 @@
   overflow-y: auto;
 }
 
+.document-settings-dialog__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.document-settings-dialog__group + .document-settings-dialog__group {
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border);
+}
+
+.document-settings-dialog__group-heading {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
 .document-settings-dialog__field {
   display: flex;
   flex-direction: column;
@@ -80,20 +100,55 @@
   color: var(--color-text-dark);
 }
 
+/* Matches the shared FormField input contract (FormField.css) exactly —
+   height/padding/font-size/radius — rather than a second, compact
+   Email-Settings-specific input skin. Kept as its own rule (not a swap to
+   the FormField component) so label/id/aria/error wiring here is
+   untouched — a visual-only correction. */
 .document-settings-dialog__field input[type='text'] {
-  flex: 1;
+  /* NOT flex: 1 here — the Title/Subject inputs sit directly inside
+     .document-settings-dialog__field, a COLUMN-direction flex container,
+     where a flex-basis of 0 (the "1" shorthand's default) wins the main
+     (vertical) axis over the height below, silently collapsing the input
+     to its content height regardless of what height says. The Favicon
+     input needs flex:1 for its OWN row-direction wrapper instead — see
+     .document-settings-dialog__favicon-row input[type='text'] below. */
+  width: 100%;
   min-width: 0;
-  height: 44px;
-  padding: 0 var(--space-3);
+  height: 46px;
+  padding: 0 var(--space-4);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  font-size: 14px;
+  font-family: inherit;
+  font-size: 15px;
   color: var(--color-text-dark);
+  background: var(--color-white);
+  transition: border-color var(--transition-fast, 120ms ease);
+}
+
+.document-settings-dialog__favicon-row input[type='text'] {
+  flex: 1;
+  width: auto;
+}
+
+.document-settings-dialog__field input[type='text']:hover {
+  border-color: var(--color-primary-blue);
 }
 
 .document-settings-dialog__field input[type='text']:focus-visible {
   outline: none;
   border-color: var(--color-primary-blue);
+  box-shadow: 0 0 0 2px var(--color-info-bg), 0 0 0 4px rgba(0, 130, 173, 0.25);
+}
+
+.document-settings-dialog__field input[type='text']:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  background: var(--color-background-light);
+}
+
+.document-settings-dialog__field input[type='text'][aria-invalid='true'] {
+  border-color: var(--color-error);
 }
 
 .document-settings-dialog__hint {
@@ -123,7 +178,7 @@
 
 .document-settings-dialog__browse-button {
   flex-shrink: 0;
-  height: 44px;
+  height: 46px;
   padding: 0 var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

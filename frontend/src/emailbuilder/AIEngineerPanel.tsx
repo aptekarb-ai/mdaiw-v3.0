@@ -11,7 +11,7 @@ import { detectCustomCssWarnings } from './emailCss';
 import { renderEmailDocument } from './htmlRenderer';
 import { validateEmail } from './emailValidation';
 import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
-import { signatureForIssueId, type RepairCandidate } from './repairEngine';
+import { affectedClientLabel, signatureForIssueId, type RepairCandidate } from './repairEngine';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { findModuleById } from './layoutModel';
 import {
@@ -289,6 +289,24 @@ export function AIEngineerPanel({
     lastDiscussedIssueIdRef.current = id;
   }
 
+  // C-3 remediation — explicit pending-repair context for the placeholder-
+  // link conversational flow: which real module (never "whatever's
+  // currently selected") is awaiting a destination URL, so a later bare
+  // URL reply is understood as the answer to THIS specific repair rather
+  // than re-guessed from scratch or applied to the wrong module when
+  // several placeholder links exist. A plain ref for the same reason
+  // lastDiscussedIssueIdRef is a ref, not state (see above) — set/read
+  // synchronously within the same handleSend invocation's tick.
+  const pendingPlaceholderLinkModuleIdRef = useRef<string | null>(null);
+  // The exact sentinel ai_command.py's placeholder-link handler always
+  // uses when it declines to invent a URL — see
+  // "I won't guess a destination for this link" in ai_command.py.
+  const PLACEHOLDER_LINK_ASK_SENTINEL = "won't guess a destination for this link";
+  // Any scheme://... token — deliberately not http(s)-only here, so a
+  // rejected scheme (e.g. javascript:) still gets a clear "not allowed"
+  // reply instead of the generic "no URL found" one.
+  const URL_TOKEN_PATTERN = /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/\S+/;
+
   // E10 — reload when `documentId` changes on an ALREADY-MOUNTED instance
   // (e.g. the URL's document id changes via client-side routing while the
   // AI Engineer tab stays open the whole time — the one realistic case
@@ -305,6 +323,7 @@ export function AIEngineerPanel({
     const stored = loadConversation(documentId);
     setMessages(stored.map((entry) => ({ id: newId('msg'), role: entry.role, text: entry.text })));
     setLastDiscussedIssueId(null);
+    pendingPlaceholderLinkModuleIdRef.current = null;
     setHistory([]);
   }, [documentId]);
 
@@ -312,6 +331,7 @@ export function AIEngineerPanel({
     clearConversation(documentId);
     setMessages([]);
     setLastDiscussedIssueId(null);
+    pendingPlaceholderLinkModuleIdRef.current = null;
     voice.cancel();
   }
 
@@ -384,6 +404,75 @@ export function AIEngineerPanel({
 
     appendMessage('user', message);
     if (overrideMessage === undefined) setDraft('');
+
+    // C-3 remediation — a placeholder-link repair is currently pending
+    // (the AI already declined to invent a URL and asked for one): this
+    // message is understood as the answer to THAT specific repair —
+    // targeting the real moduleId captured when the question was asked,
+    // never whatever happens to be selected on canvas now — rather than
+    // being re-routed through local-intent matching or the backend (which
+    // has no memory of this conversation's pending question). Checked
+    // before everything else in this function.
+    if (pendingPlaceholderLinkModuleIdRef.current) {
+      const moduleId = pendingPlaceholderLinkModuleIdRef.current;
+      const urlToken = message.match(URL_TOKEN_PATTERN);
+
+      if (!urlToken) {
+        // Explicit cancel/new-topic escape — without this, any message
+        // that isn't a URL would trap the conversation forever demanding
+        // one. Clears the pending repair; a genuine new command in the
+        // same message is not re-processed this turn (kept simple and
+        // predictable) — the user can just send it again.
+        if (/\b(cancel|never\s*mind|forget\s+it|skip|stop)\b/i.test(message)) {
+          pendingPlaceholderLinkModuleIdRef.current = null;
+          appendMessage('assistant', 'No problem — that link repair is no longer pending.');
+        } else {
+          appendMessage(
+            'assistant',
+            "I still need a destination URL for that link — please send a full https:// (or http://) address, "
+            + 'or say "cancel" to drop it.',
+          );
+        }
+        return;
+      }
+
+      const candidateUrl = urlToken[0].replace(/[)\].,;:!?'"]+$/, '');
+      if (!/^https?:\/\//i.test(candidateUrl)) {
+        // Invalid scheme (e.g. javascript:) — reject and keep the
+        // pending repair armed so the user can retry with a real URL.
+        appendMessage(
+          'assistant',
+          `"${candidateUrl}" isn't an allowed link type — please provide a full https:// (or http://) URL.`,
+        );
+        return;
+      }
+
+      const targetModule = findModuleById(content.modules, moduleId);
+      const moduleProps = (targetModule?.props ?? {}) as Record<string, unknown>;
+      const propKey = (['href', 'ctaHref'] as const).find((key) => {
+        const value = moduleProps[key];
+        return typeof value === 'string' && (value.trim() === '' || value.trim() === '#');
+      }) ?? 'href';
+      const beforeValue = moduleProps[propKey];
+      const candidate: RepairCandidate = {
+        issueId: 'links:placeholder-href',
+        title: 'Placeholder link',
+        detail: `Set the link to ${candidateUrl}.`,
+        severity: 'error',
+        category: 'links',
+        affectedClient: affectedClientLabel('links:placeholder-href'),
+        moduleId,
+        before: typeof beforeValue === 'string' && beforeValue.trim() !== '' ? beforeValue : '(empty)',
+        after: candidateUrl,
+        confidence: 1.0,
+        safeAutoFix: true,
+        item: { kind: 'module', issueId: 'links:placeholder-href', moduleId, propPatch: { [propKey]: candidateUrl } },
+      };
+      pendingPlaceholderLinkModuleIdRef.current = null;
+      appendMessage('assistant', `Got it — I will set the link to ${candidateUrl}. Review the proposed change below.`);
+      setPendingRepair({ messageId: newId('repair'), command: message, candidates: [candidate] });
+      return;
+    }
 
     // Sub-phase 4, item 2/4 (extended E9/E10) — document-level diagnose/
     // explain/repair/context intents are recognized and answered ENTIRELY
@@ -469,6 +558,15 @@ export function AIEngineerPanel({
       appendMessage('assistant', response.reply);
 
       if (response.action.type === 'NONE') {
+        // C-3 remediation — arm the pending-repair ref only when the
+        // reply is genuinely the placeholder-link "I won't guess" ask,
+        // correlated against the REAL current validation report's
+        // placeholder-link issue (never inferred from the reply text
+        // alone) so the next bare-URL message targets the right module.
+        if (response.reply.includes(PLACEHOLDER_LINK_ASK_SENTINEL)) {
+          const issue = validationReport?.issues.find((i) => i.id === 'links:placeholder-href');
+          pendingPlaceholderLinkModuleIdRef.current = issue?.moduleId ?? null;
+        }
         setHistory((current) => [...current, {
           id: newId('hist'),
           command: message,

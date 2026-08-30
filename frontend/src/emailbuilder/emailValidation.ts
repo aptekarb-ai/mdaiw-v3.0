@@ -342,18 +342,43 @@ function checkAccessibilityAndDarkMode(html: string, content: EmailDocumentConte
   return issues;
 }
 
-function checkLinksAndImages(html: string): ValidationIssue[] {
+// C-3 remediation — a placeholder link must identify WHICH module it
+// belongs to (moduleId + a human-readable element like "Shop Now") so the
+// issue can offer "Go to module" and route through AI Engineer, which
+// must ask the user for the real destination rather than invent one (see
+// ai_command.py/ai_command_openai.py's placeholder-link guardrail). This
+// walks the real module tree — the same content Fix Issues' own safeFix
+// patches already target — rather than re-deriving affected modules from
+// the flat rendered HTML string.
+const PLACEHOLDER_HREF_PROP_KEYS = ['href', 'ctaHref'] as const;
+
+function isPlaceholderHref(value: unknown): value is string {
+  return typeof value === 'string' && (value.trim() === '' || value.trim() === '#');
+}
+
+function checkLinksAndImages(html: string, content: EmailDocumentContent): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  const placeholderLinkCount = (html.match(/href="#"/g) ?? []).length;
-  if (placeholderLinkCount > 0) {
+  const placeholderLinkModules: string[] = [];
+  for (const { module } of flattenModules(content.modules)) {
+    const props = (module.props ?? {}) as Record<string, unknown>;
+    if (PLACEHOLDER_HREF_PROP_KEYS.some((key) => isPlaceholderHref(props[key]))) {
+      placeholderLinkModules.push(module.id);
+    }
+  }
+  if (placeholderLinkModules.length > 0) {
+    const count = placeholderLinkModules.length;
     issues.push({
       id: 'links:placeholder-href',
       category: 'links',
       severity: 'error',
       title: 'Placeholder link',
-      detail: `${placeholderLinkCount} link${placeholderLinkCount === 1 ? '' : 's'} still point to a placeholder URL.`,
-      fixType: 'none',
+      detail: `${count} link${count === 1 ? '' : 's'} still point to a placeholder URL.`,
+      // First affected module — "Go to module" jumps here; AI Engineer
+      // must ask for the real destination for THIS module rather than
+      // inventing one (see the C-3 remediation comment above).
+      moduleId: placeholderLinkModules[0],
+      fixType: 'manual',
     });
   }
 
@@ -720,7 +745,23 @@ function checkOutlookCompatibility(
 
 function checkNewOutlookCompatibility(html: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  if (/<v:[a-zA-Z]/.test(html)) {
+
+  // renderVmlBackground (vmlBackground.ts) always places the caller's own
+  // plain background HTML unconditionally OUTSIDE its two self-contained
+  // downlevel-hidden VML comment blocks, so New Outlook (and every other
+  // non-MSO client) already sees real background content — v:rect/v:fill
+  // are never actionable in this renderer's own output. renderVmlButton
+  // (vml.ts) always pairs a v:roundrect with a real HTML fallback wrapped
+  // in the '<!--[if !mso]><!-->' downlevel-revealed marker; a v:roundrect
+  // WITHOUT that matching marker is the one genuine "content relies only
+  // on VML" case this renderer cannot itself produce (it can only reach a
+  // document via raw HTML import) — so count the marker pairing instead
+  // of assuming every '<v:' occurrence is unsafe, per the requirement
+  // that a real HTML/CSS fallback downgrades/removes this warning rather
+  // than firing unconditionally whenever VML is present at all.
+  const buttonVmlCount = (html.match(/<v:roundrect/g) ?? []).length;
+  const buttonFallbackCount = (html.match(/<!--\[if !mso\]><!-->/g) ?? []).length;
+  if (buttonVmlCount > buttonFallbackCount) {
     issues.push({
       id: 'outlook-new:vml-not-processed',
       category: 'outlook',
@@ -945,7 +986,7 @@ export function validateEmail(
     ...checkNewOutlookCompatibility(html),
     ...checkResponsive(html, content),
     ...checkAccessibilityAndDarkMode(html, content),
-    ...checkLinksAndImages(html),
+    ...checkLinksAndImages(html, content),
     ...checkPlatform(html, platform),
   ];
 
