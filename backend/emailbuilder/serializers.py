@@ -38,6 +38,8 @@ class EmailDocumentSerializer(serializers.ModelSerializer):
             # validates before Save/before an AI proposal is shown, but
             # this is authoritative).
             'reset_css_enabled', 'custom_css_enabled', 'custom_css',
+            # Module-4 E4 — document-level default for settings.outlookVml.
+            'outlook_vml_enabled',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'status', 'created_at', 'updated_at']
@@ -232,11 +234,63 @@ class SelectedModuleContextSerializer(serializers.Serializer):
     props = serializers.DictField(required=False, default=dict)
 
 
+class SelectedColumnContextSerializer(serializers.Serializer):
+    """Module-4 E9 — informational only (see ai_command_openai.py's
+    _build_safe_context docstring): describes which column is selected,
+    never its content, and does not yet drive a real column-scoped edit
+    action."""
+
+    layout_module_type = serializers.ChoiceField(choices=list(module_capabilities.get_all_module_types()))
+    column_index = serializers.IntegerField(min_value=0, max_value=63)
+
+
+class ValidationIssueContextSerializer(serializers.Serializer):
+    """Module-4 E9 — a small, WHITELISTED subset of ValidationIssue's own
+    already-public fields (see frontend/src/emailbuilder/emailValidation.ts)
+    — never the full ValidationReport, never a safeFix patch (that stays
+    entirely client-side/deterministic, never sent to a model)."""
+
+    id = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
+    title = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
+    detail = serializers.CharField(max_length=1000, trim_whitespace=True, allow_blank=False)
+    severity = serializers.ChoiceField(choices=['error', 'warning'])
+    category = serializers.CharField(max_length=40, trim_whitespace=True, allow_blank=False)
+
+
+class ConversationTurnSerializer(serializers.Serializer):
+    """Module-4 E10 — one bounded prior turn of THIS SAME document's AI
+    Engineer conversation. `content` is capped independently of, and more
+    generously than, MAX_MESSAGE_LENGTH (a stored assistant reply can be
+    longer than one user instruction) but still bounded — never arbitrary
+    length."""
+
+    role = serializers.ChoiceField(choices=['user', 'assistant'])
+    content = serializers.CharField(max_length=1000, trim_whitespace=True, allow_blank=False)
+
+
+# Module-4 E10 — defense in depth: the frontend already caps the history
+# it sends (aiConversationStorage.ts's boundedHistoryForRequest), but the
+# server never trusts a client-side cap alone.
+MAX_CONVERSATION_HISTORY_TURNS = 8
+
+
 class EmailAICommandRequestSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=False)
     selected_module = SelectedModuleContextSerializer(required=False, allow_null=True, default=None)
     platform = serializers.CharField(required=False, allow_null=True, default=None, max_length=20)
     width = serializers.IntegerField(required=False, allow_null=True, default=None)
+    # Module-4 E9 — additive, optional context. A request that omits these
+    # (every pre-E9 client) behaves exactly as before.
+    editor_mode = serializers.ChoiceField(
+        choices=['visual', 'code', 'preview', 'validate', 'ai'], required=False, allow_null=True, default=None,
+    )
+    selected_column = SelectedColumnContextSerializer(required=False, allow_null=True, default=None)
+    selected_validation_issue = ValidationIssueContextSerializer(required=False, allow_null=True, default=None)
+    # Module-4 E10 — bounded prior turns. max_length on the list is the
+    # server-side cap that never trusts the client's own cap alone.
+    conversation_history = ConversationTurnSerializer(
+        many=True, required=False, default=list, max_length=MAX_CONVERSATION_HISTORY_TURNS,
+    )
 
 
 class LearningSignalRequestSerializer(serializers.Serializer):

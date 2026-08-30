@@ -216,13 +216,16 @@ function layoutRules(module: EmailModule): string[] {
           );
         }
       }
-      // Mobile vertical gap between stacked columns (instruction 24) —
-      // a real TD-compatible spacer via padding-bottom on every stacked
-      // column except the last, never CSS margin.
-      const gap = module.settings.mobileColumnGap;
-      if (gap && gap.value > 0) {
-        rules.push(`.${colCls}{padding-bottom:${widthCssValue(gap)} !important;}`);
-      }
+      // Mobile gutter/stacking correction — settings.mobileColumnGap (an
+      // older, separate "Mobile column gap" field/UI control) has been
+      // retired as a SECOND, independently-stacking vertical-spacing
+      // mechanism: mobileColumnGutterPx/hideGutterOnMobile above is now
+      // the single source of truth for vertical spacing between stacked
+      // columns, exactly as specified. The mobileColumnGap field itself
+      // is still preserved through migration (non-destructive — an
+      // already-saved document never silently loses other settings data
+      // over an unrelated field), it simply has no rendering effect
+      // anymore, so it can never double up with the gutter-based spacer.
     }
   });
   return rules;

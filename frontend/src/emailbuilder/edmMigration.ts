@@ -220,6 +220,19 @@ function normalizeGutterPx(raw: unknown): number | undefined {
   return typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.round(raw)) : undefined;
 }
 
+// Structural Width Contract correction — parent/layout-level background
+// (distinct from ColumnContainerSettings.backgroundColor/backgroundImage,
+// which normalizeColumnSettings below already handles). Same "undefined
+// when absent/empty/invalid" convention as every other optional string
+// field's normalizer in this file.
+function normalizeModuleBackgroundColor(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw ? raw : undefined;
+}
+
+function normalizeModuleBackgroundImage(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw ? raw : undefined;
+}
+
 function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const settings = (rawSettings ?? {}) as Record<string, unknown>;
   const columnGutter = normalizeColumnGutter(settings.columnGutter);
@@ -235,6 +248,8 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
   const hideGutterOnMobile = normalizeHideGutterOnMobile(settings.hideGutterOnMobile);
   const columnGutterPx = normalizeGutterPx(settings.columnGutterPx);
   const mobileColumnGutterPx = normalizeGutterPx(settings.mobileColumnGutterPx);
+  const moduleBackgroundColor = normalizeModuleBackgroundColor(settings.backgroundColor);
+  const moduleBackgroundImage = normalizeModuleBackgroundImage(settings.backgroundImage);
 
   if ('desktop' in settings) {
     // Already the current shape — still backfill any field an even-older
@@ -260,6 +275,8 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
       ...(hideGutterOnMobile !== undefined ? { hideGutterOnMobile } : {}),
       ...(columnGutterPx !== undefined ? { columnGutterPx } : {}),
       ...(mobileColumnGutterPx !== undefined ? { mobileColumnGutterPx } : {}),
+      ...(moduleBackgroundColor !== undefined ? { backgroundColor: moduleBackgroundColor } : {}),
+      ...(moduleBackgroundImage !== undefined ? { backgroundImage: moduleBackgroundImage } : {}),
     };
   }
 
@@ -284,6 +301,8 @@ function normalizeSettings(rawSettings: unknown): EmailModuleSettings {
     ...(hideGutterOnMobile !== undefined ? { hideGutterOnMobile } : {}),
     ...(columnGutterPx !== undefined ? { columnGutterPx } : {}),
     ...(mobileColumnGutterPx !== undefined ? { mobileColumnGutterPx } : {}),
+    ...(moduleBackgroundColor !== undefined ? { backgroundColor: moduleBackgroundColor } : {}),
+    ...(moduleBackgroundImage !== undefined ? { backgroundImage: moduleBackgroundImage } : {}),
   };
 }
 
@@ -300,6 +319,12 @@ function normalizeColumnSettings(raw: unknown): ColumnContainerSettings {
     },
     mobile: (settings.mobile as Partial<ModuleSpacingValues>) ?? {},
     backgroundColor: typeof settings.backgroundColor === 'string' ? settings.backgroundColor : '',
+    // E5 — generic per-column background image. Same allowlist-guard
+    // convention as every other settings field in this file: an unknown/
+    // wrong-typed value is dropped (undefined), never a fabricated string.
+    ...(typeof settings.backgroundImage === 'string' && settings.backgroundImage
+      ? { backgroundImage: settings.backgroundImage }
+      : {}),
     verticalAlign: verticalAlign === 'middle' || verticalAlign === 'bottom' ? verticalAlign : 'top',
   };
 }

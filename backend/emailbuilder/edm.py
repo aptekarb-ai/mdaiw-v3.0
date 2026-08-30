@@ -347,6 +347,11 @@ def _validate_column_settings(prefix, settings):
     background = settings.get('backgroundColor', '')
     if not isinstance(background, str):
         raise EdmValidationError(f'{prefix}.backgroundColor must be a string.')
+    # E5 — generic per-column background image. Optional, same convention
+    # as every other optional string field here: absent is fine, present
+    # must be a string.
+    if settings.get('backgroundImage') is not None and not isinstance(settings['backgroundImage'], str):
+        raise EdmValidationError(f'{prefix}.backgroundImage must be a string.')
     valign = settings.get('verticalAlign', 'top')
     if valign not in COLUMN_VALIGN_VALUES:
         raise EdmValidationError(f'{prefix}.verticalAlign must be one of {COLUMN_VALIGN_VALUES}.')

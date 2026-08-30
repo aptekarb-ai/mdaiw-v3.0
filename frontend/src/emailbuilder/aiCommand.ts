@@ -136,11 +136,48 @@ export interface AICommandSelectedModuleContext {
   props: Record<string, unknown>;
 }
 
+// E9 — a small, informational description of the currently selected
+// COLUMN (never full column content). Today this only helps the model
+// phrase a more grounded reply ("the second column of this layout...");
+// it does not yet drive a real column-scoped edit action — see
+// AIEngineerPanel's own docstring for that disclosed, honest gap.
+export interface AICommandSelectedColumnContext {
+  layout_module_type: AICommandModuleType;
+  column_index: number;
+}
+
+// E9 — bounded, whitelisted validation context (never the full
+// ValidationReport). Mirrors ValidationIssue's own small, already-public
+// fields — nothing here is derived beyond what Validation Center already
+// shows the user.
+export interface AICommandValidationIssueContext {
+  id: string;
+  title: string;
+  detail: string;
+  severity: 'error' | 'warning';
+  category: string;
+}
+
+// E10 — one bounded prior turn. See aiConversationStorage.ts's
+// boundedHistoryForRequest for the actual cap enforced before this is
+// ever sent.
+export interface AICommandHistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface AICommandRequest {
   message: string;
   selected_module?: AICommandSelectedModuleContext | null;
   platform?: string | null;
   width?: number | null;
+  // E9 — additive, optional context. Every existing caller/test that
+  // omits these keeps compiling and behaving unchanged.
+  editor_mode?: string | null;
+  selected_column?: AICommandSelectedColumnContext | null;
+  selected_validation_issue?: AICommandValidationIssueContext | null;
+  // E10 — bounded prior turns for this SAME document's conversation only.
+  conversation_history?: AICommandHistoryTurn[];
 }
 
 // Phase A — 3-way provider identifier, extended from V1's

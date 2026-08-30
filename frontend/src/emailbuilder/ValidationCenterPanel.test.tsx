@@ -100,22 +100,24 @@ describe('ValidationCenterPanel', () => {
     expect(onApplySafeFix).toHaveBeenCalledWith(badContrast.id, { color: '#000000' });
   });
 
-  it('a whole-document issue with no traceable module (missing alt text) has no Fix button (fixType "none")', () => {
+  it('a whole-document issue with no traceable module (missing alt text) has no Fix button (fixType "none"), but still has Explain', () => {
     const image = createModule('image', 0);
     const withoutAlt: EmailModule = { ...image, props: { ...image.props, alt: '' } };
     renderPanel({ content: content([withoutAlt]) });
     const card = screen.getByText('Missing alt text').closest('li')!;
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Fix' })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Go to module' })).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Explain' })).toBeInTheDocument();
   });
 
-  it('"Fix All Safe Issues" applies every safe fix in one click and is disabled when none exist', async () => {
+  it('"Fix Issues" applies every safe fix in one click and is disabled when none exist', async () => {
     const user = userEvent.setup();
     renderPanel();
-    expect(screen.getByRole('button', { name: /Fix All Safe Issues \(0\)/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Fix Issues \(0\)/ })).toBeDisabled();
 
     const badContrast = textModuleWith({ color: '#cccccc', backgroundColor: '#ffffff' });
     const { onApplySafeFix } = renderPanel({ content: content([badContrast]) });
-    const button = screen.getByRole('button', { name: /Fix All Safe Issues \(1\)/ });
+    const button = screen.getByRole('button', { name: /Fix Issues \(1\)/ });
     expect(button).not.toBeDisabled();
     await user.click(button);
     expect(onApplySafeFix).toHaveBeenCalledWith(badContrast.id, { color: '#000000' });
@@ -132,16 +134,37 @@ describe('ValidationCenterPanel', () => {
     expect(onApplySafeFix).not.toHaveBeenCalled();
   });
 
-  it('Sub-phase 4: an empty title/subject is flagged with no Fix button (fixType "none")', () => {
+  it('Sub-phase 4: an empty title/subject is flagged with no Fix button (fixType "none"), but still has Explain', () => {
     renderPanel({ emailTitle: '', emailSubject: '' });
     expect(screen.getByText('Email title is empty')).toBeInTheDocument();
     const card = screen.getByText('Email subject is empty').closest('li')!;
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Fix' })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: 'Go to module' })).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Explain' })).toBeInTheDocument();
   });
 
-  it('AI-Assisted Fix is present but disabled (coming soon) — no fabricated AI call', () => {
-    renderPanel();
-    expect(screen.getByRole('button', { name: /AI-Assisted Fix/ })).toBeDisabled();
+  // E8 — the old competing "Fix All Safe Issues" + disabled "AI-Assisted
+  // Fix (coming soon)" pair is replaced by ONE "Fix Issues" CTA plus a
+  // real, conditional "Review N more with AI Engineer" affordance for
+  // manual issues that trace to a module (bucket B) — never a fabricated
+  // AI call, never silently auto-applied.
+  it('shows "Review N more with AI Engineer" only when a module-scoped manual issue exists, and it seeds an AI Engineer prompt via onAskAiEngineer', async () => {
+    const user = userEvent.setup();
+    // Near-black text on near-black background — fixType 'manual' with a
+    // real moduleId (see the Sub-phase 8 "Go to module" test above for
+    // the same fixture).
+    const riskyModule = textModuleWith({ color: '#050505', backgroundColor: '#0a0a0a' });
+    const onAskAiEngineer = vi.fn();
+    renderPanel({ content: content([riskyModule]), onAskAiEngineer });
+    const reviewButton = screen.getByRole('button', { name: /Review \d+ more with AI Engineer/ });
+    await user.click(reviewButton);
+    expect(onAskAiEngineer).toHaveBeenCalledTimes(1);
+    expect(onAskAiEngineer.mock.calls[0][0]).toContain('Risky under dark-mode inversion');
+  });
+
+  it('does not show "Review N more with AI Engineer" when there are no module-scoped manual issues', () => {
+    renderPanel({ emailTitle: '', emailSubject: '' });
+    expect(screen.queryByRole('button', { name: /Review \d+ more with AI Engineer/ })).not.toBeInTheDocument();
   });
 
   it('Revalidate re-runs the check pipeline without erroring', async () => {
@@ -179,12 +202,12 @@ describe('ValidationCenterPanel', () => {
     }));
   });
 
-  it('Sub-phase 8: "Fix All Safe Issues" records one ACCEPTED signal per applied issue, each with its own event id', async () => {
+  it('Sub-phase 8: "Fix Issues" records one ACCEPTED signal per applied issue, each with its own event id', async () => {
     const user = userEvent.setup();
     const badContrast = textModuleWith({ color: '#cccccc', backgroundColor: '#ffffff' });
     renderPanel({ content: content([badContrast]), resetCssEnabled: false });
 
-    await user.click(screen.getByRole('button', { name: /Fix All Safe Issues \(2\)/ }));
+    await user.click(screen.getByRole('button', { name: /Fix Issues \(2\)/ }));
 
     expect(recordRepairSignal).toHaveBeenCalledWith(expect.objectContaining({
       signature: 'accessibility:contrast', outcome: 'accepted', source: 'validation_center_bulk',

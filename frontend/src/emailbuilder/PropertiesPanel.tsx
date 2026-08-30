@@ -9,8 +9,8 @@ import { PaddingControls } from './PaddingControls';
 import { OuterSpacingControls } from './OuterSpacingControls';
 import { ResponsiveDimensionField } from './DimensionControl';
 import {
-  ColumnEditor, ColumnGutterEditor, ColumnWidthsEditor, DesktopDirectionSettings, LayoutStructureOverview,
-  MobileStackingSettings,
+  ColumnEditor, ColumnGutterEditor, ColumnWidthsEditor, DesktopDirectionSettings, LayoutBackgroundEditor,
+  LayoutStructureOverview, MobileStackingSettings,
 } from './ColumnEditor';
 import { ColorControl } from './ColorControl';
 import { TypographyControls } from './TypographyControls';
@@ -364,6 +364,7 @@ export function PropertiesPanel({
                   {(module.columns?.length ?? 0) > 1 && (
                     <ColumnGutterEditor settings={module.settings} viewport={viewport} onChange={(patch) => onUpdateSettings(module.id, patch)} />
                   )}
+                  <LayoutBackgroundEditor settings={module.settings} onChange={(patch) => onUpdateSettings(module.id, patch)} />
                 </>
               )
             ) : (

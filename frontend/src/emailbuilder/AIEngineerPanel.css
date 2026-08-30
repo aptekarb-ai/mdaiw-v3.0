@@ -11,6 +11,52 @@
 .ai-engineer-panel__toolbar {
   flex-shrink: 0;
   padding: var(--space-4) var(--space-4) 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.ai-engineer-panel__voice-toggle,
+.ai-engineer-panel__voice-stop,
+.ai-engineer-panel__clear-conversation {
+  appearance: none;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-engineer-panel__voice-toggle .mdaiw-icon,
+.ai-engineer-panel__voice-stop .mdaiw-icon {
+  width: 13px;
+  height: 13px;
+  background-color: currentColor;
+}
+
+.ai-engineer-panel__voice-toggle[aria-pressed="true"] {
+  color: var(--color-primary-blue);
+  border-color: var(--color-primary-blue);
+}
+
+.ai-engineer-panel__clear-conversation:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .ai-engineer-panel__tabs {

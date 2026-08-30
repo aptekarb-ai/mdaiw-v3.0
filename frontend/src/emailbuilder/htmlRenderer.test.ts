@@ -4,6 +4,9 @@ import { createModule } from './moduleFactory';
 import { getModuleDefinition } from './moduleRegistry';
 import { computeCompatibilityChecks } from './htmlCompatibilityChecks';
 import { columnResponsiveClassName, gutterResponsiveClassName } from './responsiveStyles';
+import { computeLayoutAvailableWidthPx } from './registryCore';
+import { resolveColumnPixelWidths } from './layoutModel';
+import { resolveDesktopGutterPx } from './edm';
 import type { EmailModule, TextModuleProps, ButtonModuleProps, ImageModuleProps } from './edm';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper accepts modules narrowed to any specific Props type
@@ -351,6 +354,42 @@ describe('Feature 05 — nested layout rendering', () => {
     const layout = createModule('layout-2col-50-50', 0);
     const html = renderEmailBody(withModules([layout]));
     expect(html).toContain('&nbsp;');
+  });
+
+  // E5 — generic per-column background image/color, proven across every
+  // registered column count (1–6), never a per-layout special case: this
+  // is the SAME layoutDefinition() renderer for all of them.
+  it.each(LAYOUT_TYPES)('%s (%d columns): every column supports backgroundColor and backgroundImage generically', (type) => {
+    const layout = createModule(type, 0);
+    layout.columns!.forEach((column, index) => {
+      column.settings = {
+        ...column.settings,
+        // A deliberately app-atypical hex, distinct from the platform's
+        // own default background color tokens (e.g. #F4F6F8), so this
+        // count can only match columns this test itself configured.
+        backgroundColor: '#123456',
+        backgroundImage: `https://cdn.example.com/col-${index}.jpg`,
+      };
+    });
+    const html = renderEmailBody(withModules([layout]));
+    layout.columns!.forEach((_, index) => {
+      expect(html).toContain(`background="https://cdn.example.com/col-${index}.jpg"`);
+      expect(html).toContain(`background-image:url('https://cdn.example.com/col-${index}.jpg')`);
+    });
+    // backgroundColor stays present as the CSS fallback on every column.
+    expect((html.match(/background-color:#123456;/g) ?? []).length).toBe(layout.columns!.length);
+  });
+
+  it('a column background survives Mobile stacking — the same markup renders regardless of viewport, only the responsive CSS forces display:block/width:100%', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.columns![0].settings = { ...layout.columns![0].settings, backgroundColor: '#123456', backgroundImage: 'https://cdn.example.com/col-0.jpg' };
+    const html = renderEmailDocument(withModules([layout], 700));
+    // The stacking rule (mobileStack defaults true) coexists in the SAME
+    // document with the background — background is inline on the <td>
+    // itself, never conditionally stripped by the mobile media query.
+    expect(html).toContain('display:block !important; width:100% !important;');
+    expect(html).toContain('background="https://cdn.example.com/col-0.jpg"');
+    expect(html).toContain('background-color:#123456;background-image:url(\'https://cdn.example.com/col-0.jpg\')');
   });
 
   it('renders a fixed-px gutter <td> between columns when columnGutter > 0', () => {
@@ -883,6 +922,431 @@ describe('Feature 05 — Column Width + Gutter Rendering Correction', () => {
   });
 });
 
+// Structural Width Contract correction — Outer Spacer Columns, layout
+// padding, gutter, and child-column width are ONE physical-width
+// equation, not independent properties:
+//   P  = availableWidthPx (parent width, already narrowed by this
+//        module's own Outer Spacer Columns)
+//   C  = P - paddingLeft - paddingRight
+//   A  = C - gutterPx * (N - 1)
+//   Ci = A * ratio[i] / 100 (deterministic rounding, remainder on the
+//        last column)
+// Invariants: L + P + R = W (Outer Spacer Columns test, pre-existing
+// above); paddingLeft + sum(Ci) + gutterTotal + paddingRight = P (new
+// tests below). The SAME resolveColumnPixelWidths call (never a second
+// calculation) is used here and by ColumnEditor.tsx's Properties-panel
+// display — see layoutCatalog.tsx's own comments for the exact call
+// chain.
+describe('Structural Width Contract — Outer Spacer + layout padding + gutter + column width as one equation', () => {
+  function columnWidthAttrs(html: string): number[] {
+    return [...html.matchAll(/<td width="(\d+)" valign="[^"]*"/g)].map((m) => Number(m[1]));
+  }
+
+  function gutterWidthAttrs(html: string): number[] {
+    return [...html.matchAll(/<td width="(\d+)" class="[^"]*-gut\d+"/g)].map((m) => Number(m[1]));
+  }
+
+  function withOuterSpacing(layout: EmailModule<any>, left: number, right: number) {
+    layout.settings = {
+      ...layout.settings,
+      outerSpacing: { desktop: { left: { value: left, unit: 'px' }, right: { value: right, unit: 'px' } }, mobile: {} },
+    };
+  }
+
+  function withPadding(layout: EmailModule<any>, left: number, right: number, top = 0, bottom = 0) {
+    layout.settings = { ...layout.settings, desktop: { paddingTop: top, paddingRight: right, paddingBottom: bottom, paddingLeft: left } };
+  }
+
+  it('700px, no spacers, 60/40, gutter 30 => 402 + 30 + 268 = 700', () => {
+    const layout = createModule('layout-2col-60-40', 0);
+    layout.settings = { ...layout.settings, columnGutterPx: 30 };
+    const html = renderEmailBody(withModules([layout], 700));
+    expect(columnWidthAttrs(html)).toEqual([402, 268]);
+    expect(gutterWidthAttrs(html)).toEqual([30]);
+  });
+
+  it('700px, outer 20/20, 60/40, gutter 30 => parent 660, 378 + 30 + 252 = 660', () => {
+    const layout = createModule('layout-2col-60-40', 0);
+    withOuterSpacing(layout, 20, 20);
+    layout.settings = { ...layout.settings, columnGutterPx: 30 };
+    const html = renderEmailBody(withModules([layout], 700));
+    expect(columnWidthAttrs(html)).toEqual([378, 252]);
+    expect(gutterWidthAttrs(html)).toEqual([30]);
+    expect(378 + 30 + 252).toBe(660);
+  });
+
+  it('700px, outer 20/20, padding 15/15, 60/40, gutter 30 => parent 660, column region 630, available 600 => 360 + 30 + 240, invariant 15+360+30+240+15=660', () => {
+    const layout = createModule('layout-2col-60-40', 0);
+    withOuterSpacing(layout, 20, 20);
+    withPadding(layout, 15, 15);
+    layout.settings = { ...layout.settings, columnGutterPx: 30 };
+    const html = renderEmailBody(withModules([layout], 700));
+    expect(columnWidthAttrs(html)).toEqual([360, 240]);
+    expect(gutterWidthAttrs(html)).toEqual([30]);
+    expect(15 + 360 + 30 + 240 + 15).toBe(660);
+    // The padding itself is present on the parent wrapper, not on any
+    // width-bearing column <td> (which must stay padding:0).
+    expect(html).toContain('padding:0px 15px 0px 15px;');
+    expect(html).toMatch(/<td width="360" valign="[^"]*"[^>]*padding:0;/);
+  });
+
+  it('front-stage/HTML consistency: computeLayoutAvailableWidthPx (Properties panel) matches the RENDERER\'s own content-width step exactly, including padding', () => {
+    const layout = createModule('layout-2col-60-40', 0);
+    withOuterSpacing(layout, 20, 20);
+    withPadding(layout, 15, 15);
+    layout.settings = { ...layout.settings, columnGutterPx: 30 };
+    const html = renderEmailBody(withModules([layout], 700));
+
+    // What the Properties panel would display for this exact module.
+    const frontStageWidthPx = computeLayoutAvailableWidthPx(layout, 700);
+    const gutterPx = resolveDesktopGutterPx(layout.settings);
+    const layoutColumnWidths = (layout.props as { columnWidths: number[] }).columnWidths;
+    const { columnPx: frontStageColumnPx } = resolveColumnPixelWidths(layoutColumnWidths, gutterPx, frontStageWidthPx);
+
+    // What the real renderer actually produced.
+    const renderedColumnPx = columnWidthAttrs(html);
+
+    expect(frontStageColumnPx).toEqual(renderedColumnPx);
+    expect(frontStageColumnPx).toEqual([360, 240]); // the exact worked example
+  });
+
+  it('5 columns 20/20/20/20/20 with multiple gutters: sum invariant holds with 4 gutters', () => {
+    const layout = createModule('layout-5col', 0);
+    layout.settings = { ...layout.settings, columnGutterPx: 10 };
+    const html = renderEmailBody(withModules([layout], 700));
+    const cols = columnWidthAttrs(html);
+    const guts = gutterWidthAttrs(html);
+    expect(cols).toHaveLength(5);
+    expect(guts).toHaveLength(4);
+    expect(cols.reduce((s, w) => s + w, 0) + guts.reduce((s, w) => s + w, 0)).toBe(700);
+  });
+
+  it('3, 4, and 6 columns each satisfy the full equation with outer spacer + padding + gutter combined', () => {
+    const cases: [string, number][] = [['layout-3col', 3], ['layout-4col', 4], ['layout-6col', 6]];
+    for (const [type, count] of cases) {
+      const layout = createModule(type as never, 0);
+      withOuterSpacing(layout, 10, 10);
+      withPadding(layout, 8, 8);
+      layout.settings = { ...layout.settings, columnGutterPx: 6 };
+      const html = renderEmailBody(withModules([layout], 700));
+      const cols = columnWidthAttrs(html);
+      const guts = gutterWidthAttrs(html);
+      expect(cols, type).toHaveLength(count);
+      expect(guts, type).toHaveLength(count - 1);
+      // P = 700 - 10 - 10 = 680; PL + sum(Ci) + gutterTotal + PR = P.
+      expect(8 + cols.reduce((s, w) => s + w, 0) + guts.reduce((s, w) => s + w, 0) + 8, type).toBe(680);
+    }
+  });
+
+  it('asymmetric outer spacers (left != right) narrow the parent correctly', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    withOuterSpacing(layout, 10, 50);
+    const html = renderEmailBody(withModules([layout], 700));
+    // P = 700 - 10 - 50 = 640, split 50/50 -> 320 + 320.
+    expect(columnWidthAttrs(html)).toEqual([320, 320]);
+  });
+
+  it('asymmetric left/right padding narrows the content region correctly (top/bottom padding does not affect width)', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    withPadding(layout, 10, 50, 20, 20);
+    const html = renderEmailBody(withModules([layout], 700));
+    // C = 700 - 10 - 50 = 640, split 50/50 -> 320 + 320. Vertical padding
+    // (20/20) affects only the padding style, never the width math.
+    expect(columnWidthAttrs(html)).toEqual([320, 320]);
+    expect(html).toContain('padding:20px 50px 20px 10px;');
+  });
+
+  it('zero gutter: columns fill the full content region with no gutter <td> at all', () => {
+    const layout = createModule('layout-2col-60-40', 0);
+    const html = renderEmailBody(withModules([layout], 700));
+    expect(columnWidthAttrs(html)).toEqual([420, 280]);
+    expect(gutterWidthAttrs(html)).toEqual([]);
+    expect(html).not.toMatch(/-gut\d+/);
+  });
+
+  it('nested layout: a padded/gutter-narrowed 360px column feeds its actual usable width, never document.width, into the nested layout', () => {
+    const outer = createModule('layout-2col-60-40', 0);
+    withOuterSpacing(outer, 20, 20);
+    withPadding(outer, 15, 15);
+    outer.settings = { ...outer.settings, columnGutterPx: 30 };
+    // From the worked example: outer column 1 resolves to 360px.
+    const inner = createModule('layout-2col-50-50', 0);
+    outer.columns![0].modules.push(inner);
+    const html = renderEmailBody(withModules([outer], 700));
+    // The nested layout's own columns split the ACTUAL 360px column
+    // width, 50/50 -> 180 + 180 — never 700/2=350, never a raw guess.
+    expect(html).toContain('width="180"');
+    expect(html).not.toContain('width="350"');
+  });
+
+  it('nested layouts at least two levels deep: each level receives its actual parent column width, never document.width', () => {
+    const outer = createModule('layout-2col-50-50', 0); // 700 -> 350 + 350
+    const middle = createModule('layout-2col-50-50', 0); // 350 -> 175 + 175
+    const inner = createModule('layout-2col-50-50', 0); // 175 -> 88 + 87 (remainder to last)
+    outer.columns![0].modules.push(middle);
+    middle.columns![0].modules.push(inner);
+    const html = renderEmailBody(withModules([outer], 700));
+    expect(html).toContain('width="350"');
+    expect(html).toContain('width="175"');
+    expect(html).toContain('width="88"');
+    expect(html).toContain('width="87"');
+    expect(html).not.toMatch(/width="700"\/2/); // sanity: no naive-halving artifact strings
+  });
+
+  it('narrow available width / invalid geometry protection: padding + gutter exceeding the parent width clamps to 0, never negative', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    withOuterSpacing(layout, 100, 100); // P = 700 - 200 = 500
+    withPadding(layout, 300, 300); // C = 500 - 600 = -100 -> clamps to 0
+    layout.settings = { ...layout.settings, columnGutterPx: 30 };
+    expect(() => renderEmailBody(withModules([layout], 700))).not.toThrow();
+    const html = renderEmailBody(withModules([layout], 700));
+    const cols = columnWidthAttrs(html);
+    expect(cols.every((w) => w >= 0)).toBe(true);
+    expect(html).not.toMatch(/width="-\d+"/);
+  });
+
+  // Layout Background scope correction — the parent/layout background
+  // (and its Classic Outlook VML fallback) covers the FULL physical
+  // module row, including Outer Spacer Columns — never just the central
+  // structure after outer-spacer subtraction. See the dedicated "Layout
+  // Background scope" describe block below for the full contract.
+  it('Classic Outlook/VML: parent background VML uses the FULL incoming module width, including Outer Spacer Columns — never just the narrowed central structure', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    withOuterSpacing(layout, 50, 50); // central structure = 700 - 100 = 600, but background scope stays 700
+    layout.settings = {
+      ...layout.settings, outlookVml: true, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/parent-bg.jpg',
+    };
+    const html = renderEmailBody(withModules([layout], 700));
+    expect(html).toContain('<!--[if gte mso 9]>');
+    expect(html).toContain('<v:rect');
+    expect(html).toContain('width:700px');
+    expect(html).toContain('background="https://cdn.example.com/parent-bg.jpg"');
+  });
+
+  it('mobile stacking: desktop horizontal widths do not leak into stacked Mobile rendering — every column becomes 100% width, gutter independently controlled by the Mobile gutter setting', () => {
+    const layout = createModule('layout-2col-60-40', 0);
+    withPadding(layout, 15, 15);
+    layout.settings = {
+      ...layout.settings, columnGutterPx: 30, mobileColumnGutterPx: 12, hideGutterOnMobile: false,
+    };
+    const html = renderEmailDocument(withModules([layout], 700));
+    // Desktop px widths (360/240-ish, padding-narrowed) are present as the
+    // structural/base values...
+    expect(columnWidthAttrs(html).length).toBeGreaterThan(0);
+    // ...but the Mobile media query forces every column to 100%,
+    // completely independent of the desktop px value.
+    expect(html).toMatch(/@media only screen and \(max-width:600px\)\{[\s\S]*?col0\{display:block !important; width:100% !important;\}/);
+    // The Mobile vertical gutter uses its OWN independently-configured
+    // value (12px), never the Desktop gutter (30px).
+    expect(html).toMatch(/gut0\{display:block !important; width:100% !important; height:12px !important;/);
+  });
+
+  describe('Parent background acceptance', () => {
+    it('parent background color renders on the parent wrapper, with transparent (unset) child columns', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      layout.settings = { ...layout.settings, backgroundColor: '#F4F6F8' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toContain('background-color:#F4F6F8;');
+      // No column has its own background-color declared.
+      expect(html).not.toMatch(/<td width="350"[^>]*background-color/);
+    });
+
+    it('parent background image renders on the parent wrapper (CSS + background attribute), with transparent child columns', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      layout.settings = { ...layout.settings, backgroundImage: 'https://cdn.example.com/parent-bg.jpg' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toContain("background-image:url('https://cdn.example.com/parent-bg.jpg')");
+      expect(html).toContain('background="https://cdn.example.com/parent-bg.jpg"');
+    });
+
+    it('a child column with its own background correctly overlays the parent background only for that child region — both are present and distinct in the generated HTML', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      layout.settings = { ...layout.settings, backgroundColor: '#002D38' };
+      layout.columns![0].settings = { ...layout.columns![0].settings, backgroundColor: '#76C043' };
+      const html = renderEmailBody(withModules([layout], 700));
+      // Parent background present on the outer wrapper.
+      expect(html).toContain('background-color:#002D38;');
+      // Column 0's OWN background present on ITS OWN width-bearing <td>,
+      // independent of and layered inside the parent's wrapper.
+      expect(html).toMatch(/<td width="350" valign="[^"]*"[^>]*style="width:350px;[^"]*background-color:#76C043;/);
+      // Column 1 has no background of its own — only the parent's shows
+      // through for that region.
+      expect(html).not.toMatch(/<td width="350" valign="[^"]*"[^>]*background-color:#76C043;[\s\S]*<td width="350" valign="[^"]*"[^>]*background-color:#76C043;/);
+    });
+
+    it('Classic Outlook/VML output for the overlay case: parent VML wraps the whole columns table; the child column keeps its own plain background (no per-column VML system introduced)', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      layout.settings = {
+        ...layout.settings, outlookVml: true, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/parent-bg.jpg',
+      };
+      layout.columns![0].settings = { ...layout.columns![0].settings, backgroundColor: '#76C043' };
+      const html = renderEmailBody(withModules([layout], 700));
+      const vmlOpen = html.indexOf('<v:rect');
+      const vmlClose = html.indexOf('</v:rect>');
+      const columnIndex = html.indexOf('background-color:#76C043;');
+      expect(vmlOpen).toBeGreaterThan(-1);
+      // The child column (with its own plain background, no VML of its
+      // own) sits INSIDE the parent's VML wrapper.
+      expect(columnIndex).toBeGreaterThan(vmlOpen);
+      expect(columnIndex).toBeLessThan(vmlClose);
+    });
+  });
+
+  // Layout Background scope correction (message E) — full contract
+  // verification. The parent/layout background covers the FULL physical
+  // module row (Outer Spacer Columns + parent padding + column gutters +
+  // columns), never just the central structure. One outer wrapper owns
+  // it — the spacer <td>s themselves (wrapWithOuterSpacing) never carry
+  // their own background attr/style.
+  describe('Layout Background scope — full module width including Outer Spacer Columns, padding, and gutters', () => {
+    it('1 column, no spacers: background covers the full document width', () => {
+      const layout = createModule('layout-1col', 0);
+      layout.settings = { ...layout.settings, backgroundColor: '#D7C6C6' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#D7C6C6;">/);
+    });
+
+    it('1 column, with left/right Outer Spacer Columns: background still covers the FULL 700px, including both spacer regions', () => {
+      const layout = createModule('layout-1col', 0);
+      withOuterSpacing(layout, 40, 40);
+      layout.settings = { ...layout.settings, backgroundColor: '#D7C6C6' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#D7C6C6;">/);
+      // The spacer <td>s (inside the 700px background wrapper) carry no
+      // background of their own — one outer wrapper owns the color,
+      // never duplicated per spacer.
+      const spacerCells = html.match(/<td width="40"[^>]*>&nbsp;<\/td>/g) ?? [];
+      expect(spacerCells).toHaveLength(2);
+      for (const cell of spacerCells) expect(cell).not.toContain('background');
+    });
+
+    it('2 columns, spacers + gutter + parent padding + color: background covers the full 700px while column geometry is unaffected', () => {
+      const layout = createModule('layout-2col-60-40', 0);
+      withOuterSpacing(layout, 30, 30);
+      withPadding(layout, 10, 10);
+      layout.settings = { ...layout.settings, columnGutterPx: 20, backgroundColor: '#0082AD' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#0082AD;">/);
+      // parent = 700-60=640, content = 640-20=620, available = 620-20=600.
+      expect(columnWidthAttrs(html)).toEqual([360, 240]);
+      expect(gutterWidthAttrs(html)).toEqual([20]);
+    });
+
+    it('5 columns, spacers + multiple gutters + color: background covers the full 700px', () => {
+      const layout = createModule('layout-5col', 0);
+      withOuterSpacing(layout, 40, 40);
+      layout.settings = { ...layout.settings, columnGutterPx: 20, backgroundColor: '#76C043' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#76C043;">/);
+      // parent = 700-80=620, available = 620-80(4 gutters*20)=540, each col=108.
+      expect(columnWidthAttrs(html)).toEqual([108, 108, 108, 108, 108]);
+      expect(gutterWidthAttrs(html)).toEqual([20, 20, 20, 20]);
+    });
+
+    it('1 column, with spacers, background IMAGE covers the full 700px (CSS + attribute), color as fallback underneath', () => {
+      const layout = createModule('layout-1col', 0);
+      withOuterSpacing(layout, 40, 40);
+      layout.settings = {
+        ...layout.settings, backgroundColor: '#D7C6C6', backgroundImage: 'https://cdn.example.com/parent-bg.jpg',
+      };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toContain('<td width="700" bgcolor="#D7C6C6" background="https://cdn.example.com/parent-bg.jpg" style="width:700px; background-color:#D7C6C6;background-image:url(\'https://cdn.example.com/parent-bg.jpg\'); background-size:cover; background-position:center;">');
+    });
+
+    it('5 columns, spacers + gutters, background IMAGE covers the full width, same scope as color', () => {
+      const layout = createModule('layout-5col', 0);
+      withOuterSpacing(layout, 40, 40);
+      layout.settings = { ...layout.settings, columnGutterPx: 20, backgroundImage: 'https://cdn.example.com/wide-bg.jpg' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*background="https:\/\/cdn\.example\.com\/wide-bg\.jpg"[^>]*style="width:700px; background-image:url\('https:\/\/cdn\.example\.com\/wide-bg\.jpg'\); background-size:cover; background-position:center;">/);
+    });
+
+    it('parent background + one individual column background: parent covers the full 700px, the column background overlays only its own region, spacer regions show only the parent', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      withOuterSpacing(layout, 40, 40);
+      layout.settings = { ...layout.settings, backgroundColor: '#002D38' };
+      layout.columns![0].settings = { ...layout.columns![0].settings, backgroundColor: '#76C043' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#002D38;">/);
+      expect(html).toMatch(/<td width="\d+" valign="[^"]*"[^>]*background-color:#76C043;/);
+      const spacerCells = html.match(/<td width="40"[^>]*>&nbsp;<\/td>/g) ?? [];
+      expect(spacerCells).toHaveLength(2);
+      for (const cell of spacerCells) expect(cell).not.toContain('background-color:#76C043');
+    });
+
+    it('parent background IMAGE + one column background COLOR: both coexist, parent image scoped to the full width, column color scoped to its own cell', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      layout.settings = { ...layout.settings, backgroundImage: 'https://cdn.example.com/parent-bg.jpg' };
+      layout.columns![1].settings = { ...layout.columns![1].settings, backgroundColor: '#F4F6F8' };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*background="https:\/\/cdn\.example\.com\/parent-bg\.jpg"/);
+      expect(html).toMatch(/<td width="\d+" valign="[^"]*"[^>]*background-color:#F4F6F8;/);
+    });
+
+    it('parent background color renders as a fallback UNDER the background image in the same style declaration (both present, color declared first)', () => {
+      const layout = createModule('layout-1col', 0);
+      layout.settings = {
+        ...layout.settings, backgroundColor: '#333333', backgroundImage: 'https://cdn.example.com/fallback-test.jpg',
+      };
+      const html = renderEmailBody(withModules([layout], 700));
+      const styleMatch = html.match(/style="width:700px; (background-color:#333333;background-image:url\([^)]*\)[^"]*)"/);
+      expect(styleMatch).not.toBeNull();
+      expect(styleMatch![1].indexOf('background-color')).toBeLessThan(styleMatch![1].indexOf('background-image'));
+    });
+
+    it('nested layout: a Layout module nested inside a column carries its OWN background scoped to its OWN (narrower, column-resolved) available width — never a blind reuse of document.width', () => {
+      const outer = createModule('layout-1col', 0);
+      withPadding(outer, 20, 20);
+      outer.settings = { ...outer.settings, backgroundColor: '#002D38' };
+      const inner = createModule('layout-2col-50-50', 0);
+      inner.settings = { ...inner.settings, backgroundColor: '#76C043' };
+      outer.columns![0].modules.push(inner);
+      const html = renderEmailBody(withModules([outer], 700));
+      // Outer background covers the full 700px document width.
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#002D38;">/);
+      // Inner layout's background is scoped to the OUTER column's own
+      // resolved content width (700 - 20 - 20 = 660), not document.width.
+      expect(html).toMatch(/<td width="660"[^>]*style="width:660px; background-color:#76C043;">/);
+      const outerBgIndex = html.indexOf('background-color:#002D38;');
+      const innerBgIndex = html.indexOf('background-color:#76C043;');
+      expect(innerBgIndex).toBeGreaterThan(outerBgIndex);
+    });
+
+    it('mobile stacked rendering: the parent background CSS/attributes are unaffected by (and still present alongside) the Mobile stacking media query', () => {
+      const layout = createModule('layout-2col-60-40', 0);
+      layout.settings = { ...layout.settings, columnGutterPx: 20, backgroundColor: '#0082AD' };
+      const html = renderEmailDocument(withModules([layout], 700));
+      expect(html).toMatch(/<td width="700"[^>]*style="width:700px; background-color:#0082AD;">/);
+      expect(html).toMatch(/@media only screen and \(max-width:600px\)\{[\s\S]*?col0\{display:block !important; width:100% !important;\}/);
+    });
+
+    it('Classic Outlook/VML enabled: the VML background fallback is sized to the FULL 700px (not the narrowed central structure) and sits INSIDE the same full-width plain-HTML wrapper', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      withOuterSpacing(layout, 50, 50);
+      layout.settings = {
+        ...layout.settings, outlookVml: true, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/parent-bg.jpg',
+      };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).toContain('<v:rect');
+      expect(html).toContain('width:700px');
+      const wrapperOpen = html.indexOf('<td width="700"');
+      const vmlOpen = html.indexOf('<v:rect');
+      expect(vmlOpen).toBeGreaterThan(wrapperOpen);
+    });
+
+    it('Classic Outlook/VML disabled: NO VML markup is emitted, but the plain-HTML background color/image still cover the full 700px', () => {
+      const layout = createModule('layout-2col-50-50', 0);
+      withOuterSpacing(layout, 50, 50);
+      layout.settings = {
+        ...layout.settings, outlookVml: false, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/parent-bg.jpg',
+      };
+      const html = renderEmailBody(withModules([layout], 700));
+      expect(html).not.toContain('<v:rect');
+      expect(html).toMatch(/<td width="700"[^>]*background="https:\/\/cdn\.example\.com\/parent-bg\.jpg"[^>]*style="width:700px; background-color:#002D38;background-image:url\('https:\/\/cdn\.example\.com\/parent-bg\.jpg'\); background-size:cover; background-position:center;">/);
+    });
+  });
+});
+
 // Configurable Mobile Gutter Behavior — full-document (renderEmailDocument,
 // the SAME function CodeEditorPanel/PreviewStudioPanel/ExportDeployDialog
 // all call) proof that desktop output is byte-identical regardless of the
@@ -989,5 +1453,62 @@ describe('Feature 05 — Independently Configurable Desktop/Mobile Gutter', () =
     layout.settings = { ...layout.settings, columnGutter: { desktop: { value: 20, unit: 'px' } } };
     const html = renderEmailDocument(withModules([layout]));
     expect(html).toContain('width="20"');
+  });
+});
+
+// Module-4 E4 — Outlook/VML document-level default. `document.outlookVml`
+// (RenderableEmail.outlookVml) is a FALLBACK only: a module's own explicit
+// settings.outlookVml (set today only via the AI Engineer's
+// APPLY_VML_PATTERN/APPLY_OUTLOOK_WRAPPER actions) always wins.
+describe('Module-4 E4 — Outlook/VML document-level default', () => {
+  it('document.outlookVml=false (or omitted) reproduces today\'s exact existing behavior — no VML anywhere', () => {
+    const button = createModule('button', 0);
+    const html = renderEmailBody(withModules([button]));
+    expect(html).not.toContain('<v:roundrect');
+    const html2 = renderEmailBody({ ...withModules([button]), outlookVml: false });
+    expect(html2).toBe(html);
+  });
+
+  it('document.outlookVml=true enables the VML fallback for a module that never explicitly set it', () => {
+    const button = createModule('button', 0);
+    const html = renderEmailBody({ ...withModules([button]), outlookVml: true });
+    expect(html).toContain('<v:roundrect');
+  });
+
+  it('a module\'s OWN explicit settings.outlookVml=false still wins over document.outlookVml=true (explicit opt-out is never silently overridden)', () => {
+    const button = createModule('button', 0);
+    button.settings = { ...button.settings, outlookVml: false };
+    const html = renderEmailBody({ ...withModules([button]), outlookVml: true });
+    expect(html).not.toContain('<v:roundrect');
+  });
+
+  it('a module\'s OWN explicit settings.outlookVml=true is unaffected by document.outlookVml=false', () => {
+    const button = createModule('button', 0);
+    button.settings = { ...button.settings, outlookVml: true };
+    const html = renderEmailBody({ ...withModules([button]), outlookVml: false });
+    expect(html).toContain('<v:roundrect');
+  });
+
+  it('applies the document default to a module nested inside a Layout column too (one level of nesting, same as every other module-tree walk)', () => {
+    const layout = createModule('layout-1col', 0);
+    const button = createModule('button', 0);
+    layout.columns![0].modules.push(button);
+    const html = renderEmailBody({ ...withModules([layout]), outlookVml: true });
+    expect(html).toContain('<v:roundrect');
+  });
+
+  it('never mutates the caller\'s original module objects — the input module tree is unchanged after rendering', () => {
+    const button = createModule('button', 0);
+    const before = JSON.parse(JSON.stringify(button));
+    renderEmailBody({ ...withModules([button]), outlookVml: true });
+    expect(button).toEqual(before);
+    expect(button.settings.outlookVml).toBeUndefined();
+  });
+
+  it('the whole-module Layout Background VML wrapper also honors the document default for a layout with no explicit setting of its own', () => {
+    const layout = createModule('layout-1col', 0);
+    layout.settings = { ...layout.settings, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/bg.jpg' };
+    const html = renderEmailBody({ ...withModules([layout], 700), outlookVml: true });
+    expect(html).toContain('<v:rect');
   });
 });

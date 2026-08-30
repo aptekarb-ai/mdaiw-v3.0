@@ -117,7 +117,7 @@ describe('CreateEmailPage', () => {
       id: 42, name: 'August Product Newsletter', platform: 'generic', width: 900,
       start_type: 'blank', status: 'draft', content: { version: 1, modules: [] },
       email_title: '', email_subject: '', favicon_url: '',
-      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '', outlook_vml_enabled: false,
       created_at: '', updated_at: '',
     });
     const user = userEvent.setup();
@@ -146,7 +146,7 @@ describe('CreateEmailPage', () => {
       id: 7, name: 'August Product Newsletter', platform: 'generic', width: 700,
       start_type: 'blank', status: 'draft', content: { version: 1, modules: [] },
       email_title: '', email_subject: '', favicon_url: '',
-      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '', outlook_vml_enabled: false,
       created_at: '', updated_at: '',
     });
     const user = userEvent.setup();
@@ -258,7 +258,7 @@ describe('CreateEmailPage', () => {
       id: 1, name: 'August Product Newsletter', platform: 'generic', width: 700,
       start_type: 'blank', status: 'draft', content: { version: 1, modules: [] },
       email_title: '', email_subject: '', favicon_url: '',
-      reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      reset_css_enabled: true, custom_css_enabled: false, custom_css: '', outlook_vml_enabled: false,
       created_at: '', updated_at: '',
     });
     expect(await screen.findByText('Builder pending page')).toBeInTheDocument();

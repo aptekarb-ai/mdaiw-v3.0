@@ -1,0 +1,113 @@
+.validation-explanation-modal__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 45, 56, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: var(--space-4);
+}
+
+.validation-explanation-modal {
+  width: min(560px, 100%);
+  max-height: min(720px, 90vh);
+  background: var(--color-white);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.validation-explanation-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-5) var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.validation-explanation-modal__header h2 {
+  margin: var(--space-2) 0 0;
+  color: var(--color-primary-dark);
+  font-size: 19px;
+}
+
+.validation-explanation-modal__severity {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+}
+
+.validation-explanation-modal__severity--error {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.validation-explanation-modal__severity--warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.validation-explanation-modal__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.validation-explanation-modal__close:hover {
+  background: var(--color-background-light);
+}
+
+.validation-explanation-modal__close .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-text-muted);
+}
+
+.validation-explanation-modal__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  overflow-y: auto;
+}
+
+.validation-explanation-modal__body h3 {
+  margin: 0 0 var(--space-1);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.validation-explanation-modal__body p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--color-text-dark);
+}
+
+.validation-explanation-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
+}

@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
 import { validateEmail } from './emailValidation';
 import { renderEmailDocument } from './htmlRenderer';
+import { createModule } from './moduleFactory';
 import { EMPTY_DOCUMENT_SETTINGS } from './useEmailBuilderState';
-import type { EmailDocumentContent, EmailModule } from './edm';
+import type { EmailDocumentContent, EmailModule, TextModuleProps } from './edm';
 
 function contentWith(modules: EmailModule[]): EmailDocumentContent {
   return { version: 1, modules };
@@ -113,7 +114,7 @@ describe('resolveDocumentIntent', () => {
     const report = reportFor(content);
     const result = resolveDocumentIntent({ kind: 'validate-complete' }, report, content.modules, EMPTY_DOCUMENT_SETTINGS);
     expect(result.reply).toContain(`Email Health Score: ${report.score}/100`);
-    expect(result.reply).toContain('Document Settings');
+    expect(result.reply).toContain('Email Settings');
   });
 
   it('repair-all-safe finds zero candidates on a clean document and says so honestly', () => {
@@ -183,5 +184,170 @@ describe('resolveDocumentIntent', () => {
     const report = reportFor(content, settings);
     const result = resolveDocumentIntent({ kind: 'why-custom-css-unsafe' }, report, content.modules, settings);
     expect(result.reply).toContain('passed the security check');
+  });
+});
+
+// Module-4 E9 — editor-context-aware intents. Every case is answered
+// entirely from the passed-in DocumentIntentContext, zero network.
+describe('matchDocumentIntent — E9 context-aware intents', () => {
+  it('recognizes "what am I looking at"', () => {
+    expect(matchDocumentIntent('what am I looking at here?')?.kind).toBe('what-am-i-looking-at');
+  });
+
+  it('recognizes "what am I viewing"', () => {
+    expect(matchDocumentIntent('what am I viewing right now')?.kind).toBe('what-am-i-looking-at');
+  });
+
+  it('recognizes "what\'s wrong with the selected module"', () => {
+    expect(matchDocumentIntent("what's wrong with the selected module")?.kind).toBe('whats-wrong-selected');
+  });
+
+  it('recognizes "what\'s wrong with this image"', () => {
+    expect(matchDocumentIntent("what's wrong with this image")?.kind).toBe('whats-wrong-selected');
+  });
+
+  it('recognizes "why is this button not outlook compatible"', () => {
+    expect(matchDocumentIntent('why is this button not outlook compatible')?.kind).toBe('whats-wrong-selected');
+  });
+
+  it('recognizes "explain this issue"', () => {
+    expect(matchDocumentIntent('explain this issue')?.kind).toBe('explain-selected-issue');
+  });
+
+  it('recognizes "explain the selected validation problem"', () => {
+    expect(matchDocumentIntent('explain the selected validation problem')?.kind).toBe('explain-selected-issue');
+  });
+
+  it('does NOT misread "what is wrong with the head" as a selected-module question (existing whats-wrong-head intent still wins)', () => {
+    expect(matchDocumentIntent('what is wrong with the head')?.kind).toBe('whats-wrong-head');
+  });
+
+  it('recognizes bare "fix it"', () => {
+    expect(matchDocumentIntent('fix it')?.kind).toBe('fix-selected-issue');
+  });
+
+  it('recognizes "can you fix that"', () => {
+    expect(matchDocumentIntent('can you fix that?')?.kind).toBe('fix-selected-issue');
+  });
+
+  it('recognizes "please repair this"', () => {
+    expect(matchDocumentIntent('please repair this')?.kind).toBe('fix-selected-issue');
+  });
+});
+
+describe('resolveDocumentIntent — E9 context-aware intents', () => {
+  it('what-am-i-looking-at describes the Code tab', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'what-am-i-looking-at' }, report, [], EMPTY_DOCUMENT_SETTINGS, {
+      editorMode: 'code',
+    });
+    expect(result.reply).toContain('Code tab');
+  });
+
+  it('what-am-i-looking-at describes Preview Studio', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'what-am-i-looking-at' }, report, [], EMPTY_DOCUMENT_SETTINGS, {
+      editorMode: 'preview',
+    });
+    expect(result.reply).toContain('Preview Studio');
+  });
+
+  it('what-am-i-looking-at describes Validation Center', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'what-am-i-looking-at' }, report, [], EMPTY_DOCUMENT_SETTINGS, {
+      editorMode: 'validate',
+    });
+    expect(result.reply).toContain('Validation Center');
+  });
+
+  it('what-am-i-looking-at describes itself (AI Engineer) when asked from within the AI Engineer tab', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'what-am-i-looking-at' }, report, [], EMPTY_DOCUMENT_SETTINGS, {
+      editorMode: 'ai',
+    });
+    expect(result.reply).toContain('AI Engineer');
+  });
+
+  it('what-am-i-looking-at defaults to describing the Visual canvas for any other/missing editorMode', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'what-am-i-looking-at' }, report, [], EMPTY_DOCUMENT_SETTINGS, {});
+    expect(result.reply).toContain('Visual builder canvas');
+  });
+
+  it('whats-wrong-selected reports no module selected when none is given', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'whats-wrong-selected' }, report, [], EMPTY_DOCUMENT_SETTINGS, {});
+    expect(result.reply).toContain('No module is currently selected');
+  });
+
+  it('whats-wrong-selected reports the real issues for the selected module', () => {
+    const module = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    module.props = { ...module.props, color: '#050505', backgroundColor: '#0a0a0a' };
+    const widened = module as unknown as EmailModule;
+    const content = contentWith([widened]);
+    const report = reportFor(content);
+    const result = resolveDocumentIntent({ kind: 'whats-wrong-selected' }, report, content.modules, EMPTY_DOCUMENT_SETTINGS, {
+      selectedModule: widened,
+    });
+    expect(result.reply).toContain('Text');
+    expect(result.reply).toContain('Risky under dark-mode inversion');
+  });
+
+  it('whats-wrong-selected reports a clean module has no issues', () => {
+    const module = createModule('divider', 0);
+    const content = contentWith([module]);
+    const report = reportFor(content);
+    const result = resolveDocumentIntent({ kind: 'whats-wrong-selected' }, report, content.modules, EMPTY_DOCUMENT_SETTINGS, {
+      selectedModule: module,
+    });
+    expect(result.reply).toContain('no known issues');
+  });
+
+  it('explain-selected-issue reports nothing is focused when no issue is given', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'explain-selected-issue' }, report, [], EMPTY_DOCUMENT_SETTINGS, {});
+    expect(result.reply).toContain('No specific validation issue is currently focused');
+  });
+
+  it('explain-selected-issue reports the real issue detail when one is given', () => {
+    const settings = { ...EMPTY_DOCUMENT_SETTINGS, reset_css_enabled: false };
+    const report = reportFor(contentWith([]), settings);
+    const issue = report.issues.find((i) => i.title === 'Email Reset CSS is disabled')!;
+    const result = resolveDocumentIntent({ kind: 'explain-selected-issue' }, report, [], settings, {
+      selectedValidationIssue: issue,
+    });
+    expect(result.reply).toContain('Email Reset CSS is disabled');
+    expect(result.reply).toContain(issue.detail);
+  });
+
+  it('fix-selected-issue proposes the real repair candidate for a safe issue', () => {
+    const settings = { ...EMPTY_DOCUMENT_SETTINGS, reset_css_enabled: false };
+    const report = reportFor(contentWith([]), settings);
+    const issue = report.issues.find((i) => i.title === 'Email Reset CSS is disabled')!;
+    const result = resolveDocumentIntent({ kind: 'fix-selected-issue' }, report, [], settings, {
+      selectedValidationIssue: issue,
+    });
+    expect(result.repairCandidates).toHaveLength(1);
+    expect(result.repairCandidates![0].issueId).toBe(issue.id);
+  });
+
+  it('fix-selected-issue is honest when the tracked issue has no safe auto-fix', () => {
+    const module = createModule('text', 0) as unknown as EmailModule<TextModuleProps>;
+    module.props = { ...module.props, color: '#050505', backgroundColor: '#0a0a0a' };
+    const widened = module as unknown as EmailModule;
+    const content = contentWith([widened]);
+    const report = reportFor(content);
+    const issue = report.issues.find((i) => i.title === 'Risky under dark-mode inversion')!;
+    const result = resolveDocumentIntent({ kind: 'fix-selected-issue' }, report, content.modules, EMPTY_DOCUMENT_SETTINGS, {
+      selectedValidationIssue: issue,
+    });
+    expect(result.repairCandidates).toBeUndefined();
+    expect(result.reply).toContain('does not have a safe, fully-automatic fix');
+  });
+
+  it('fix-selected-issue asks for clarification when nothing has been discussed yet', () => {
+    const report = reportFor(contentWith([]));
+    const result = resolveDocumentIntent({ kind: 'fix-selected-issue' }, report, [], EMPTY_DOCUMENT_SETTINGS, {});
+    expect(result.reply).toContain("not sure which issue you mean");
   });
 });

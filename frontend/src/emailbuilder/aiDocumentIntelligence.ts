@@ -32,7 +32,18 @@ export type DocumentIntentKind =
   | 'why-custom-css-unsafe'
   | 'validate-complete'
   | 'repair-all-safe'
-  | 'repair-keyword';
+  | 'repair-keyword'
+  // E9 — editor-context-aware intents. Answered ENTIRELY from context the
+  // caller (AIEngineerPanel) already has locally (editorMode/
+  // selectedModule/selectedValidationIssue) — never a network round trip,
+  // same zero-network posture as every intent above.
+  | 'what-am-i-looking-at'
+  | 'whats-wrong-selected'
+  | 'explain-selected-issue'
+  // E10 — a bare "fix it"/"fix that" follow-up, resolved against
+  // context.selectedValidationIssue (the caller's own tracked "last
+  // discussed issue" — see AIEngineerPanel's lastDiscussedIssueId).
+  | 'fix-selected-issue';
 
 interface DocumentIntentMatch {
   kind: DocumentIntentKind;
@@ -44,6 +55,19 @@ const INTENT_PATTERNS: { pattern: RegExp; kind: DocumentIntentKind }[] = [
   // outlook problems" mentions "outlook" too and must not be misread as
   // a plain diagnostic question.
   { pattern: /\b(repair|fix)\b.*\ball\b.*\bsafe\b|\ball\s+safe\b.*\b(repair|fix)\b/i, kind: 'repair-all-safe' },
+  // E9 — checked early/specifically so a genuine editor-context question
+  // never falls through to the broader 'which-module'/generic patterns
+  // below.
+  { pattern: /\bwhat\b.*\b(am i|are you)\b.*\b(looking at|viewing|showing)\b/i, kind: 'what-am-i-looking-at' },
+  { pattern: /\bwhat'?s?\s+wrong\s+with\s+(this|the\s+selected|my\s+selected)\b/i, kind: 'whats-wrong-selected' },
+  { pattern: /\bwhy\b.*\b(is|isn'?t)\b.*\b(this|the\s+selected)\b.*\bcompatib/i, kind: 'whats-wrong-selected' },
+  { pattern: /\bexplain\b.*\b(this|the\s+selected|selected)\s+(issue|problem|validation)\b/i, kind: 'explain-selected-issue' },
+  // E10 — narrow and specific ("fix it"/"fix that"/"can you fix it"),
+  // checked before the generic repair-keyword catch-all below so a bare
+  // pronoun follow-up is resolved against the tracked last-discussed
+  // issue instead of falling through to "I could not find a matching
+  // problem" (issuesByKeyword has nothing to match against "it"/"that").
+  { pattern: /\b(can\s+you\s+|please\s+)?(fix|repair)\s+(it|that|this)\b/i, kind: 'fix-selected-issue' },
   { pattern: /\bwhy\b.*\b(failing|broken|wrong)\b.*\b(classic\s+outlook|outlook\s+2016)\b/i, kind: 'diagnose-classic-outlook' },
   { pattern: /\bwhy\b.*\bfailing\b.*\boutlook\b/i, kind: 'diagnose-classic-outlook' },
   { pattern: /\bcheck\b.*\bclassic\s+outlook\b|\bclassic\s+outlook\b.*\bissues?\b/i, kind: 'diagnose-classic-outlook' },
@@ -113,13 +137,75 @@ export interface DocumentIntentResult {
   repairCandidates?: RepairCandidate[];
 }
 
+// E9 — bounded, LOCAL editor context. Every field here is something the
+// caller already holds in React state; nothing is fetched, nothing is
+// sent over the network to answer these intents. `editorMode` mirrors
+// BuilderToolbar's EditorMode as a plain string (this file intentionally
+// does not import that type, to avoid a UI-layer dependency in a pure
+// intent module — any string editorMode doesn't recognize just falls
+// through to the Visual-canvas description).
+export interface DocumentIntentContext {
+  editorMode?: string;
+  selectedModule?: EmailModule | null;
+  selectedValidationIssue?: ValidationIssue | null;
+}
+
 export function resolveDocumentIntent(
   match: DocumentIntentMatch,
   report: ValidationReport,
   modules: EmailModule[],
   documentSettings: EmailDocumentSettingsSnapshot,
+  context: DocumentIntentContext = {},
 ): DocumentIntentResult {
   switch (match.kind) {
+    case 'what-am-i-looking-at': {
+      if (context.editorMode === 'code') {
+        return { reply: 'You are looking at the Code tab — the real, generated email HTML for this document (the exact markup Preview/Export produce), read-only. Toggle "Formatted" for a readable layout, or use "Copy HTML"/"Download".' };
+      }
+      if (context.editorMode === 'preview') {
+        return { reply: 'You are looking at Preview Studio — a live render of the generated HTML at Desktop/Mobile/Dark-mode widths, plus the Email Clients compatibility matrix.' };
+      }
+      if (context.editorMode === 'validate') {
+        return { reply: 'You are looking at Validation Center — the Email Health Score and every compatibility/accessibility issue found in this document, with Explain and Fix actions on each.' };
+      }
+      if (context.editorMode === 'ai') {
+        return { reply: "You're right here in the AI Engineer — Chat & Voice for talking to me, and History for past commands/repairs. Ask about a specific tab (Code/Preview/Validate) by switching to it first." };
+      }
+      return { reply: 'You are looking at the Visual builder canvas — the module tree you can drag, edit, and reorder.' };
+    }
+    case 'whats-wrong-selected': {
+      if (!context.selectedModule) {
+        return { reply: 'No module is currently selected. Select one on the canvas first, then ask again.' };
+      }
+      const label = getModuleDefinition(context.selectedModule.type)?.label ?? context.selectedModule.type;
+      const issues = report.issues.filter((issue) => issue.moduleId === context.selectedModule!.id);
+      if (issues.length === 0) {
+        return { reply: `The selected ${label} module has no known issues — it passes every check currently run.` };
+      }
+      return { reply: `The selected ${label} module has ${issues.length} issue${issues.length === 1 ? '' : 's'}:\n${issues.map((issue) => `• ${issue.title} — ${issue.detail}`).join('\n')}` };
+    }
+    case 'explain-selected-issue': {
+      if (!context.selectedValidationIssue) {
+        return { reply: 'No specific validation issue is currently focused. Open Validation Center and click Explain on an issue, or ask about a specific topic (e.g. "why is Classic Outlook failing").' };
+      }
+      const issue = context.selectedValidationIssue;
+      return { reply: `${issue.title}: ${issue.detail}` };
+    }
+    case 'fix-selected-issue': {
+      if (!context.selectedValidationIssue) {
+        return { reply: "I'm not sure which issue you mean — explain or select one first (e.g. click Explain on an issue in Validation Center), then ask me to fix it." };
+      }
+      const issue = context.selectedValidationIssue;
+      const allCandidates = buildRepairCandidates(report, modules, documentSettings);
+      const candidate = allCandidates.find((c) => c.issueId === issue.id);
+      if (!candidate) {
+        return { reply: `"${issue.title}" does not have a safe, fully-automatic fix. ${issue.moduleId ? 'Open the module in the canvas to adjust it manually.' : 'Please adjust it in Email Settings.'}` };
+      }
+      return {
+        reply: `I found a fix for that:\n• ${candidate.title} (${candidate.affectedClient}): ${candidate.before} → ${candidate.after}\nReview the proposed change below.`,
+        repairCandidates: [candidate],
+      };
+    }
     case 'diagnose-classic-outlook': {
       const issues = report.issues.filter((issue) => issue.id.startsWith('outlook-classic:'));
       return { reply: summarizeIssues(issues, 'No Classic Outlook compatibility problems were found — the required Outlook metadata and scoping are already correct.') };
@@ -178,7 +264,7 @@ export function resolveDocumentIntent(
       const candidates = allCandidates.filter((candidate) => matchedIds.has(candidate.issueId));
       if (candidates.length === 0) {
         const issue = matchedIssues[0];
-        return { reply: `I found the issue — ${issue.title}: ${issue.detail} — but it does not have a safe, fully-automatic fix. ${issue.moduleId ? 'Open the module in the canvas to adjust it manually.' : 'Please adjust it in Document Settings.'}` };
+        return { reply: `I found the issue — ${issue.title}: ${issue.detail} — but it does not have a safe, fully-automatic fix. ${issue.moduleId ? 'Open the module in the canvas to adjust it manually.' : 'Please adjust it in Email Settings.'}` };
       }
       const lines = candidates.map((c) => `• ${c.title} (${c.affectedClient}): ${c.before} → ${c.after}`);
       return {

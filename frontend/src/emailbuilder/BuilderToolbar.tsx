@@ -98,7 +98,7 @@ export function BuilderToolbar({
             title="Email title, subject, and favicon"
           >
             <span className="mdaiw-icon mdaiw-icon--edit" aria-hidden="true" />
-            Document Settings
+            Email Settings
           </button>
         </div>
       </div>

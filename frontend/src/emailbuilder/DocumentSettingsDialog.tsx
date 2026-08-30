@@ -41,6 +41,7 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
   const [resetCssEnabled, setResetCssEnabled] = useState(documentSettings.reset_css_enabled);
   const [customCssEnabled, setCustomCssEnabled] = useState(documentSettings.custom_css_enabled);
   const [customCss, setCustomCss] = useState(documentSettings.custom_css);
+  const [outlookVmlEnabled, setOutlookVmlEnabled] = useState(documentSettings.outlook_vml_enabled);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
 
   const faviconError = useMemo(() => validateFaviconUrl(faviconUrl), [faviconUrl]);
@@ -100,7 +101,8 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
     || faviconUrl !== documentSettings.favicon_url
     || resetCssEnabled !== documentSettings.reset_css_enabled
     || customCssEnabled !== documentSettings.custom_css_enabled
-    || customCss !== documentSettings.custom_css;
+    || customCss !== documentSettings.custom_css
+    || outlookVmlEnabled !== documentSettings.outlook_vml_enabled;
 
   // Apply is blocked while enabled Custom CSS fails the security
   // validator, or the favicon URL is invalid — item 1's "failed
@@ -130,6 +132,7 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
       reset_css_enabled: resetCssEnabled,
       custom_css_enabled: customCssEnabled,
       custom_css: customCss,
+      outlook_vml_enabled: outlookVmlEnabled,
     });
     onClose();
   }
@@ -145,7 +148,7 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="document-settings-dialog__header">
-          <h2 id="document-settings-heading">Document Settings</h2>
+          <h2 id="document-settings-heading">Email Settings</h2>
           <button type="button" className="document-settings-dialog__close" aria-label="Close" onClick={onClose}>
             <span className="mdaiw-icon mdaiw-icon--close" aria-hidden="true" />
           </button>
@@ -299,6 +302,22 @@ export function DocumentSettingsDialog({ documentSettings, documentName, onApply
             <p className="document-settings-dialog__hint">
               Separate from Email Reset CSS. Applied last in the cascade (Reset CSS, then responsive CSS, then
               Custom CSS), so it intentionally wins where specificity is equal.
+            </p>
+          </div>
+
+          <div className="document-settings-dialog__field">
+            <label className="document-settings-dialog__checkbox-row">
+              <input
+                type="checkbox"
+                checked={outlookVmlEnabled}
+                onChange={(event) => setOutlookVmlEnabled(event.target.checked)}
+              />
+              Outlook Compatibility — Enable Outlook/VML fallbacks
+            </label>
+            <p className="document-settings-dialog__hint">
+              Adds Microsoft Outlook-compatible VML fallbacks for supported backgrounds and buttons. Recommended
+              for broad email-client compatibility. A module that already has its own VML setting keeps that
+              choice; this is the default for every other module.
             </p>
           </div>
         </div>

@@ -1,10 +1,10 @@
 import { useState, type DragEvent, type KeyboardEvent } from 'react';
 import type { EmailColumn, EmailModule, EmailModuleType } from './edm';
-import { resolveDesktopGutterPx, resolveMobileGutterPx, resolveOuterSpacing, resolveSpacing } from './edm';
+import { resolveDesktopGutterPx, resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
-import type { BuilderViewMode } from './registryCore';
+import { computeLayoutAvailableWidthPx, type BuilderViewMode } from './registryCore';
 import { outerSpacingPx } from './dimensions';
-import { isLayoutModuleType } from './layoutModel';
+import { isLayoutModuleType, resolveColumnPixelWidths } from './layoutModel';
 import {
   NESTED_MODULE_DRAG_MIME, NEW_MODULE_DRAG_MIME, SAVED_MODULE_DRAG_MIME, type NestedModuleDragPayload,
 } from './dragTypes';
@@ -15,6 +15,18 @@ interface LayoutCanvasModuleProps {
   layout: EmailModule;
   viewport: BuilderViewMode;
   canvasWidth: number;
+  // Front-Stage Width Contract correction — the REAL document width
+  // (EmailCanvasProps.width — never canvasWidth, which is a fixed 375px
+  // Mobile visual-emulation value with no relationship to how the real
+  // exported HTML actually resolves column pixel widths). Desktop is
+  // always the structural source of truth for column/gutter math — even
+  // when this layout is shown non-stacked on the Mobile canvas (an
+  // explicit "Stack columns on Mobile" opt-out), the real exported HTML
+  // applies ZERO Mobile CSS override in that case (see
+  // responsiveStyles.ts's layoutRules — mobileStack:false short-circuits
+  // before any rule is emitted), so the true rendered pixel widths are
+  // still these Desktop ones, not a value rescaled to 375px.
+  documentWidth: number;
   selectedModuleId: string | null;
   activeColumnId: string | null;
   savedModules: SavedEmailModule[];
@@ -43,7 +55,7 @@ function readNestedDrop(event: DragEvent): 'nested' | 'saved' | 'new' | null {
 // component only owns what's genuinely inside the layout: columns, drop
 // zones and nested module rows.
 export function LayoutCanvasModule({
-  layout, viewport, canvasWidth, selectedModuleId, activeColumnId, savedModules,
+  layout, viewport, canvasWidth, documentWidth, selectedModuleId, activeColumnId, savedModules,
   onSelectColumn, onSelectNestedModule, onInsertNewModule, onInsertSavedModule,
   onReorderNested, onMoveNested, onDuplicateNested, onDeleteNested,
 }: LayoutCanvasModuleProps) {
@@ -51,11 +63,18 @@ export function LayoutCanvasModule({
   const columns = layout.columns ?? [];
   const columnWidths = (layout.props as { columnWidths: number[] }).columnWidths;
   const stacked = viewport === 'mobile' && layout.settings.mobileStack !== false;
-  // Independently Configurable Desktop/Mobile Gutter — the canvas
-  // preview's own (non-stacked) side-by-side gap uses whichever gutter
-  // value belongs to the CURRENT viewport toggle, never derived from the
-  // other one.
-  const gutterPx = viewport === 'mobile' ? resolveMobileGutterPx(layout.settings) : resolveDesktopGutterPx(layout.settings);
+  // Front-Stage Width Contract correction — the non-stacked (side-by-side)
+  // canvas preview now reuses the EXACT SAME width-resolution chain the
+  // Properties panel and the real HTML renderer already use
+  // (computeLayoutAvailableWidthPx -> resolveColumnPixelWidths — never a
+  // second/approximate algorithm), so the builder canvas can no longer
+  // diverge from what gets exported. Always Desktop-gutter-based — the
+  // gutter only ever becomes Mobile VERTICAL spacing once actually
+  // stacked (irrelevant here; stacked mode uses its own CSS gap below,
+  // untouched by this correction).
+  const gutterPx = resolveDesktopGutterPx(layout.settings);
+  const layoutAvailableWidthPx = computeLayoutAvailableWidthPx(layout, documentWidth);
+  const { columnPx } = resolveColumnPixelWidths(columnWidths, gutterPx, layoutAvailableWidthPx);
 
   // Module-4 Final Gap Closure, Correction 2 (Feature 05) — the Desktop
   // visual sequence, as an array of ORIGINAL column indexes (never a
@@ -131,7 +150,7 @@ export function LayoutCanvasModule({
       {orderedIndexes.map((columnIndex) => {
         const column = columns[columnIndex];
         if (!column) return null;
-        const width = columnWidths[columnIndex] ?? 0;
+        const resolvedWidthPx = columnPx[columnIndex] ?? 0;
         const spacing = resolveSpacing(column.settings, viewport);
         const isActiveColumn = activeColumnId === column.id;
         const isEmpty = column.modules.length === 0;
@@ -143,8 +162,9 @@ export function LayoutCanvasModule({
               isActiveColumn ? 'layout-canvas__column layout-canvas__column--active' : 'layout-canvas__column'
             }
             style={{
-              flex: stacked ? '0 0 100%' : `0 0 ${width}%`,
-              maxWidth: stacked ? '100%' : `${width}%`,
+              flex: stacked ? '0 0 100%' : `0 0 ${resolvedWidthPx}px`,
+              width: stacked ? undefined : `${resolvedWidthPx}px`,
+              maxWidth: stacked ? '100%' : `${resolvedWidthPx}px`,
               backgroundColor: column.settings.backgroundColor || undefined,
               justifyContent: column.settings.verticalAlign === 'middle'
                 ? 'center'
@@ -226,6 +246,24 @@ export function LayoutCanvasModule({
                           >
                             <span className="mdaiw-icon mdaiw-icon--menu" aria-hidden="true" />
                           </span>
+                          <button
+                            type="button"
+                            aria-label="Move component up"
+                            title="Move component up"
+                            disabled={nestedIndex === 0}
+                            onClick={() => onReorderNested(column.id, nestedIndex, nestedIndex - 1)}
+                          >
+                            <span className="mdaiw-icon mdaiw-icon--chevron-down layout-canvas__move-icon--up" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Move component down"
+                            title="Move component down"
+                            disabled={nestedIndex === column.modules.length - 1}
+                            onClick={() => onReorderNested(column.id, nestedIndex, nestedIndex + 1)}
+                          >
+                            <span className="mdaiw-icon mdaiw-icon--chevron-down" aria-hidden="true" />
+                          </button>
                           <button
                             type="button"
                             aria-label={`Duplicate ${definition?.label ?? nested.type}`}

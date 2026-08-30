@@ -6,6 +6,7 @@ import {
   fetchRepairRanking, newLearningEventId, rankWithinTiers, recordRepairSignal,
   type RepairRanking,
 } from './learningSignals';
+import { ValidationExplanationModal } from './ValidationExplanationModal';
 import type { EmailDocumentContent } from './edm';
 import type { EmailPlatform } from './types';
 import './ValidationCenterPanel.css';
@@ -20,6 +21,7 @@ interface ValidationCenterPanelProps {
   resetCssEnabled?: boolean;
   customCssEnabled?: boolean;
   customCss?: string;
+  outlookVml?: boolean;
   onNavigateToModule: (moduleId: string) => void;
   onApplySafeFix: (moduleId: string, propPatch: Record<string, unknown>) => void;
   // Sub-phase 6 — module SETTINGS-scope safe fixes (e.g. enabling the VML
@@ -37,6 +39,13 @@ interface ValidationCenterPanelProps {
   // change. Purely a display effect: it navigates attention, it never
   // mutates content, applies a fix, or re-runs validation differently.
   highlightIssueId?: string | null;
+  // E7/E8 — "Ask AI Engineer" / "Review N more with AI Engineer": switches
+  // to the AI Engineer tab and seeds one user turn with the given prompt
+  // text (and, for a single-issue Explain, that issue's real id — see
+  // ValidationExplanationModal's own docstring on why). Optional so any
+  // other future caller of this panel (there is only one today) is not
+  // forced to wire it.
+  onAskAiEngineer?: (prompt: string, issueId?: string) => void;
 }
 
 const SCORE_CIRCUMFERENCE = 2 * Math.PI * 52;
@@ -73,12 +82,16 @@ const STATUS_LABEL: Record<'good' | 'needs-improvement' | 'needs-attention', str
 // real, reproducible check.
 export function ValidationCenterPanel({
   width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
-  onNavigateToModule, onApplySafeFix, onApplySettingsFix, onApplyDocumentFix, highlightIssueId,
+  outlookVml, onNavigateToModule, onApplySafeFix, onApplySettingsFix, onApplyDocumentFix, highlightIssueId,
+  onAskAiEngineer,
 }: ValidationCenterPanelProps) {
   const [applyingFixId, setApplyingFixId] = useState<string | null>(null);
   const [applyingAll, setApplyingAll] = useState(false);
   const [revalidateNonce, setRevalidateNonce] = useState(0);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  // E7 — which issue's Explanation modal is currently open, if any. ONE
+  // reusable modal for every issue, never one per category.
+  const [explainingIssue, setExplainingIssue] = useState<ValidationIssue | null>(null);
   const issueCardRefs = useRef<Record<string, HTMLLIElement | null>>({});
   // Sub-phase 8 — advisory-only display ranking, fetched independently of
   // validation (validateEmail stays 100% pure/client-side). Empty on
@@ -102,11 +115,11 @@ export function ValidationCenterPanel({
   // the shared renderer Code Editor/Preview Studio also depend on.
   const rawHtml = useMemo(() => {
     try {
-      return renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss });
+      return renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml });
     } catch {
       return null;
     }
-  }, [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+  }, [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml]);
 
   // Re-evaluated on every relevant change automatically (rawHtml/platform
   // are already reactive); revalidateNonce exists only so the explicit
@@ -135,6 +148,12 @@ export function ValidationCenterPanel({
   }, [rawHtml]);
 
   const safeIssues = report?.issues.filter((issue) => issue.fixType === 'safe') ?? [];
+  // E8 — bucket B candidates: issues with no deterministic safe fix but
+  // which trace to a real module, so the AI Engineer has something
+  // concrete to propose a change against. Never counted/labeled as
+  // "will be fixed" here — only as "may be fixable with AI assistance",
+  // since whether the AI can actually help is only known once asked.
+  const aiAssistableIssues = report?.issues.filter((issue) => issue.fixType === 'manual' && issue.moduleId) ?? [];
 
   // Advisory reordering only: issues never move across a severity+fixType
   // tier (an error never displaces above/below where errors sort, a
@@ -194,14 +213,21 @@ export function ValidationCenterPanel({
     }
   }
 
-  async function handleFixAllSafe() {
+  // E8 — the ONE unified remediation CTA. Bucket A (deterministic safe
+  // fixes) applies immediately, same mechanism/history/undo as before.
+  // Bucket B (AI-proposed) is never silently auto-applied here — if any
+  // AI-assistable issues remain after the safe fixes, this hands off to
+  // the AI Engineer (onAskAiEngineer), which proposes one real, reviewable
+  // change at a time through its existing Apply/Cancel confirmation flow.
+  // Bucket C (manual/non-fixable, no module) just stays visible+explained.
+  async function handleFixIssues() {
     setApplyingAll(true);
     for (const issue of safeIssues) {
       if (issue.safeFix) {
         applySafeFix(issue.safeFix);
         // Each issue in the batch is its own decision with its own
-        // event_id — "Fix All" is N accepts, not one, so evidence counts
-        // accumulate the same way N individual Fix clicks would.
+        // event_id — "Fix Issues" is N accepts, not one, so evidence
+        // counts accumulate the same way N individual Fix clicks would.
         await recordRepairSignal({
           eventId: newLearningEventId(), signature: signatureForIssueId(issue.id),
           outcome: 'accepted', source: 'validation_center_bulk',
@@ -210,6 +236,14 @@ export function ValidationCenterPanel({
     }
     refreshRanking();
     setTimeout(() => setApplyingAll(false), 300);
+  }
+
+  function handleReviewAiAssistable() {
+    if (aiAssistableIssues.length === 0 || !onAskAiEngineer) return;
+    const lines = aiAssistableIssues.map((issue) => `- ${issue.title}: ${issue.detail}`).join('\n');
+    onAskAiEngineer(
+      `Review and, where safe, propose fixes for these ${aiAssistableIssues.length} issue${aiAssistableIssues.length === 1 ? '' : 's'}:\n${lines}`,
+    );
   }
 
   if (report === null) {
@@ -244,15 +278,18 @@ export function ValidationCenterPanel({
         <button
           type="button"
           className="button button--primary"
-          onClick={handleFixAllSafe}
+          onClick={handleFixIssues}
           disabled={safeIssues.length === 0 || applyingAll}
+          title={safeIssues.length === 0 ? 'No safely auto-fixable issues right now' : undefined}
         >
-          {applyingAll ? 'Fixing…' : `Fix All Safe Issues (${safeIssues.length})`}
+          {applyingAll ? 'Fixing…' : `Fix Issues (${safeIssues.length})`}
         </button>
-        <button type="button" className="button button--outline" disabled title="Coming soon">
-          <span className="mdaiw-icon mdaiw-icon--ai-assistants" aria-hidden="true" />
-          AI-Assisted Fix
-        </button>
+        {aiAssistableIssues.length > 0 && onAskAiEngineer && (
+          <button type="button" className="button button--outline" onClick={handleReviewAiAssistable}>
+            <span className="mdaiw-icon mdaiw-icon--ai-assistants" aria-hidden="true" />
+            {`Review ${aiAssistableIssues.length} more with AI Engineer`}
+          </button>
+        )}
       </div>
 
       <div className="validation-center-panel__body">
@@ -325,22 +362,41 @@ export function ValidationCenterPanel({
                       </p>
                     )}
                   </div>
-                  {issue.fixType !== 'none' && (
+                  <div className="validation-center-panel__issue-actions">
                     <button
                       type="button"
-                      className="button button--outline validation-center-panel__issue-fix"
-                      onClick={() => handleFixOne(issue)}
-                      disabled={applyingFixId === issue.id}
+                      className="button button--outline validation-center-panel__issue-explain"
+                      onClick={() => setExplainingIssue(issue)}
                     >
-                      {issue.fixType === 'safe' ? 'Fix' : 'Go to module'}
+                      Explain
                     </button>
-                  )}
+                    {issue.fixType !== 'none' && (
+                      <button
+                        type="button"
+                        className="button button--outline validation-center-panel__issue-fix"
+                        onClick={() => handleFixOne(issue)}
+                        disabled={applyingFixId === issue.id}
+                      >
+                        {issue.fixType === 'safe' ? 'Fix' : 'Go to module'}
+                      </button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </div>
       </div>
+
+      {explainingIssue && (
+        <ValidationExplanationModal
+          issue={explainingIssue}
+          modules={content.modules}
+          onClose={() => setExplainingIssue(null)}
+          onGoToModule={onNavigateToModule}
+          onAskAiEngineer={onAskAiEngineer}
+        />
+      )}
     </div>
   );
 }

@@ -9,9 +9,9 @@ import type { EmailDocumentContent, EmailModule } from './edm';
 
 function documentSettingsOf(document: EmailDocument): EmailDocumentSettingsSnapshot {
   const {
-    email_title, email_subject, favicon_url, reset_css_enabled, custom_css_enabled, custom_css,
+    email_title, email_subject, favicon_url, reset_css_enabled, custom_css_enabled, custom_css, outlook_vml_enabled,
   } = document;
-  return { email_title, email_subject, favicon_url, reset_css_enabled, custom_css_enabled, custom_css };
+  return { email_title, email_subject, favicon_url, reset_css_enabled, custom_css_enabled, custom_css, outlook_vml_enabled };
 }
 
 function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
@@ -29,6 +29,7 @@ function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
     reset_css_enabled: true,
     custom_css_enabled: false,
     custom_css: '',
+    outlook_vml_enabled: false,
     created_at: '2026-08-22T10:00:00Z',
     updated_at: '2026-08-22T10:00:00Z',
     ...overrides,

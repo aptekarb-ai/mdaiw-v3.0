@@ -118,7 +118,7 @@ export function ExportDeployDialog({
     () => renderEmailDocument({
       width: document.width, content, title: documentSettings.email_title, faviconUrl: documentSettings.favicon_url,
       resetCssEnabled: documentSettings.reset_css_enabled, customCssEnabled: documentSettings.custom_css_enabled,
-      customCss: documentSettings.custom_css,
+      customCss: documentSettings.custom_css, outlookVml: documentSettings.outlook_vml_enabled,
     }),
     [document.width, documentSettings, content],
   );

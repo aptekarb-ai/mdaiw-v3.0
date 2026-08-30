@@ -74,7 +74,7 @@ export interface ValidationReport {
 }
 
 const CATEGORY_LABELS: Record<ValidationCategoryId, string> = {
-  document: 'Document Settings',
+  document: 'Email Settings',
   html: 'HTML',
   outlook: 'Outlook Compatibility',
   responsive: 'Responsive',
@@ -841,7 +841,7 @@ function checkDocumentStandards(html: string, documentSettings?: DocumentValidat
       category: 'document',
       severity: 'warning',
       title: 'Email title is empty',
-      detail: 'The document <title> is empty. Set an email title in Document Settings so browser tabs and some clients show a meaningful name.',
+      detail: 'The document <title> is empty. Set an email title in Email Settings so browser tabs and some clients show a meaningful name.',
       fixType: 'none',
     });
   }

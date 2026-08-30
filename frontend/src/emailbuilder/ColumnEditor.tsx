@@ -125,14 +125,24 @@ export function ColumnWidthsEditor({ module, viewport, availableWidthPx, onChang
         <p className="properties-panel__hint">
           Columns stack to full width on Mobile. The Desktop ratios below stay stored and are restored exactly when you switch back.
         </p>
-        <ul className="properties-panel__mobile-width-summary">
+        {/* A compact status summary, not a default browser bullet list —
+            same font size/line-height/color as the rest of the Properties
+            panel (properties-panel__hint), each row a plain label/value
+            pair. Dynamically reflects any column count. */}
+        <div className="properties-panel__mobile-width-summary">
           {widths.map((_, index) => (
-            <li key={index}>Column {index + 1} — 100% stacked</li>
+            <div key={index} className="properties-panel__mobile-width-summary-row">
+              <span>Column {index + 1}</span>
+              <span>100% stacked</span>
+            </div>
           ))}
           {widths.length > 1 && (
-            <li>Vertical spacing — {hideGutterOnMobile ? 'hidden' : `${mobileGutterPx}px`}</li>
+            <div className="properties-panel__mobile-width-summary-row">
+              <span>Vertical spacing</span>
+              <span>{hideGutterOnMobile ? 'Hidden' : `${mobileGutterPx}px`}</span>
+            </div>
           )}
-        </ul>
+        </div>
       </div>
     );
   }
@@ -260,6 +270,43 @@ export function ColumnGutterEditor({ settings, viewport, onChange }: {
   );
 }
 
+// Structural Width Contract correction — background for the parent/
+// central layout structure itself (module.settings.backgroundColor/
+// backgroundImage), distinct from each child column's own independent
+// background (see ColumnEditor's own Background color/image fields
+// above, for a SELECTED column). Covers the central parent structure
+// including its own internal padding — never the left/right Outer
+// Spacer Columns, which are physical siblings handled entirely by
+// Outer Spacer Columns settings, not this control.
+export function LayoutBackgroundEditor({ settings, onChange }: {
+  settings: EmailModuleSettings; onChange: (patch: Partial<EmailModuleSettings>) => void;
+}) {
+  return (
+    <div className="properties-panel__field-group">
+      <span className="properties-panel__field-group-label">Layout Background</span>
+      <ColorControl
+        label="Background color"
+        value={settings.backgroundColor ?? ''}
+        onChange={(backgroundColor) => onChange({ backgroundColor })}
+        allowNone
+        noneLabel="No background"
+      />
+      <label className="properties-panel__field">
+        <span>Background image URL</span>
+        <input
+          type="text"
+          value={settings.backgroundImage ?? ''}
+          onChange={(event) => onChange({ backgroundImage: event.target.value || undefined })}
+          placeholder="https://example.com/background.jpg"
+        />
+      </label>
+      <p className="properties-panel__hint">
+        Applies to the full layout background, including outer spacer areas, internal padding and column gutters. Each column&apos;s own background (if set) overlays this for that column only.
+      </p>
+    </div>
+  );
+}
+
 // --- Settings tab addition: mobile stacking/order -------------------------
 
 export function MobileStackingSettings({ module, onChange }: {
@@ -279,8 +326,6 @@ export function MobileStackingSettings({ module, onChange }: {
     onChange({ mobileColumnOrder: next });
   }
 
-  const gap = module.settings.mobileColumnGap?.value ?? 0;
-
   return (
     <div className="properties-panel__field-group">
       <label className="properties-panel__checkbox-field">
@@ -298,19 +343,11 @@ export function MobileStackingSettings({ module, onChange }: {
       )}
       {stack && (
         <>
-          <label className="properties-panel__field">
-            <span>Mobile column gap (px)</span>
-            <input
-              type="number"
-              min={0}
-              max={COLUMN_GUTTER_PX_BOUNDS.pxMax}
-              value={gap}
-              onChange={(event) => {
-                const value = Math.max(0, Math.round(Number(event.target.value) || 0));
-                onChange({ mobileColumnGap: { value, unit: 'px' } });
-              }}
-            />
-          </label>
+          {/* Mobile gutter/stacking correction — the vertical spacing
+              between stacked columns is now configured in ONE place, the
+              Mobile (px) field under Column Gutter/Column Spacing in the
+              Style tab (mobileColumnGutterPx + Hide gutter on mobile),
+              never a second "Mobile column gap" control here. */}
           <div className="properties-panel__mobile-order">
             <span className="properties-panel__field-group-label">Mobile order (preview only)</span>
             <p className="properties-panel__hint">
@@ -442,6 +479,20 @@ export function ColumnEditor({
           allowNone
           noneLabel="No background"
         />
+        {/* E5 — generic per-column background image, shared by every
+            registered layout/ratio through the same ColumnContainerSettings
+            shape every other column control here already uses. Background
+            color above always stays the fallback rendered behind it. */}
+        <label className="properties-panel__field">
+          <span>Background image URL</span>
+          <input
+            type="text"
+            value={column.settings.backgroundImage ?? ''}
+            onChange={(event) => onChangeColumnSettings({ backgroundImage: event.target.value || undefined })}
+            placeholder="https://example.com/background.jpg"
+          />
+        </label>
+        <p className="properties-panel__hint">Optional. Renders behind this column's content, with the background color above as the fallback if it fails to load.</p>
         <label className="properties-panel__field">
           <span>Vertical alignment</span>
           <select

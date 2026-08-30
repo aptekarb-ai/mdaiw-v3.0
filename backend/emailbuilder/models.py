@@ -89,6 +89,18 @@ class EmailDocument(models.Model):
     reset_css_enabled = models.BooleanField(default=True)
     custom_css_enabled = models.BooleanField(default=False)
     custom_css = models.TextField(blank=True, default='')
+    # Module-4 E4 — document-level default for the existing per-module
+    # `settings.outlookVml` opt-in (frontend/src/emailbuilder/edm.ts).
+    # Reuses that SAME field name/semantics rather than inventing a second
+    # Outlook setting: the renderer resolves each module's EFFECTIVE
+    # outlookVml as `module.settings.outlookVml ?? this document flag`
+    # (see htmlRenderer.ts's RenderableEmail.outlookVml), so an explicit
+    # per-module value (set today only via the AI Engineer's
+    # APPLY_VML_PATTERN/APPLY_OUTLOOK_WRAPPER actions) still wins, and every
+    # other module falls back to this one document-wide switch. Off by
+    # default — same "absent = today's exact existing behavior" convention
+    # as every other boolean here.
+    outlook_vml_enabled = models.BooleanField(default=False)
     platform = models.CharField(
         max_length=20, choices=EmailPlatform.choices, default=EmailPlatform.GENERIC,
     )

@@ -73,6 +73,7 @@ function baseDocument(overrides: Partial<EmailDocument> = {}): EmailDocument {
     reset_css_enabled: true,
     custom_css_enabled: false,
     custom_css: '',
+    outlook_vml_enabled: false,
     created_at: '2026-08-20T10:00:00Z',
     updated_at: '2026-08-20T10:00:00Z',
     ...overrides,
@@ -106,6 +107,11 @@ function renderPageAt(path: string) {
 
 afterEach(() => {
   vi.clearAllMocks();
+  // E10 — most documents below default to id 1; without clearing storage
+  // between tests, one test's persisted AI Engineer conversation would
+  // leak into the next test's initial render (real documents never
+  // collide on id, but these tests all share one).
+  window.localStorage.clear();
 });
 
 describe('EmailBuilderWorkspacePage', () => {
@@ -454,6 +460,199 @@ describe('EmailBuilderWorkspacePage', () => {
     });
   });
 
+  describe('Component Toolbar Reordering', () => {
+    it('Move Up is disabled on the first module, Move Down disabled on the last, both enabled in the middle', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+      await openCategory(user, 'Content');
+      await user.click(screen.getByRole('button', { name: 'Add Divider' }));
+      // Order: Text (0), Button (1), Divider (2).
+
+      await user.click(screen.getByText('Add your heading or paragraph text here.'));
+      expect(screen.getByRole('button', { name: 'Move component up' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Move component down' })).not.toBeDisabled();
+
+      await user.click(screen.getByText('Shop Now'));
+      expect(screen.getByRole('button', { name: 'Move component up' })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Move component down' })).not.toBeDisabled();
+
+      const dividerModule = document.querySelectorAll('.email-canvas__module')[2];
+      await user.click(dividerModule);
+      expect(screen.getByRole('button', { name: 'Move component up' })).not.toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Move component down' })).toBeDisabled();
+    });
+
+    it('Move Down swaps the selected module with its next sibling — one Undo step reverts it exactly', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+
+      const rowsBefore = document.querySelectorAll('.email-canvas__module');
+      expect(rowsBefore[0].textContent).toContain('Add your heading or paragraph text here.');
+      expect(rowsBefore[1].textContent).toContain('Shop Now');
+
+      await user.click(screen.getByText('Add your heading or paragraph text here.'));
+      await user.click(screen.getByRole('button', { name: 'Move component down' }));
+
+      const rowsAfter = document.querySelectorAll('.email-canvas__module');
+      expect(rowsAfter[0].textContent).toContain('Shop Now');
+      expect(rowsAfter[1].textContent).toContain('Add your heading or paragraph text here.');
+      // Selection/focus stays on the MOVED module (Text), now in position 1.
+      expect(screen.getByLabelText('Text')).toBeInTheDocument();
+      expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: 'Undo' }));
+      const rowsReverted = document.querySelectorAll('.email-canvas__module');
+      expect(rowsReverted[0].textContent).toContain('Add your heading or paragraph text here.');
+      expect(rowsReverted[1].textContent).toContain('Shop Now');
+    });
+
+    it('Move Up swaps the selected module with its previous sibling', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+
+      await user.click(screen.getByText('Shop Now'));
+      await user.click(screen.getByRole('button', { name: 'Move component up' }));
+
+      const rows = document.querySelectorAll('.email-canvas__module');
+      expect(rows[0].textContent).toContain('Shop Now');
+      expect(rows[1].textContent).toContain('Add your heading or paragraph text here.');
+    });
+
+    it('preserves module identity — props/content/settings are unchanged by reordering, only position moves', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+      const textField = screen.getByLabelText('Text');
+      await user.clear(textField);
+      await user.type(textField, 'Distinct content');
+
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+
+      await user.click(screen.getByText('Distinct content'));
+      await user.click(screen.getByRole('button', { name: 'Move component down' }));
+
+      expect(screen.getByText('Distinct content', { selector: 'p' })).toBeInTheDocument();
+    });
+
+    it('reordering does not create a duplicate document or a second mutation path — save persists the exact new order', async () => {
+      const document1 = baseDocument();
+      vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+      vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+      const user = userEvent.setup();
+      renderPage();
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+
+      await user.click(screen.getByText('Add your heading or paragraph text here.'));
+      await user.click(screen.getByRole('button', { name: 'Move component down' }));
+
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+        content: expect.objectContaining({
+          modules: [
+            expect.objectContaining({ props: expect.objectContaining({ text: 'Shop Now' }) }),
+            expect.objectContaining({ props: expect.objectContaining({ text: 'Add your heading or paragraph text here.' }) }),
+          ],
+        }),
+      })));
+    });
+
+    it('nested module: Move Up/Down are both disabled for the only module in a column', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+      await user.click(await screen.findByRole('button', { name: 'Column 1, empty' }));
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+      expect(screen.getByRole('button', { name: 'Move component up' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Move component down' })).toBeDisabled();
+    });
+
+    it('nested module: Move Down swaps two modules within the SAME column only, never crossing into another column', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+      await user.click(await screen.findByRole('button', { name: 'Column 1, empty' }));
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+      // Re-activate column 1 (now non-empty) to insert a second nested module into it.
+      await user.click(screen.getByRole('button', { name: 'Column 1, 1 module' }));
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+
+      // Put a module in column 2 too, to prove it stays untouched.
+      await user.click(screen.getByRole('button', { name: 'Column 2, empty' }));
+      await openCategory(user, 'Content');
+      await user.click(screen.getByRole('button', { name: 'Add Text' }));
+
+      const nestedRowsBefore = document.querySelectorAll('.layout-canvas__nested-module');
+      expect(nestedRowsBefore[0].textContent).toContain('Add your heading or paragraph text here.');
+      expect(nestedRowsBefore[1].textContent).toContain('Shop Now');
+
+      // Both columns default to the same text-module placeholder copy, so
+      // select column 1's text module by POSITION (its row), not by text.
+      await user.click(nestedRowsBefore[0]);
+      await user.click(screen.getByRole('button', { name: 'Move component down' }));
+
+      const nestedRowsAfter = document.querySelectorAll('.layout-canvas__nested-module');
+      expect(nestedRowsAfter[0].textContent).toContain('Shop Now');
+      expect(nestedRowsAfter[1].textContent).toContain('Add your heading or paragraph text here.');
+      // Column 2's own module is unaffected by column 1's internal reorder —
+      // its own text module is still present, scoped to column 2's own
+      // container (not a global text search, since column 1 now also
+      // contains this same default placeholder copy after the swap).
+      const columns = document.querySelectorAll('.layout-canvas__column');
+      expect(within(columns[1] as HTMLElement).getByText('Add your heading or paragraph text here.', { selector: 'p' }))
+        .toBeInTheDocument();
+      expect(within(columns[0] as HTMLElement).getAllByText(/Shop Now|Add your heading/)).toHaveLength(2);
+    });
+
+    it('nested module: one Undo step reverts a nested Move Up/Down exactly', async () => {
+      vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+      const user = userEvent.setup();
+      renderPage();
+      await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+      await user.click(await screen.findByRole('button', { name: 'Column 1, empty' }));
+      await openCategory(user, 'Content');
+      await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+      await user.click(screen.getByRole('button', { name: 'Column 1, 1 module' }));
+      await openCategory(user, 'CTA');
+      await user.click(screen.getByRole('button', { name: 'Add Button' }));
+
+      await user.click(screen.getByText('Add your heading or paragraph text here.'));
+      await user.click(screen.getByRole('button', { name: 'Move component down' }));
+      expect(document.querySelectorAll('.layout-canvas__nested-module')[0].textContent).toContain('Shop Now');
+
+      await user.click(screen.getByRole('button', { name: 'Undo' }));
+      expect(document.querySelectorAll('.layout-canvas__nested-module')[0].textContent)
+        .toContain('Add your heading or paragraph text here.');
+    });
+  });
+
   it('switches between desktop and mobile canvas widths', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
     const user = userEvent.setup();
@@ -501,6 +700,7 @@ describe('EmailBuilderWorkspacePage', () => {
       content: expect.objectContaining({ version: 1 }),
       email_title: '', email_subject: '', favicon_url: '',
       reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      outlook_vml_enabled: false,
     }));
     expect(await screen.findByText('Saved')).toBeInTheDocument();
   });
@@ -1312,9 +1512,11 @@ describe('EmailBuilderWorkspacePage — Independently Configurable Desktop/Mobil
 
     await user.click(screen.getByRole('button', { name: 'Mobile' }));
 
-    expect(screen.getByText('Column 1 — 100% stacked')).toBeInTheDocument();
-    expect(screen.getByText('Column 2 — 100% stacked')).toBeInTheDocument();
-    expect(screen.getByText('Vertical spacing — hidden')).toBeInTheDocument();
+    expect(screen.getByText('Column 1')).toBeInTheDocument();
+    expect(screen.getByText('Column 2')).toBeInTheDocument();
+    expect(screen.getAllByText('100% stacked')).toHaveLength(2);
+    expect(screen.getByText('Vertical spacing')).toBeInTheDocument();
+    expect(screen.getByText('Hidden')).toBeInTheDocument();
     expect(screen.queryByText(/Column \d+ \(\d+px\)/)).not.toBeInTheDocument();
     expect(screen.queryByRole('spinbutton', { name: /^Column 1/ })).not.toBeInTheDocument();
 
@@ -1350,6 +1552,167 @@ describe('EmailBuilderWorkspacePage — Independently Configurable Desktop/Mobil
     for (const px of columnPxTexts) {
       expect(codeHtml).toContain(`width="${px}"`);
     }
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Mobile Column Summary UI, Mobile stacking correction, and generic per-column background (E5)', () => {
+  it('Part A: the Mobile Column Summary is a compact status list (not a ul/li bullet list) that dynamically reflects the column count', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 3 Columns' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    // Never a default browser bullet list.
+    expect(document.querySelector('.properties-panel__mobile-width-summary')?.tagName).toBe('DIV');
+    expect(document.querySelector('.properties-panel__mobile-width-summary ul')).toBeNull();
+    expect(document.querySelector('.properties-panel__mobile-width-summary li')).toBeNull();
+
+    // Dynamically reflects the actual column count (3, not a fixed 2).
+    expect(screen.getByText('Column 1')).toBeInTheDocument();
+    expect(screen.getByText('Column 2')).toBeInTheDocument();
+    expect(screen.getByText('Column 3')).toBeInTheDocument();
+    expect(screen.getAllByText('100% stacked')).toHaveLength(3);
+    expect(screen.getByText('Vertical spacing')).toBeInTheDocument();
+    expect(screen.getByText('Hidden')).toBeInTheDocument(); // hideGutterOnMobile defaults true
+
+    // Uncheck Hide and set a Mobile gutter value — the summary reflects
+    // the real px value instead of "Hidden".
+    await user.click(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' }));
+    const mobileInput = screen.getByLabelText('Mobile (px)');
+    await user.clear(mobileInput);
+    await user.type(mobileInput, '18');
+    expect(screen.getByText('18px')).toBeInTheDocument();
+    expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
+  });
+
+  it('Part B: the legacy "Mobile column gap" control no longer exists — vertical spacing is configured only via the Mobile gutter', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    expect(screen.queryByText('Mobile column gap (px)')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Mobile column gap (px)')).not.toBeInTheDocument();
+    // "Stack columns on Mobile" (a pre-existing, separate opt-OUT control,
+    // defaulting to checked/stacked) and "Mobile order" reordering remain.
+    expect(screen.getByRole('checkbox', { name: 'Stack columns on Mobile' })).toBeChecked();
+    expect(screen.getByText('Mobile order (preview only)')).toBeInTheDocument();
+  });
+
+  it('Part B: switching Desktop → Mobile → Desktop never overwrites the independent Desktop gutter, and the Mobile gutter drives stacked vertical spacing exactly', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+    const desktopInput = screen.getByLabelText('Desktop (px)');
+    await user.clear(desktopInput);
+    await user.type(desktopInput, '25');
+
+    await user.click(screen.getByRole('button', { name: 'Mobile' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Hide gutter on mobile' }));
+    const mobileInput = screen.getByLabelText('Mobile (px)');
+    await user.clear(mobileInput);
+    await user.type(mobileInput, '15');
+
+    await user.click(screen.getByRole('button', { name: 'Desktop' }));
+    expect(screen.getByLabelText('Desktop (px)')).toHaveValue(25);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    expect(codeHtml).toContain('width="25"'); // Desktop gutter cell, unaffected by the Mobile edit
+    expect(codeHtml).toMatch(/gut0\{display:block !important; width:100% !important; height:15px !important;/);
+  });
+
+  it('Part C (E5): a column\'s Background image URL is editable in the Properties panel, persists, and matches Code exactly', async () => {
+    const document1 = baseDocument({ width: 700 });
+    vi.mocked(client.getEmailDocument).mockResolvedValue(document1);
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(document1);
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 1 Column' }));
+    await user.click(await screen.findByRole('button', { name: 'Column 1, empty' }));
+
+    const bgImageInput = screen.getByLabelText('Background image URL');
+    await user.type(bgImageInput, 'https://cdn.example.com/col-bg.jpg');
+    expect(bgImageInput).toHaveValue('https://cdn.example.com/col-bg.jpg');
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    expect(codeHtml).toContain('background="https://cdn.example.com/col-bg.jpg"');
+    expect(codeHtml).toContain('background-image:url(\'https://cdn.example.com/col-bg.jpg\')');
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(client.updateEmailDocument).toHaveBeenCalledWith('1', expect.objectContaining({
+      content: expect.objectContaining({
+        modules: expect.arrayContaining([
+          expect.objectContaining({
+            columns: expect.arrayContaining([
+              expect.objectContaining({
+                settings: expect.objectContaining({ backgroundImage: 'https://cdn.example.com/col-bg.jpg' }),
+              }),
+            ]),
+          }),
+        ]),
+      }),
+    })));
+  });
+});
+
+describe('EmailBuilderWorkspacePage — Structural Width Contract (layout padding + parent background)', () => {
+  it('the "Internal Padding" control (Settings tab) now actually affects the rendered column widths for a layout module', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Settings' }));
+
+    const paddingInputs = screen.getAllByRole('spinbutton');
+    const leftInput = screen.getByLabelText('Left');
+    const rightInput = screen.getByLabelText('Right');
+    await user.clear(leftInput);
+    await user.type(leftInput, '20');
+    await user.clear(rightInput);
+    await user.type(rightInput, '20');
+    expect(paddingInputs.length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    // C = 700 - 20 - 20 = 660, split 50/50 -> 330 + 330 (was 350 + 350
+    // before Internal Padding had any effect on a layout module).
+    expect(codeHtml).toContain('width="330"');
+    expect(codeHtml).not.toContain('width="350"');
+  });
+
+  it('Layout Background: setting a parent background color and image is editable in the Style tab and appears correctly in Code', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ width: 700 }));
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('Start building your email');
+    await user.click(await screen.findByRole('button', { name: 'Add 2 Columns 50/50' }));
+    await user.click(screen.getByRole('tab', { name: 'Style' }));
+
+    expect(screen.getByText('Layout Background')).toBeInTheDocument();
+    const bgImageInput = screen.getByLabelText('Background image URL');
+    await user.type(bgImageInput, 'https://cdn.example.com/parent-bg.jpg');
+
+    const hexInput = screen.getByLabelText('Background color hex value');
+    await user.type(hexInput, '#002D38');
+    fireEvent.blur(hexInput);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const codeHtml = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    expect(codeHtml).toContain('background-color:#002D38;');
+    expect(codeHtml).toContain("background-image:url('https://cdn.example.com/parent-bg.jpg')");
+    expect(codeHtml).toContain('background="https://cdn.example.com/parent-bg.jpg"');
   });
 });
 
@@ -1777,12 +2140,12 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 —
 });
 
 // Sub-phase 2 CLOSURE, item 1 — supersedes the earlier "independence"
-// design: Document Settings changes now join the SAME unified undo/redo
+// design: Email Settings changes now join the SAME unified undo/redo
 // history as module edits (see useEmailBuilderState.ts's HistoryEntry).
 // Apply is a local commit (no network); the toolbar Save button PATCHes
 // content + document settings together.
 describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 closure — unified undo/redo (item 1)', () => {
-  it('applying a Document Settings change enables the builder Undo button (participates in the same history)', async () => {
+  it('applying a Email Settings change enables the builder Undo button (participates in the same history)', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
     renderPage();
@@ -1790,8 +2153,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
 
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Email Reset CSS' }));
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -1808,8 +2171,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    let dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    let dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     const cssEditor = within(dialog).getByLabelText('Custom CSS');
     await user.clear(cssEditor);
     await user.type(cssEditor, cssB.replace(/[{}]/g, (brace) => (brace === '{' ? '{{' : brace)));
@@ -1832,8 +2195,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
 
     // The dialog itself also reflects the live (post-redo) value if reopened.
     await user.click(screen.getByRole('button', { name: 'Visual' }));
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     expect(within(dialog).getByLabelText('Custom CSS')).toHaveValue(cssB);
   });
 
@@ -1843,8 +2206,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Email Reset CSS' }));
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -1868,8 +2231,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -1896,8 +2259,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     await openCategory(user, 'Content');
     await user.click(await screen.findByRole('button', { name: 'Add Text' }));
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
     await user.type(within(dialog).getByLabelText('Custom CSS'), '.a{{color:red}');
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
@@ -2051,14 +2414,14 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     expect(screen.getByText('Email Reset CSS is disabled')).toBeInTheDocument();
   });
 
-  it('Cancel on the Document Settings dialog creates no history entry', async () => {
+  it('Cancel on the Email Settings dialog creates no history entry', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Email Reset CSS' }));
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
@@ -2072,15 +2435,15 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
     await user.type(within(dialog).getByLabelText('Custom CSS'), '<script>alert(1)</script>');
 
     expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
 
-    expect(screen.getByRole('dialog', { name: 'Document Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Email Settings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
   });
 
@@ -2094,8 +2457,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards Sub-phase 2 clo
     await openCategory(user, 'Content');
     await user.click(await screen.findByRole('button', { name: 'Add Text' }));
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' }));
     await user.type(within(dialog).getByLabelText('Custom CSS'), '.a{{color:red}');
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
@@ -2191,8 +2554,8 @@ describe('EmailBuilderWorkspacePage — Feature 10 Platform Environment', () => 
   });
 });
 
-describe('EmailBuilderWorkspacePage — Email Document Standards (Document Settings)', () => {
-  it('clicking the toolbar Document Settings chip opens the dialog pre-filled from the loaded document', async () => {
+describe('EmailBuilderWorkspacePage — Email Document Standards (Email Settings)', () => {
+  it('clicking the toolbar Email Settings chip opens the dialog pre-filled from the loaded document', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({
       email_title: 'Existing Title', email_subject: 'Existing Subject', favicon_url: 'https://cdn.example.com/fav.png',
     }));
@@ -2200,8 +2563,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards (Document Setti
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    expect(await screen.findByRole('dialog', { name: 'Document Settings' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    expect(await screen.findByRole('dialog', { name: 'Email Settings' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('Existing Title')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Existing Subject')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://cdn.example.com/fav.png')).toBeInTheDocument();
@@ -2218,8 +2581,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards (Document Setti
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.type(screen.getByLabelText('Email Title'), 'August Sale');
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
 
@@ -2232,18 +2595,19 @@ describe('EmailBuilderWorkspacePage — Email Document Standards (Document Setti
       content: expect.objectContaining({ version: 1 }),
       email_title: 'August Sale', email_subject: '', favicon_url: '',
       reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      outlook_vml_enabled: false,
     }));
   });
 
-  it('a failed toolbar Save (after applying Document Settings) shows the standard save-error banner and keeps the edit local/undoable', async () => {
+  it('a failed toolbar Save (after applying Email Settings) shows the standard save-error banner and keeps the edit local/undoable', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     vi.mocked(client.updateEmailDocument).mockRejectedValue({ message: 'Server error' });
     const user = userEvent.setup();
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.type(screen.getByLabelText('Email Title'), 'August Sale');
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -2261,8 +2625,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards (Document Setti
     renderPage();
     await screen.findByText('August Newsletter');
 
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    const dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -2289,10 +2653,10 @@ describe('EmailBuilderWorkspacePage — Email Document Standards closure item 7 
     renderPage();
     await screen.findByText('August Newsletter');
 
-    // Document Settings — Custom CSS is already enabled (per the loaded
+    // Email Settings — Custom CSS is already enabled (per the loaded
     // document); Monaco shows the full, untruncated value.
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    let dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    let dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     expect(within(dialog).getByRole('checkbox', { name: 'Enable Custom CSS' })).toBeChecked();
     expect(within(dialog).getByLabelText('Custom CSS')).toHaveValue(largeCss);
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
@@ -2319,8 +2683,8 @@ describe('EmailBuilderWorkspacePage — Email Document Standards closure item 7 
     // Editing a small part and Apply -> Save persists the full updated value.
     vi.mocked(client.updateEmailDocument).mockResolvedValue(baseDocument({ custom_css_enabled: true, custom_css: largeCss }));
     await user.click(screen.getByRole('button', { name: 'Visual' }));
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
-    dialog = await screen.findByRole('dialog', { name: 'Document Settings' });
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
+    dialog = await screen.findByRole('dialog', { name: 'Email Settings' });
     const editor = within(dialog).getByLabelText('Custom CSS');
     await user.click(editor);
     await user.type(editor, '.extra {{ color: red; }\n');
@@ -2473,7 +2837,7 @@ describe('EmailBuilderWorkspacePage — Feature 12 Validation Center', () => {
     }
   });
 
-  it('Revalidate and Fix All Safe Issues controls are present and keyboard-reachable', async () => {
+  it('Revalidate and Fix Issues controls are present and keyboard-reachable', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();
     renderPage();
@@ -2484,8 +2848,7 @@ describe('EmailBuilderWorkspacePage — Feature 12 Validation Center', () => {
     await screen.findByText('Email Health Score');
 
     expect(screen.getByRole('button', { name: 'Revalidate' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Fix All Safe Issues/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /AI-Assisted Fix/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Fix Issues/ })).toBeInTheDocument();
   });
 
   it('switching back to Visual from Validate restores the module panel/canvas/properties panel', async () => {

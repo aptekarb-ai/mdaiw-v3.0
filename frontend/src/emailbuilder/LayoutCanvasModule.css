@@ -140,6 +140,19 @@
   background-color: var(--color-white);
 }
 
+.layout-canvas__move-icon--up {
+  transform: rotate(180deg);
+}
+
+.layout-canvas__nested-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.layout-canvas__nested-toolbar button:disabled:hover {
+  background: transparent;
+}
+
 .layout-canvas__drop-indicator {
   height: 3px;
   margin: 2px 0;

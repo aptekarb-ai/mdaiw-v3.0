@@ -4,9 +4,11 @@ import type {
   EmailColumn, EmailModule, EmailModuleSettings, EmailModuleType, HorizontalAlign, ModuleCategory,
   ModuleSpacingValues, OuterSpacing, OuterSpacingSides,
 } from './edm';
-import { DEFAULT_SPACING, resolveOuterSpacing, ZERO_SPACING } from './edm';
+import { DEFAULT_SPACING, resolveOuterSpacing, resolveSpacing, ZERO_SPACING } from './edm';
 import type { DimensionValue, PixelBounds } from './dimensions';
 import { px, widthCssValue } from './dimensions';
+import { escapeAttribute, sanitizeUrl } from './sanitize';
+import { estimateColumnVmlContentAllowancePx, renderVmlBackground } from './vmlBackground';
 
 // --- Builder viewport ----------------------------------------------------
 // The Desktop/Mobile switch in the builder toolbar. Threaded through the
@@ -387,18 +389,89 @@ export function narrowWidthByOuterSpacing(widthPx: number, outerSpacing: OuterSp
   return Math.max(0, Math.round(reduced));
 }
 
-// Column Width Display + Responsive Gutter UI Correction — the single
-// function the Properties panel calls to learn a top-level layout
-// module's real available pixel width (document width, narrowed by that
-// module's own Desktop outer spacing) — the SAME value
+// Column Width Display + Responsive Gutter UI Correction, extended by the
+// Structural Width Contract correction — the single function the
+// Properties panel calls to learn a top-level layout module's real
+// available pixel width for COLUMN/GUTTER math (the "C" content-region
+// value in the width contract: P = document width narrowed by this
+// module's own Outer Spacer Columns, exactly what
 // renderModuleWithOuterStructure computes right before calling
-// definition.renderEmailHtml. A layout module is always top-level in
-// this architecture (a layout can never nest inside another layout's
-// column — see layoutModel.ts's isLayoutModuleType/one-level-nesting
-// guarantee), so "immediate parent width" for a layout is always
-// documentWidthPx narrowed this same way, never a deeper recursive case.
+// definition.renderEmailHtml; C = P minus this SAME module's own
+// Desktop Internal Padding left/right). layoutCatalog.tsx's renderEmailHtml
+// performs the identical P -> C step itself (it receives P as its
+// `availableWidthPx` argument, then subtracts its own padding before
+// calling resolveColumnPixelWidths) — this function exists so the
+// Properties panel arrives at the exact same C without a second,
+// independent calculation, never diverging from what the renderer
+// actually produces. A layout module is always top-level in this
+// architecture (a layout can never nest inside another layout's column —
+// see layoutModel.ts's isLayoutModuleType/one-level-nesting guarantee),
+// so "immediate parent width" for a layout is always documentWidthPx
+// narrowed this same way, never a deeper recursive case.
 export function computeLayoutAvailableWidthPx(module: EmailModule, documentWidthPx: number): number {
-  return narrowWidthByOuterSpacing(documentWidthPx, resolveOuterSpacing(module.settings, 'desktop'));
+  const parentWidthPx = narrowWidthByOuterSpacing(documentWidthPx, resolveOuterSpacing(module.settings, 'desktop'));
+  const layoutSpacing = resolveSpacing(module.settings, 'desktop');
+  return Math.max(0, parentWidthPx - layoutSpacing.paddingLeft - layoutSpacing.paddingRight);
+}
+
+// Structural Width Contract — Layout Background scope correction. The
+// Layout/Parent Background (module.settings.backgroundColor/
+// backgroundImage — currently only exposed in the UI for layout modules,
+// but read generically here so every other module type, which never has
+// these fields set, is completely unaffected) covers the FULL physical
+// module row — left Outer Spacer Column, central structure (padding +
+// columns + gutters), right Outer Spacer Column — never just the central
+// region. This is why the wrap happens HERE, around the ALREADY
+// Outer-Spacer-wrapped `spacedHtml` (wrapWithOuterSpacing's own output),
+// using the FULL `availableWidthPx` (before this module's own outer
+// spacing narrows it) — not inside layoutCatalog.tsx's renderEmailHtml,
+// which only ever sees the narrowed inner width and could never reach
+// the spacer <td>s at all. One outer wrapper owns the paint, per the
+// contract ("do not duplicate the same background independently onto
+// left/right spacer TDs") — the spacer <td>s themselves stay exactly as
+// wrapWithOuterSpacing already emits them (transparent), and simply show
+// this wrapper's background through, the same way a child column's own
+// background (set independently, unaffected by this) overlays it inside
+// that column only. Skipped entirely (byte-identical output) when
+// neither field is set — the overwhelming default case for every module.
+function wrapWithModuleBackground(spacedHtml: string, module: EmailModule, fullWidthPx: number): string {
+  const backgroundColor = module.settings.backgroundColor;
+  const safeBackgroundImageUrl = module.settings.backgroundImage
+    ? escapeAttribute(sanitizeUrl(module.settings.backgroundImage))
+    : '';
+  if (!backgroundColor && !safeBackgroundImageUrl) return spacedHtml;
+
+  const backgroundCss = (
+    (backgroundColor ? `background-color:${backgroundColor};` : '')
+    + (safeBackgroundImageUrl ? `background-image:url('${safeBackgroundImageUrl}'); background-size:cover; background-position:center;` : '')
+  );
+  const backgroundAttr = safeBackgroundImageUrl ? ` background="${safeBackgroundImageUrl}"` : '';
+  const bgcolorAttr = backgroundColor ? ` bgcolor="${backgroundColor}"` : '';
+
+  let inner = spacedHtml;
+  // Classic Outlook VML fallback for the FULL parent/layout background —
+  // reused via the SAME renderVmlBackground function every other
+  // background-image VML fallback in the app uses (Hero, per-column
+  // backgrounds) — never a second VML engine. Sized to fullWidthPx (the
+  // FULL parent/layout background region, including Outer Spacer
+  // Columns) — never the narrowed central-structure width.
+  if (safeBackgroundImageUrl && module.settings.outlookVml) {
+    inner = renderVmlBackground(
+      {
+        imageSrc: module.settings.backgroundImage!,
+        backgroundColor: backgroundColor ?? '',
+        paddingTop: 0,
+        paddingBottom: 0,
+        contentAllowancePx: estimateColumnVmlContentAllowancePx(module.columns?.length ?? 1),
+      },
+      fullWidthPx,
+      inner,
+    );
+  }
+
+  return moduleTableRow(
+    `<td width="${fullWidthPx}"${bgcolorAttr}${backgroundAttr} style="width:${fullWidthPx}px; ${backgroundCss}">${inner}</td>`,
+  );
 }
 
 export function renderModuleWithOuterStructure(module: EmailModule, availableWidthPx: number): string {
@@ -407,10 +480,11 @@ export function renderModuleWithOuterStructure(module: EmailModule, availableWid
   const resolvedOuterSpacing = resolveOuterSpacing(module.settings, 'desktop');
   const mobileOuterSpacing = resolveOuterSpacing(module.settings, 'mobile');
   const innerWidthPx = narrowWidthByOuterSpacing(availableWidthPx, resolvedOuterSpacing);
-  return wrapWithOuterSpacing(definition.renderEmailHtml(module, innerWidthPx), resolvedOuterSpacing, {
+  const spacedHtml = wrapWithOuterSpacing(definition.renderEmailHtml(module, innerWidthPx), resolvedOuterSpacing, {
     mobileOuterSpacing,
     className: moduleResponsiveClassName(module.id),
   });
+  return wrapWithModuleBackground(spacedHtml, module, availableWidthPx);
 }
 
 // --- Sub-phase 3, items 7/8 — deterministic module HTML comments -------

@@ -34,7 +34,7 @@ function doc(overrides: Partial<EmailDocument> = {}): EmailDocument {
   return {
     id: 42, name: 'Generated', platform: 'generic', width: 700, start_type: 'ai', status: 'draft',
     content: { version: 1, modules: [] }, email_title: '', email_subject: '', favicon_url: '',
-    reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+    reset_css_enabled: true, custom_css_enabled: false, custom_css: '', outlook_vml_enabled: false,
     created_at: '2026-08-20T10:00:00Z', updated_at: '2026-08-20T10:00:00Z',
     ...overrides,
   };

@@ -788,7 +788,15 @@ class NameNormalizedMigrationLogicTests(TransactionTestCase):
         other_users_row = unmigrated(other_user, 'test')
         self.assertIsNone(oldest.name_normalized)  # genuinely unset pre-migration, not faked
 
-        self.executor.migrate([('emailbuilder', '0010_emaildocument_name_normalized_unique')])
+        # Migrate to the graph's ACTUAL leaf nodes, not a hardcoded
+        # '0010...' target — the assertions below query through the
+        # CURRENT (real, apps-registry) EmailDocument model, which has
+        # every field any migration up to and including the latest has
+        # added (e.g. outlook_vml_enabled from 0011). Hardcoding '0010'
+        # here would park the DB one migration short of what the model
+        # class expects, raising "no such column" the moment a later
+        # migration adds a new field — exactly what this fix prevents.
+        self.executor.migrate(self.executor.loader.graph.leaf_nodes())
 
         oldest = EmailDocument.objects.get(pk=oldest.pk)
         middle = EmailDocument.objects.get(pk=middle.pk)
@@ -845,9 +853,12 @@ class NameNormalizedMigrationLogicTests(TransactionTestCase):
             content={'version': 1, 'modules': []},
         )
 
-        # 0008 -> 0009 -> 0010 in one real sequence, exactly the order
-        # `migrate` runs them in production.
-        self.executor.migrate([('emailbuilder', '0010_emaildocument_name_normalized_unique')])
+        # 0008 -> 0009 -> ... -> leaf in one real sequence, exactly the
+        # order `migrate` runs them in production. Migrates to the
+        # graph's ACTUAL leaf nodes (see the earlier test's identical
+        # fix in this same class for why a hardcoded '0010...' target
+        # breaks once a later migration adds a new field).
+        self.executor.migrate(self.executor.loader.graph.leaf_nodes())
 
         docs = list(EmailDocument.objects.filter(user_id=user.pk).order_by('id'))
         self.assertEqual(len(docs), 2)
@@ -890,7 +901,11 @@ class NameNormalizedMigrationLogicTests(TransactionTestCase):
         )
         first_id, second_id = first.pk, second.pk
 
-        self.executor.migrate([('emailbuilder', '0010_emaildocument_name_normalized_unique')])
+        # Migrate to the graph's ACTUAL leaf nodes (see the earlier tests'
+        # identical fix in this same class) — the reversal steps below
+        # only ever touch HISTORICAL model states via project_state(), so
+        # parking further forward than '0010...' here is harmless.
+        self.executor.migrate(self.executor.loader.graph.leaf_nodes())
         self.executor.loader.build_graph()
         forward_names = list(EmailDocument.objects.filter(user_id=user.pk).order_by('id').values_list('name', flat=True))
         self.assertEqual(forward_names, ['dup', 'dup (2)'])  # 0009 already ran; sanity check before reversing
@@ -1025,16 +1040,19 @@ class EmailDocumentDuplicateViaCreateThenPatchTests(TestCase):
         self.assertEqual(EmailDocument.objects.filter(user=self.user).count(), 2)
 
 
-def _column(column_id='col-a', modules=None, background='', valign='top'):
+def _column(column_id='col-a', modules=None, background='', valign='top', background_image=None):
+    settings = {
+        'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
+        'mobile': {},
+        'backgroundColor': background,
+        'verticalAlign': valign,
+    }
+    if background_image is not None:
+        settings['backgroundImage'] = background_image
     return {
         'id': column_id,
         'modules': modules if modules is not None else [],
-        'settings': {
-            'desktop': {'paddingTop': 0, 'paddingRight': 0, 'paddingBottom': 0, 'paddingLeft': 0},
-            'mobile': {},
-            'backgroundColor': background,
-            'verticalAlign': valign,
-        },
+        'settings': settings,
     }
 
 
@@ -1194,6 +1212,24 @@ class LayoutBuilderNestedTests(TestCase):
         layout = _layout_module(columns=[_column('col-a', valign='center'), _column('col-b')])
         response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
         self.assertEqual(response.status_code, 400)
+
+    # E5 — generic per-column background image.
+    def test_column_background_image_valid_string_accepted(self):
+        layout = _layout_module(columns=[
+            _column('col-a', background_image='https://cdn.example.com/col-bg.jpg'), _column('col-b'),
+        ])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 200)
+
+    def test_column_background_image_non_string_rejected(self):
+        layout = _layout_module(columns=[_column('col-a', background_image=42), _column('col-b')])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 400)
+
+    def test_column_background_image_absent_still_accepted_backward_compat(self):
+        layout = _layout_module(columns=[_column('col-a'), _column('col-b')])
+        response = self._patch_json({'content': {'version': 1, 'modules': [layout]}})
+        self.assertEqual(response.status_code, 200)
 
 
 class ModuleElementEditorValidationTests(TestCase):
@@ -3465,6 +3501,149 @@ class EmailAICommandViewTests(TestCase):
         self.assertEqual(result.provider, 'deterministic')
         self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
 
+    # ------------------------------------------------------------------
+    # Module-4 E9/E10 — bounded editor context + conversation history.
+    # ------------------------------------------------------------------
+
+    def test_accepts_bounded_e9_e10_context_fields(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'add a button',
+            'editor_mode': 'validate',
+            'selected_column': {'layout_module_type': 'layout-2col-50-50', 'column_index': 0},
+            'selected_validation_issue': {
+                'id': 'outlook-classic:missing-vml', 'title': 'Missing VML fallback',
+                'detail': 'This background image has no Outlook VML fallback.',
+                'severity': 'warning', 'category': 'outlook',
+            },
+            'conversation_history': [
+                {'role': 'user', 'content': 'Make the button blue.'},
+                {'role': 'assistant', 'content': 'I updated the button color to blue.'},
+            ],
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['success'])
+
+    def test_invalid_editor_mode_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post({'message': 'add a button', 'editor_mode': 'not-a-real-tab'})
+        self.assertEqual(response.status_code, 400)
+
+    def test_conversation_history_over_cap_rejected(self):
+        self.client.force_login(self.user)
+        oversized_history = [{'role': 'user', 'content': f'turn {i}'} for i in range(9)]
+        response = self._post({'message': 'add a button', 'conversation_history': oversized_history})
+        self.assertEqual(response.status_code, 400)
+
+    def test_conversation_history_malformed_turn_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'add a button',
+            'conversation_history': [{'role': 'user'}],  # missing required 'content'
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_conversation_history_invalid_role_rejected(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'add a button',
+            'conversation_history': [{'role': 'system', 'content': 'not a real role'}],
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_deterministic_provider_still_works_with_e9_e10_context_present(self):
+        """The free, always-available deterministic router must never
+        break just because E9/E10 context fields are present -- it simply
+        ignores what it doesn't use."""
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'add a button',
+            'editor_mode': 'code',
+            'conversation_history': [{'role': 'user', 'content': 'hello'}],
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['provider'], 'deterministic')
+        self.assertEqual(body['action']['type'], 'INSERT_MODULE')
+
+
+class BuildSafeContextTests(TestCase):
+    """Module-4 E9/E10 -- direct unit tests of
+    ai_command_openai._build_safe_context's whitelisting/bounding/
+    malformed-data-safety, independent of the view's own request-boundary
+    validation (defense in depth: this function must be safe even if
+    called with a raw dict that bypassed the serializer)."""
+
+    def test_whitelists_valid_editor_mode(self):
+        safe, _ = ai_command_openai_module._build_safe_context({'editor_mode': 'validate'})
+        self.assertEqual(safe['editor_mode'], 'validate')
+
+    def test_rejects_unknown_editor_mode(self):
+        safe, _ = ai_command_openai_module._build_safe_context({'editor_mode': 'not-a-real-tab'})
+        self.assertIsNone(safe['editor_mode'])
+
+    def test_rejects_unknown_column_layout_type(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'selected_column': {'layout_module_type': 'not-a-real-type', 'column_index': 0},
+        })
+        self.assertIsNone(safe['selected_column'])
+
+    def test_accepts_valid_selected_column(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'selected_column': {'layout_module_type': 'layout-2col-50-50', 'column_index': 1},
+        })
+        self.assertEqual(safe['selected_column'], {'layout_module_type': 'layout-2col-50-50', 'column_index': 1})
+
+    def test_malformed_validation_issue_context_degrades_to_none(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'selected_validation_issue': {'id': 'x'},  # missing title/detail
+        })
+        self.assertIsNone(safe['selected_validation_issue'])
+
+    def test_valid_validation_issue_context_passes_through_whitelisted_fields_only(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'selected_validation_issue': {
+                'id': 'outlook-classic:missing-vml', 'title': 'Missing VML fallback',
+                'detail': 'No VML fallback configured.', 'severity': 'warning', 'category': 'outlook',
+                'internal_secret_field': 'should never appear',
+            },
+        })
+        self.assertEqual(safe['selected_validation_issue']['id'], 'outlook-classic:missing-vml')
+        self.assertNotIn('internal_secret_field', safe['selected_validation_issue'])
+
+    def test_history_is_capped_even_if_caller_bypasses_the_serializer(self):
+        oversized = [{'role': 'user', 'content': f'turn {i}'} for i in range(20)]
+        _, history = ai_command_openai_module._build_safe_context({'conversation_history': oversized})
+        self.assertLessEqual(len(history), 8)
+        # Keeps the MOST RECENT turns, not the oldest.
+        self.assertEqual(history[-1]['content'], 'turn 19')
+
+    def test_history_ignores_malformed_entries(self):
+        _, history = ai_command_openai_module._build_safe_context({
+            'conversation_history': [
+                {'role': 'user', 'content': 'valid turn'},
+                {'role': 'not-a-real-role', 'content': 'bad role'},
+                {'role': 'assistant'},  # missing content
+                'not even a dict',
+            ],
+        })
+        self.assertEqual(history, [{'role': 'user', 'content': 'valid turn'}])
+
+    def test_forged_unapproved_context_keys_never_leak_into_safe_context(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'editor_mode': 'visual',
+            'secret_token': 'sk-should-never-leak',
+            'other_users_document_id': 999999,
+        })
+        self.assertNotIn('secret_token', safe)
+        self.assertNotIn('other_users_document_id', safe)
+
+    def test_history_content_is_length_capped(self):
+        _, history = ai_command_openai_module._build_safe_context({
+            'conversation_history': [{'role': 'user', 'content': 'x' * 5000}],
+        })
+        self.assertLessEqual(len(history[0]['content']), 1000)
+
 
 class OpenAIEmailCommandProviderTests(TestCase):
     """Unit-tests the real request/response mapping logic with an injected
@@ -4058,6 +4237,64 @@ class EmailDocumentHeadSettingsTests(TestCase):
 
     def test_anonymous_cannot_patch_head_settings(self):
         response = self._patch_json({'email_title': 'Hijacked'})
+        self.assertEqual(response.status_code, 403)
+
+
+# ============================================================================
+# Module-4 E4 — Outlook/VML document-level toggle
+# ============================================================================
+
+class EmailDocumentOutlookVmlSettingTests(TestCase):
+    """`outlook_vml_enabled` — document-level default for the existing
+    per-module `settings.outlookVml` opt-in (see models.py's field
+    docstring). Persistence-only: the renderer's fallback-precedence logic
+    lives in the frontend (htmlRenderer.ts) and is covered there."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.user = User.objects.create_user(username='vml.owner', email='vml.owner@example.com', password='StrongPass123')
+        self.other_user = User.objects.create_user(username='vml.intruder', email='vml.intruder@example.com', password='StrongPass123')
+        self.document = EmailDocument.objects.create(user=self.user, name='VML Newsletter', platform='generic', width=700)
+        self.url = f'/api/v1/email-builder/emails/{self.document.id}/'
+
+    def _patch_json(self, data):
+        return self.client.patch(self.url, data=json.dumps(data), content_type='application/json')
+
+    def test_outlook_vml_disabled_by_default(self):
+        self.assertFalse(self.document.outlook_vml_enabled)
+
+    def test_outlook_vml_can_be_enabled_and_persists(self):
+        self.client.force_login(self.user)
+        response = self._patch_json({'outlook_vml_enabled': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['outlook_vml_enabled'])
+        self.document.refresh_from_db()
+        self.assertTrue(self.document.outlook_vml_enabled)
+
+    def test_outlook_vml_can_be_disabled_again(self):
+        self.client.force_login(self.user)
+        self._patch_json({'outlook_vml_enabled': True})
+        response = self._patch_json({'outlook_vml_enabled': False})
+        self.assertEqual(response.status_code, 200)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.outlook_vml_enabled)
+
+    def test_reload_returns_the_persisted_value(self):
+        self.client.force_login(self.user)
+        self._patch_json({'outlook_vml_enabled': True})
+        reload_response = self.client.get(self.url)
+        self.assertEqual(reload_response.status_code, 200)
+        self.assertTrue(reload_response.json()['outlook_vml_enabled'])
+
+    def test_other_user_cannot_patch_outlook_vml_setting(self):
+        self.client.force_login(self.other_user)
+        response = self._patch_json({'outlook_vml_enabled': True})
+        self.assertEqual(response.status_code, 404)
+        self.document.refresh_from_db()
+        self.assertFalse(self.document.outlook_vml_enabled)
+
+    def test_anonymous_cannot_patch_outlook_vml_setting(self):
+        response = self._patch_json({'outlook_vml_enabled': True})
         self.assertEqual(response.status_code, 403)
 
 

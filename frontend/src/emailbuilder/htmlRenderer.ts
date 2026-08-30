@@ -1,4 +1,4 @@
-import type { EmailDocumentContent } from './edm';
+import type { EmailColumn, EmailDocumentContent, EmailModule } from './edm';
 import {
   renderModuleWithOuterStructure, resolveModuleDefinition, resolveNestedModuleParentPlaceholder,
   wrapModuleComment,
@@ -22,6 +22,41 @@ export interface RenderableEmail {
   resetCssEnabled?: boolean;
   customCssEnabled?: boolean;
   customCss?: string;
+  // Module-4 E4 — document-level DEFAULT for the per-module
+  // settings.outlookVml opt-in. Same zero-behavior-change-when-omitted
+  // convention as every field above: omitted/false reproduces today's
+  // exact existing behavior (a module renders VML only if IT explicitly
+  // set outlookVml). Resolution happens once, here, via
+  // resolveOutlookVmlDefaults below — never inside any of the 11+ catalog
+  // files that already read `settings.outlookVml`, so this stays a single,
+  // additive change instead of threading a new parameter through every
+  // module definition's renderEmailHtml.
+  outlookVml?: boolean;
+}
+
+// A module's OWN explicit settings.outlookVml (set today only via the AI
+// Engineer's APPLY_VML_PATTERN/APPLY_OUTLOOK_WRAPPER actions) always wins;
+// otherwise it falls back to the document-level default. Recurses one
+// level into layout columns — the same nesting depth every other
+// module-tree walk in this app assumes (see emailValidation.ts's
+// flattenModules). Returns new module objects (never mutates the real,
+// possibly-still-live EDM tree the caller passed in).
+function resolveOutlookVmlDefaults(modules: EmailModule[], documentDefault: boolean): EmailModule[] {
+  if (!documentDefault) return modules;
+  const resolveOne = (module: EmailModule): EmailModule => {
+    const resolved: EmailModule = module.settings.outlookVml === undefined
+      ? { ...module, settings: { ...module.settings, outlookVml: true } }
+      : module;
+    if (!resolved.columns) return resolved;
+    return {
+      ...resolved,
+      columns: (resolved.columns as EmailColumn[]).map((column) => ({
+        ...column,
+        modules: column.modules.map(resolveOne),
+      })),
+    };
+  };
+  return modules.map(resolveOne);
 }
 
 // The first email renderer layer: Email Document Model -> email-safe HTML
@@ -38,7 +73,10 @@ export interface RenderableEmail {
 // (here) or nested inside a Layout column (layoutCatalog.tsx uses the
 // exact same function).
 export function renderEmailBody(document: RenderableEmail): string {
-  const modules = [...document.content.modules].sort((a, b) => a.order - b.order);
+  const modules = resolveOutlookVmlDefaults(
+    [...document.content.modules].sort((a, b) => a.order - b.order),
+    document.outlookVml ?? false,
+  );
   // Sub-phase 3, items 7/8 — every top-level module gets a deterministic
   // `MODULE-N: LABEL` comment, N assigned strictly from this sorted
   // render-order position (never from module.type, never persisted —

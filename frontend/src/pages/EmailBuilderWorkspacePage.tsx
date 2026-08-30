@@ -59,6 +59,14 @@ export function EmailBuilderWorkspacePage() {
   // ValidationCenterPanel consumes it once (by id) to scroll/highlight
   // that one finding. Not persisted, not a second validation state.
   const [highlightValidationIssueId, setHighlightValidationIssueId] = useState<string | null>(null);
+  // Cross-feature integration (E7 -> E9/E10) — set only when arriving at
+  // the AI Engineer tab via Validation Center's "Ask AI Engineer" action
+  // on an issue's explanation; AIEngineerPanel consumes it once (sends it
+  // as the first user turn, and — when issueId is present — resolves it
+  // back to the real ValidationIssue for E10 referent tracking) then
+  // reports back via onInitialPromptConsumed so a later tab switch never
+  // re-sends a stale prompt.
+  const [aiEngineerSeed, setAiEngineerSeed] = useState<{ prompt: string; issueId?: string } | null>(null);
   // Module-4 Final Gap Closure, Correction 3 (Feature 03 zoom) — ephemeral
   // editor-viewport state only: never sent to the backend, never stored on
   // EmailDocument/EDM, never persisted to localStorage. Reset to 100 every
@@ -95,6 +103,7 @@ export function EmailBuilderWorkspacePage() {
           reset_css_enabled: loaded.reset_css_enabled,
           custom_css_enabled: loaded.custom_css_enabled,
           custom_css: loaded.custom_css,
+          outlook_vml_enabled: loaded.outlook_vml_enabled,
         });
         setZoomLevel(ZOOM_DEFAULT);
         setLoadStatus('ready');
@@ -369,6 +378,17 @@ export function EmailBuilderWorkspacePage() {
   // unsaved Visual edit is included in the template exactly as shown on
   // screen, same "what you see is what gets written" guarantee Save itself
   // gives for the original document.
+  // Cross-feature integration (E7 -> E9/E10) — "Ask AI Engineer" inside
+  // the Explanation modal switches to the AI Engineer tab and seeds ONE
+  // user turn built from the real issue (title/detail), so the AI
+  // Engineer's own local diagnose/repair intents (aiDocumentIntelligence.ts)
+  // or backend-routed command flow can pick it up exactly like the user
+  // had typed it themselves — never a second, parallel explanation path.
+  const handleAskAiEngineerAboutIssue = useCallback((prompt: string, issueId?: string) => {
+    setAiEngineerSeed({ prompt, issueId });
+    setEditorMode('ai');
+  }, []);
+
   const handleSaveAsTemplate = useCallback(async (templateName: string) => {
     if (!document) throw new Error('No document loaded');
     return saveEmailAsTemplate(
@@ -750,6 +770,7 @@ export function EmailBuilderWorkspacePage() {
             resetCssEnabled={builder.documentSettings.reset_css_enabled}
             customCssEnabled={builder.documentSettings.custom_css_enabled}
             customCss={builder.documentSettings.custom_css}
+            outlookVml={builder.documentSettings.outlook_vml_enabled}
           />
         ) : editorMode === 'preview' ? (
           <PreviewStudioPanel
@@ -760,6 +781,7 @@ export function EmailBuilderWorkspacePage() {
             resetCssEnabled={builder.documentSettings.reset_css_enabled}
             customCssEnabled={builder.documentSettings.custom_css_enabled}
             customCss={builder.documentSettings.custom_css}
+            outlookVml={builder.documentSettings.outlook_vml_enabled}
           />
         ) : editorMode === 'validate' ? (
           <ValidationCenterPanel
@@ -772,6 +794,7 @@ export function EmailBuilderWorkspacePage() {
             resetCssEnabled={builder.documentSettings.reset_css_enabled}
             customCssEnabled={builder.documentSettings.custom_css_enabled}
             customCss={builder.documentSettings.custom_css}
+            outlookVml={builder.documentSettings.outlook_vml_enabled}
             onNavigateToModule={(moduleId) => {
               setEditorMode('visual');
               builder.selectModule(moduleId);
@@ -780,12 +803,16 @@ export function EmailBuilderWorkspacePage() {
             onApplySettingsFix={handleUpdateSettings}
             onApplyDocumentFix={builder.updateDocumentSettings}
             highlightIssueId={highlightValidationIssueId}
+            onAskAiEngineer={handleAskAiEngineerAboutIssue}
           />
         ) : editorMode === 'ai' ? (
           <AIEngineerPanel
+            documentId={document.id}
+            editorMode={editorMode}
             platform={document.platform}
             width={document.width}
             selectedModule={builder.selectedModule}
+            selectedColumn={builder.selectedColumn}
             content={{ version: 1, modules: builder.modules }}
             emailTitle={builder.documentSettings.email_title}
             emailSubject={builder.documentSettings.email_subject}
@@ -793,6 +820,10 @@ export function EmailBuilderWorkspacePage() {
             resetCssEnabled={builder.documentSettings.reset_css_enabled}
             customCssEnabled={builder.documentSettings.custom_css_enabled}
             customCss={builder.documentSettings.custom_css}
+            outlookVml={builder.documentSettings.outlook_vml_enabled}
+            initialPrompt={aiEngineerSeed?.prompt ?? null}
+            initialIssueId={aiEngineerSeed?.issueId}
+            onInitialPromptConsumed={() => setAiEngineerSeed(null)}
             onApplyAction={handleApplyAiAction}
             onApplyDocumentSettingAction={handleApplyDocumentSettingAiAction}
             onApplyRepairAction={handleApplyRepairAction}

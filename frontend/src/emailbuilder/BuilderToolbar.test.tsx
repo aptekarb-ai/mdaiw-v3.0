@@ -96,11 +96,11 @@ describe('BuilderToolbar — Platform Environment entry point (Feature 10)', () 
   });
 });
 
-describe('BuilderToolbar — Document Settings entry point (Email Document Standards)', () => {
-  it('clicking the Document Settings chip calls onOpenDocumentSettingsDialog', async () => {
+describe('BuilderToolbar — Email Settings entry point (Email Document Standards)', () => {
+  it('clicking the Email Settings chip calls onOpenDocumentSettingsDialog', async () => {
     const user = userEvent.setup();
     const { onOpenDocumentSettingsDialog } = renderToolbar();
-    await user.click(screen.getByRole('button', { name: /Document Settings/ }));
+    await user.click(screen.getByRole('button', { name: /Email Settings/ }));
     expect(onOpenDocumentSettingsDialog).toHaveBeenCalledTimes(1);
   });
 });

@@ -18,6 +18,7 @@ interface CodeEditorPanelProps {
   resetCssEnabled?: boolean;
   customCssEnabled?: boolean;
   customCss?: string;
+  outlookVml?: boolean;
 }
 
 type CodeSubView = 'code' | 'rendered';
@@ -39,6 +40,7 @@ function sanitizeFileName(name: string): string {
 // and "undo/redo" (operation 5) without any code-editor-specific history.
 export function CodeEditorPanel({
   documentName, width, content, platform, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+  outlookVml,
 }: CodeEditorPanelProps) {
   const [subView, setSubView] = useState<CodeSubView>('code');
   const [formatted, setFormatted] = useState(true);
@@ -46,8 +48,8 @@ export function CodeEditorPanel({
   const editorRef = useRef<CodeEditorHandle>(null);
 
   const rawHtml = useMemo(
-    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss }),
-    [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss],
+    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml }),
+    [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml],
   );
   const displayedHtml = useMemo(
     () => (formatted ? formatEmailHtml(rawHtml) : rawHtml),

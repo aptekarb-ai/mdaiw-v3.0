@@ -69,6 +69,27 @@ describe('normalizeModule — Feature 07 responsive settings survive normalizati
     expect(normalized.settings.outlookVml).toBeUndefined();
   });
 
+  // Structural Width Contract correction — parent/layout-level background
+  // (settings.backgroundColor/backgroundImage), same allowlist-regression
+  // guard as every other field in this describe block.
+  it('preserves module-level (parent/layout) backgroundColor and backgroundImage through normalization', () => {
+    const normalized = normalizeModule(rawModule({ backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/bg.jpg' }));
+    expect(normalized.settings.backgroundColor).toBe('#002D38');
+    expect(normalized.settings.backgroundImage).toBe('https://cdn.example.com/bg.jpg');
+  });
+
+  it('a document with neither module-level background key normalizes with both absent — no destructive default injected', () => {
+    const normalized = normalizeModule(rawModule({}));
+    expect(normalized.settings.backgroundColor).toBeUndefined();
+    expect(normalized.settings.backgroundImage).toBeUndefined();
+  });
+
+  it('a non-string module-level backgroundColor/backgroundImage is dropped (normalizes to undefined)', () => {
+    const normalized = normalizeModule(rawModule({ backgroundColor: 42, backgroundImage: false }));
+    expect(normalized.settings.backgroundColor).toBeUndefined();
+    expect(normalized.settings.backgroundImage).toBeUndefined();
+  });
+
   // Configurable Mobile Gutter Behavior — same allowlist regression class
   // as outlookVml above, found live in this same session: a reloaded
   // document with hideGutterOnMobile: false silently reverted to the
@@ -233,5 +254,82 @@ describe('normalizeModule — Feature 07 responsive settings survive normalizati
     } as unknown as EmailModule;
     const normalized = normalizeModule(legacy);
     expect(normalized.settings.desktopColumnDirection).toBe('rtl');
+  });
+
+  it('legacy flat settings shape also preserves module-level backgroundColor/backgroundImage when present', () => {
+    const legacy = {
+      id: 'm5',
+      type: 'layout-2col-50-50',
+      order: 0,
+      props: { columnWidths: [50, 50] },
+      settings: {
+        paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0,
+        backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/bg.jpg',
+      },
+    } as unknown as EmailModule;
+    const normalized = normalizeModule(legacy);
+    expect(normalized.settings.backgroundColor).toBe('#002D38');
+    expect(normalized.settings.backgroundImage).toBe('https://cdn.example.com/bg.jpg');
+  });
+});
+
+// E5 — generic per-column background image. Same allowlist-guard
+// regression this file already exists to catch (see the top-of-file
+// docstring): normalizeColumnSettings() rebuilds each column's settings
+// from an explicit field list, so a new column-settings field silently
+// drops on every reload unless it's added there too.
+describe('normalizeModule — column settings (E5 per-column background image) survive normalization', () => {
+  function layoutModule(columnSettingsOverrides: Record<string, unknown>): EmailModule {
+    return {
+      id: 'm1',
+      type: 'layout-1col',
+      order: 0,
+      props: { columnWidths: [100] },
+      settings: {
+        desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 },
+        mobile: {},
+        outerSpacing: { desktop: { left: { value: 0, unit: 'px' }, right: { value: 0, unit: 'px' } }, mobile: {} },
+      },
+      columns: [{
+        id: 'c1',
+        modules: [],
+        settings: {
+          desktop: { paddingTop: 0, paddingRight: 0, paddingBottom: 0, paddingLeft: 0 },
+          mobile: {},
+          backgroundColor: '',
+          verticalAlign: 'top',
+          ...columnSettingsOverrides,
+        },
+      }],
+    } as unknown as EmailModule;
+  }
+
+  it('preserves a column backgroundImage through normalization', () => {
+    const normalized = normalizeModule(layoutModule({ backgroundImage: 'https://cdn.example.com/col-bg.jpg' }));
+    expect(normalized.columns?.[0].settings.backgroundImage).toBe('https://cdn.example.com/col-bg.jpg');
+  });
+
+  it('a column with no backgroundImage key normalizes with it absent — no destructive default injected', () => {
+    const normalized = normalizeModule(layoutModule({}));
+    expect(normalized.columns?.[0].settings.backgroundImage).toBeUndefined();
+  });
+
+  it('a non-string column backgroundImage is dropped (normalizes to undefined)', () => {
+    const normalized = normalizeModule(layoutModule({ backgroundImage: 42 }));
+    expect(normalized.columns?.[0].settings.backgroundImage).toBeUndefined();
+  });
+
+  it('an empty-string column backgroundImage normalizes to absent, same "empty = off" convention as backgroundColor', () => {
+    const normalized = normalizeModule(layoutModule({ backgroundImage: '' }));
+    expect(normalized.columns?.[0].settings.backgroundImage).toBeUndefined();
+  });
+
+  it('backgroundColor and verticalAlign continue to normalize correctly alongside the new field', () => {
+    const normalized = normalizeModule(layoutModule({
+      backgroundColor: '#002D38', verticalAlign: 'middle', backgroundImage: 'https://cdn.example.com/col-bg.jpg',
+    }));
+    expect(normalized.columns?.[0].settings.backgroundColor).toBe('#002D38');
+    expect(normalized.columns?.[0].settings.verticalAlign).toBe('middle');
+    expect(normalized.columns?.[0].settings.backgroundImage).toBe('https://cdn.example.com/col-bg.jpg');
   });
 });

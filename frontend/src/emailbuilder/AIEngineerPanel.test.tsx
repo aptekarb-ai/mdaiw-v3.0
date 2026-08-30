@@ -54,11 +54,14 @@ function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> =
   const onApplyAction = vi.fn().mockReturnValue(true);
   const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
   const onApplyRepairAction = vi.fn().mockReturnValue(true);
-  render(
+  const result = render(
     <AIEngineerPanel
+      documentId={1}
+      editorMode="ai"
       platform="generic"
       width={700}
       selectedModule={null}
+      selectedColumn={null}
       content={{ version: 1, modules: [] }}
       emailTitle="Test Email"
       emailSubject="Test subject"
@@ -72,11 +75,16 @@ function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> =
       {...overrides}
     />,
   );
-  return { onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction };
+  return { onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction, unmount: result.unmount };
 }
 
 afterEach(() => {
   vi.clearAllMocks();
+  // E10 — every test below renders with the same default documentId={1};
+  // without clearing storage between tests, one test's persisted
+  // conversation would leak into the next test's initial render (real
+  // documents never collide on id, but these tests all share one).
+  window.localStorage.clear();
 });
 
 describe('AIEngineerPanel', () => {
@@ -667,5 +675,115 @@ describe('AIEngineerPanel — Sub-phase 4, item 2/4: document diagnose/repair in
     await screen.findByText('Repair 1 issue');
 
     expect(screen.getByPlaceholderText(/Type your command/)).toBeDisabled();
+  });
+});
+
+// Module-4 E10 — a real bug caught live: an earlier version persisted the
+// conversation via a separate reactive "save whenever messages changes"
+// effect, which could fire once on mount with the STALE pre-load empty
+// array (before the load effect's own setMessages had applied), silently
+// wiping out everything from the previous mounted instance. Fixed by
+// loading via LAZY initial state and persisting only inside
+// appendMessage's own functional updater (see AIEngineerPanel.tsx's
+// docstrings on both). These tests reproduce the exact unmount/remount
+// sequence (switching tabs away from and back to AI Engineer) that
+// exposed the bug.
+describe('AIEngineerPanel — E10 conversation persistence survives unmount/remount (regression)', () => {
+  it('a full exchange survives switching away and back to the AI Engineer tab (simulated by unmount + fresh mount, same documentId)', async () => {
+    mockSpeech();
+    // action: NONE (a plain diagnostic reply, no proposal card) — keeps
+    // this test isolated to message persistence, not proposal rendering
+    // (an actionable response would ALSO echo the reply text into a
+    // separate proposal-detail element, making text queries ambiguous).
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'Adding a button.', action: { type: 'NONE' }, requires_confirmation: false,
+    }));
+    const first = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Adding a button.');
+
+    // Simulates the real EmailBuilderWorkspacePage behavior: switching
+    // to another tab (Validate) unmounts AIEngineerPanel entirely; a
+    // later switch back mounts a genuinely NEW component instance.
+    first.unmount();
+
+    renderPanel();
+    expect(await screen.findByText('add a button')).toBeInTheDocument();
+    expect(screen.getByText('Adding a button.')).toBeInTheDocument();
+  });
+
+  it('a second exchange (seeded from a NEW "Ask AI Engineer" click) is appended to, not a replacement for, the first exchange after remount', async () => {
+    mockSpeech();
+    // action: NONE (a plain diagnostic reply, no proposal card) — keeps
+    // this test isolated to message persistence, not proposal rendering
+    // (an actionable response would ALSO echo the reply text into a
+    // separate proposal-detail element, making text queries ambiguous).
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'Adding a button.', action: { type: 'NONE' }, requires_confirmation: false,
+    }));
+    const first = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Adding a button.');
+    first.unmount();
+
+    // A second "Ask AI Engineer" seed, exactly like Validation Center's
+    // Explain modal produces.
+    renderPanel({ initialPrompt: 'Explain this issue and, if possible, fix it: Email title is empty — The document <title> is empty.' });
+
+    expect(await screen.findByText(/Email title is empty/)).toBeInTheDocument();
+    // The FIRST exchange must still be present — not silently dropped.
+    expect(screen.getByText('add a button')).toBeInTheDocument();
+    expect(screen.getByText('Adding a button.')).toBeInTheDocument();
+  });
+
+  it('a DIFFERENT document (different documentId) never sees another document\'s conversation on mount', async () => {
+    mockSpeech();
+    // action: NONE (a plain diagnostic reply, no proposal card) — keeps
+    // this test isolated to message persistence, not proposal rendering
+    // (an actionable response would ALSO echo the reply text into a
+    // separate proposal-detail element, making text queries ambiguous).
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'Adding a button.', action: { type: 'NONE' }, requires_confirmation: false,
+    }));
+    const doc1 = renderPanel({ documentId: 101 });
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Adding a button.');
+    doc1.unmount();
+
+    renderPanel({ documentId: 202 });
+    expect(screen.getByText(/Ask the AI Engineer to add a module/)).toBeInTheDocument();
+    expect(screen.queryByText('add a button')).not.toBeInTheDocument();
+  });
+
+  it('"Clear conversation" empties the transcript and a later remount of the SAME document stays empty', async () => {
+    mockSpeech();
+    // action: NONE (a plain diagnostic reply, no proposal card) — keeps
+    // this test isolated to message persistence, not proposal rendering
+    // (an actionable response would ALSO echo the reply text into a
+    // separate proposal-detail element, making text queries ambiguous).
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: 'Adding a button.', action: { type: 'NONE' }, requires_confirmation: false,
+    }));
+    const first = renderPanel();
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Adding a button.');
+
+    await user.click(screen.getByRole('button', { name: 'Clear conversation' }));
+    expect(screen.getByText(/Ask the AI Engineer to add a module/)).toBeInTheDocument();
+    first.unmount();
+
+    renderPanel();
+    expect(screen.getByText(/Ask the AI Engineer to add a module/)).toBeInTheDocument();
+    expect(screen.queryByText('add a button')).not.toBeInTheDocument();
   });
 });

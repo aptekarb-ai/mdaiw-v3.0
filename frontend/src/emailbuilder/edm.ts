@@ -214,6 +214,22 @@ export interface EmailModuleSettings {
   // Undefined/false = today's exact existing behavior (no VML), so this
   // is purely additive.
   outlookVml?: boolean;
+  // Layout modules only — background for the FULL physical module row
+  // (distinct from each child column's own independent
+  // ColumnContainerSettings.backgroundColor/backgroundImage). Layout
+  // Background scope correction: covers the entire module width,
+  // INCLUDING left/right Outer Spacer Columns, this module's own
+  // internal padding (desktop.paddingTop/Right/Bottom/Left above), and
+  // all column gutters — never just the narrowed central structure.
+  // Outer Spacer Columns control content positioning/available width;
+  // they are not a boundary for this background. Applied via ONE outer
+  // wrapper around the module's full outer-spacer-inclusive structure
+  // (see registryCore.ts's wrapWithModuleBackground), never duplicated
+  // independently onto the spacer cells themselves. Undefined/'' = no
+  // background, same "absent = off" convention as every other optional
+  // color/image field in this file.
+  backgroundColor?: string;
+  backgroundImage?: string;
 }
 
 export type ModuleVisibility = 'all' | 'hideMobile' | 'hideDesktop';
@@ -237,6 +253,13 @@ export interface ColumnContainerSettings {
   desktop: ModuleSpacingValues;
   mobile: Partial<ModuleSpacingValues>;
   backgroundColor: string;
+  // Generic per-column background image (E5) — shared by every
+  // registered layout/ratio via this one settings shape, never a
+  // per-layout special case. backgroundColor always stays the CSS
+  // fallback rendered behind it (see catalog/layoutCatalog.tsx). Undefined
+  // or '' = no image, same "absent = off" convention as every other
+  // optional string field in this file.
+  backgroundImage?: string;
   verticalAlign: ColumnVerticalAlign;
 }
 

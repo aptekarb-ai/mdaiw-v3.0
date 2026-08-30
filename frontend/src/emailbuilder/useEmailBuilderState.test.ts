@@ -671,6 +671,7 @@ describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phas
     expect(result.current.documentSettings).toEqual({
       email_title: '', email_subject: '', favicon_url: '',
       reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      outlook_vml_enabled: false,
     });
     expect(result.current.canUndo).toBe(false);
   });
@@ -794,6 +795,7 @@ describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phas
     act(() => result.current.loadModules([], {
       email_title: 'Loaded', email_subject: '', favicon_url: '',
       reset_css_enabled: false, custom_css_enabled: true, custom_css: 'loaded-css',
+      outlook_vml_enabled: false,
     }));
 
     expect(result.current.documentSettings.email_title).toBe('Loaded');

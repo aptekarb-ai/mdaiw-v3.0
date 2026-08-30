@@ -145,6 +145,17 @@ class EmailAICommandView(APIView):
             'selected_module': data.get('selected_module'),
             'platform': data.get('platform'),
             'width': data.get('width'),
+            # Module-4 E9 — additive, optional editor context (see
+            # ai_command_openai.py's _build_safe_context for how the
+            # optional AI provider actually uses these).
+            'editor_mode': data.get('editor_mode'),
+            'selected_column': data.get('selected_column'),
+            'selected_validation_issue': data.get('selected_validation_issue'),
+            # Module-4 E10 — bounded prior turns of THIS SAME document's
+            # conversation only (never persisted server-side — see
+            # aiConversationStorage.ts's own docstring for the client-side
+            # persistence decision).
+            'conversation_history': data.get('conversation_history') or [],
             # Used only by the optional AI provider's own separate
             # throttle (ai_command_openai.py) — never logged or returned.
             '_rate_limit_identifier': str(request.user.pk),

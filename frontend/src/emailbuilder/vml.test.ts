@@ -267,6 +267,81 @@ describe('VML integration — hero-background-image module, full rendered docume
   });
 });
 
+// E5 — generic per-column background image, shared by every registered
+// layout/ratio through ColumnContainerSettings (never a per-layout special
+// case), reusing the SAME renderVmlBackground function as Hero's own
+// background variant above — never a second VML system.
+describe('VML integration — generic per-column background image (E5)', () => {
+  it('renders no VML when the column has no backgroundImage, even with outlookVml enabled', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.settings = { ...layout.settings, outlookVml: true };
+    const html = renderEmailBody({ width: 700, content: contentOf([layout]) });
+    expect(html).not.toContain('v:rect');
+  });
+
+  it('renders no VML for a column WITH a backgroundImage when outlookVml is unset (existing behavior unchanged)', () => {
+    const layout = createModule('layout-2col-50-50', 0);
+    layout.columns![0].settings = { ...layout.columns![0].settings, backgroundImage: 'https://cdn.example.com/col-bg.jpg' };
+    const html = renderEmailBody({ width: 700, content: contentOf([layout]) });
+    expect(html).not.toContain('v:rect');
+    // Normal-client fallback is still present regardless of outlookVml.
+    expect(html).toContain('background-image:url(\'https://cdn.example.com/col-bg.jpg\')');
+    expect(html).toContain('background="https://cdn.example.com/col-bg.jpg"');
+  });
+
+  it('renders real VML background paired with the HTML fallback, sized to the resolved column pixel width, when outlookVml is enabled', () => {
+    const layout = createModule('layout-2col-70-30', 0);
+    layout.props = { columnWidths: [70, 30] };
+    layout.settings = { ...layout.settings, outlookVml: true, columnGutterPx: 30 };
+    layout.columns![0].settings = { ...layout.columns![0].settings, backgroundImage: 'https://cdn.example.com/col-bg.jpg' };
+    const html = renderEmailBody({ width: 700, content: contentOf([layout]) });
+    // available=700-30=670; col0 = round(670*0.7) = 469 — the SAME resolver
+    // the width attribute itself uses, never a second calculation.
+    expect(html).toContain('<!--[if gte mso 9]>');
+    expect(html).toContain('<v:rect');
+    expect(html).toContain('width:469px');
+    expect(html).toContain('background="https://cdn.example.com/col-bg.jpg"');
+  });
+
+  it('backgroundColor always remains as the CSS fallback behind the image', () => {
+    const layout = createModule('layout-1col', 0);
+    layout.columns![0].settings = {
+      ...layout.columns![0].settings, backgroundColor: '#002D38', backgroundImage: 'https://cdn.example.com/col-bg.jpg',
+    };
+    const html = renderEmailBody({ width: 700, content: contentOf([layout]) });
+    expect(html).toMatch(/background-color:#002D38;background-image:url\('https:\/\/cdn\.example\.com\/col-bg\.jpg'\)/);
+  });
+
+  it('the VML ghost-table wraps the column\'s real nested content, not a fabricated placeholder', () => {
+    const layout = createModule('layout-1col', 0);
+    layout.settings = { ...layout.settings, outlookVml: true };
+    layout.columns![0].settings = { ...layout.columns![0].settings, backgroundImage: 'https://cdn.example.com/col-bg.jpg' };
+    const text = createModule('text', 0);
+    (text.props as { text: string }).text = 'Column VML content marker';
+    layout.columns![0].modules.push(text);
+    const html = renderEmailBody({ width: 700, content: contentOf([layout]) });
+    const vmlOpen = html.indexOf('<v:rect');
+    const markerIndex = html.indexOf('Column VML content marker');
+    const vmlClose = html.indexOf('</v:rect>');
+    expect(vmlOpen).toBeGreaterThan(-1);
+    expect(markerIndex).toBeGreaterThan(vmlOpen);
+    expect(markerIndex).toBeLessThan(vmlClose);
+  });
+
+  it('background-image support does not disturb column padding, valign, or width attributes', () => {
+    const layout = createModule('layout-1col', 0);
+    layout.columns![0].settings = {
+      ...layout.columns![0].settings,
+      backgroundImage: 'https://cdn.example.com/col-bg.jpg',
+      verticalAlign: 'middle',
+      desktop: { paddingTop: 10, paddingRight: 10, paddingBottom: 10, paddingLeft: 10 },
+    };
+    const html = renderEmailBody({ width: 700, content: contentOf([layout]) });
+    expect(html).toContain('valign="middle"');
+    expect(html).toContain('padding:10px 10px 10px 10px');
+  });
+});
+
 describe('VML integration — image-text / text-image composite module (nested text.ctaText)', () => {
   it('renders no VML when outlookVml is unset, or when no ctaText is set', () => {
     const module = createModule('image-text', 0) as unknown as EmailModule<CompositeModuleProps>;

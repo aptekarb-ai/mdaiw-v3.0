@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type DragEvent } from 'react';
 import type { EmailModule, EmailModuleType } from './edm';
 import { resolveOuterSpacing, resolveSpacing } from './edm';
 import { getModuleDefinition } from './moduleRegistry';
@@ -225,6 +225,24 @@ export function EmailCanvas({
                       </span>
                       <button
                         type="button"
+                        aria-label="Move component up"
+                        title="Move component up"
+                        disabled={index === 0}
+                        onClick={() => onReorder(index, index - 1)}
+                      >
+                        <span className="mdaiw-icon mdaiw-icon--chevron-down email-canvas__move-icon--up" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Move component down"
+                        title="Move component down"
+                        disabled={index === sortedModules.length - 1}
+                        onClick={() => onReorder(index, index + 1)}
+                      >
+                        <span className="mdaiw-icon mdaiw-icon--chevron-down" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
                         aria-label={`Duplicate ${definition.label}`}
                         title="Duplicate"
                         onClick={() => onDuplicate(module.id)}
@@ -266,8 +284,28 @@ export function EmailCanvas({
                     const leftPx = outerSpacingPx(resolvedOuter.left, canvasWidth);
                     const rightPx = outerSpacingPx(resolvedOuter.right, canvasWidth);
                     const spacing = resolveSpacing(module.settings, viewMode);
+                    // Layout Background scope correction — the WYSIWYG
+                    // fix. Mirrors registryCore.ts's wrapWithModuleBackground:
+                    // ONE wrapper (this outer-row div) owns the module-level
+                    // background, so it naturally shows through the
+                    // transparent spacer regions (siblings) AND the
+                    // transparent content div's own padding/gutter areas —
+                    // never painted independently onto the spacer regions
+                    // themselves. Only Layout modules populate these
+                    // settings fields (see edm.ts's EmailModuleSettings
+                    // docstring), so a non-layout module's outer row is
+                    // simply never given a background here.
+                    const moduleBackgroundColor = module.columns ? module.settings.backgroundColor : undefined;
+                    const moduleBackgroundImage = module.columns ? module.settings.backgroundImage : undefined;
+                    const outerRowStyle: CSSProperties = {};
+                    if (moduleBackgroundColor) outerRowStyle.backgroundColor = moduleBackgroundColor;
+                    if (moduleBackgroundImage) {
+                      outerRowStyle.backgroundImage = `url('${moduleBackgroundImage}')`;
+                      outerRowStyle.backgroundSize = 'cover';
+                      outerRowStyle.backgroundPosition = 'center';
+                    }
                     return (
-                      <div className="email-canvas__module-outer-row">
+                      <div className="email-canvas__module-outer-row" style={outerRowStyle}>
                         {leftPx > 0 && (
                           <div className="email-canvas__module-spacer-region" style={{ width: leftPx }} />
                         )}
@@ -285,6 +323,7 @@ export function EmailCanvas({
                               layout={module}
                               viewport={viewMode}
                               canvasWidth={canvasWidth}
+                              documentWidth={width}
                               selectedModuleId={selectedModuleId}
                               activeColumnId={activeColumn?.layoutId === module.id ? activeColumn.columnId : null}
                               savedModules={savedModules}

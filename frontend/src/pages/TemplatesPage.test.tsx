@@ -41,6 +41,7 @@ function doc(overrides: Partial<EmailDocument> = {}): EmailDocument {
     reset_css_enabled: true,
     custom_css_enabled: false,
     custom_css: '',
+    outlook_vml_enabled: false,
     created_at: '2026-08-20T10:00:00Z',
     updated_at: '2026-08-20T10:00:00Z',
     ...overrides,

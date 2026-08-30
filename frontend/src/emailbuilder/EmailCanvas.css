@@ -186,6 +186,19 @@
   background-color: var(--color-white);
 }
 
+.email-canvas__move-icon--up {
+  transform: rotate(180deg);
+}
+
+.email-canvas__module-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.email-canvas__module-toolbar button:disabled:hover {
+  background: transparent;
+}
+
 /* --- Layout-module empty column state (builder-only) ----------------- */
 
 .email-canvas__layout-columns {

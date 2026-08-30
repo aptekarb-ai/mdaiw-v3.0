@@ -13,6 +13,7 @@ interface PreviewStudioPanelProps {
   resetCssEnabled?: boolean;
   customCssEnabled?: boolean;
   customCss?: string;
+  outlookVml?: boolean;
 }
 
 type SubView = 'desktop' | 'mobile' | 'dark' | 'clients';
@@ -36,7 +37,7 @@ const provider = createLocalHeuristicProvider();
 // future real render provider (Email on Acid/Litmus) can replace
 // `localHeuristicProvider` without this component changing.
 export function PreviewStudioPanel({
-  width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+  width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml,
 }: PreviewStudioPanelProps) {
   const [subView, setSubView] = useState<SubView>('desktop');
   const [compareMode, setCompareMode] = useState(false);
@@ -45,8 +46,8 @@ export function PreviewStudioPanel({
   const [refreshingClientId, setRefreshingClientId] = useState<string | null>(null);
 
   const rawHtml = useMemo(
-    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss }),
-    [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss],
+    () => renderEmailDocument({ width, content, title: emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml }),
+    [width, content, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml],
   );
 
   // `forceRefresh` distinguishes "just show me the current state" (tab

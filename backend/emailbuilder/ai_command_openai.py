@@ -60,7 +60,14 @@ _SYSTEM_PROMPT = (
     '"Shop Now", "Learn More") is fine, but do not fabricate specific facts. If the '
     'instruction is ambiguous, unsupported, or targets something other than the current '
     'selection, return action type NONE and ask a brief clarifying question in `reply`. Reply '
-    'in the same language the user wrote in.'
+    'in the same language the user wrote in. The context JSON may include editor_mode (which '
+    'tab the user is on), selected_column (which column is focused — informational only, you '
+    'cannot yet target a column directly, only the currently selected module), and '
+    'selected_validation_issue (a specific compatibility/accessibility issue the user was just '
+    'looking at). Prior turns of this SAME conversation may be included as ordinary user/'
+    'assistant messages before the current one — use them to resolve a follow-up like "make it '
+    'darker" or "can you fix it" against what was just discussed, but never assume anything '
+    'about a different conversation or document.'
 )
 
 
@@ -164,12 +171,22 @@ def _rate_limited(identifier):
     return count > settings.EMAILBUILDER_AI_COMMAND_MAX_REQUESTS_PER_WINDOW
 
 
+_EDITOR_MODES = {'visual', 'code', 'preview', 'validate', 'ai'}
+# Module-4 E10 — mirrors serializers.py's MAX_CONVERSATION_HISTORY_TURNS;
+# the request is already bounded there, this is the same defense-in-depth
+# posture applied again at the point of use.
+_MAX_HISTORY_TURNS = 8
+
+
 def _build_safe_context(context):
     """Whitelist-only context sent to the model — mirrors
     yukti/ai_provider.py::build_safe_context's shape/intent. The selected
     module's props are pre-filtered to only the keys this feature can ever
     act on, so the model never sees (or can echo back) anything outside
-    the allow-list."""
+    the allow-list. Module-4 E9/E10 — editor_mode/selected_column/
+    selected_validation_issue/conversation_history are the same additive,
+    already-bounded-and-validated (serializers.py) fields; this function
+    re-checks their shape defensively rather than trusting the caller."""
     context = context if isinstance(context, dict) else {}
     selected = context.get('selected_module') if isinstance(context.get('selected_module'), dict) else None
     safe_selected = None
@@ -181,11 +198,40 @@ def _build_safe_context(context):
             'type': module_type,
             'props': {k: v for k, v in raw_props.items() if k in allowed_keys and isinstance(v, (str, int, float))},
         }
+
+    editor_mode = context.get('editor_mode')
+    safe_editor_mode = editor_mode if editor_mode in _EDITOR_MODES else None
+
+    column = context.get('selected_column') if isinstance(context.get('selected_column'), dict) else None
+    safe_column = None
+    if column and column.get('layout_module_type') in module_capabilities.get_all_module_types() \
+            and isinstance(column.get('column_index'), int):
+        safe_column = {'layout_module_type': column['layout_module_type'], 'column_index': column['column_index']}
+
+    issue = context.get('selected_validation_issue') if isinstance(context.get('selected_validation_issue'), dict) else None
+    safe_issue = None
+    if issue and isinstance(issue.get('id'), str) and isinstance(issue.get('title'), str) and isinstance(issue.get('detail'), str):
+        safe_issue = {
+            'id': issue['id'][:200], 'title': issue['title'][:200], 'detail': issue['detail'][:1000],
+            'severity': issue.get('severity') if issue.get('severity') in ('error', 'warning') else None,
+            'category': issue.get('category') if isinstance(issue.get('category'), str) else None,
+        }
+
+    raw_history = context.get('conversation_history')
+    safe_history = []
+    if isinstance(raw_history, list):
+        for turn in raw_history[-_MAX_HISTORY_TURNS:]:
+            if isinstance(turn, dict) and turn.get('role') in ('user', 'assistant') and isinstance(turn.get('content'), str):
+                safe_history.append({'role': turn['role'], 'content': turn['content'][:1000]})
+
     return {
         'selected_module': safe_selected,
         'platform': context.get('platform') if isinstance(context.get('platform'), str) else None,
         'width': context.get('width') if isinstance(context.get('width'), int) else None,
-    }
+        'editor_mode': safe_editor_mode,
+        'selected_column': safe_column,
+        'selected_validation_issue': safe_issue,
+    }, safe_history
 
 
 class OpenAIEmailCommandProvider(EmailCommandProvider):
@@ -217,7 +263,15 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
         if _rate_limited(identifier):
             raise EmailCommandProviderUnavailable('rate limited')
 
-        safe_context = _build_safe_context(context)
+        safe_context, safe_history = _build_safe_context(context)
+
+        # Module-4 E10 — real multi-turn: the bounded prior turns of THIS
+        # SAME document's conversation are replayed as genuine user/
+        # assistant messages (not summarized into the context blob), so
+        # the model can resolve a follow-up like "make it darker" against
+        # what it itself said/proposed a turn ago. Still capped at
+        # _MAX_HISTORY_TURNS — never the full, unbounded conversation.
+        history_messages = [{'role': turn['role'], 'content': turn['content']} for turn in safe_history]
 
         try:
             client = self._client_factory()
@@ -233,6 +287,7 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
                         'role': 'system',
                         'content': 'Current context (JSON, trusted, not user input): ' + json.dumps(safe_context),
                     },
+                    *history_messages,
                     {'role': 'user', 'content': text},
                 ],
             )

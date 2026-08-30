@@ -28,6 +28,7 @@ function settings(overrides: Partial<EmailDocumentSettingsSnapshot> = {}): Email
     reset_css_enabled: true,
     custom_css_enabled: false,
     custom_css: '',
+    outlook_vml_enabled: false,
     ...overrides,
   };
 }
@@ -117,8 +118,43 @@ describe('DocumentSettingsDialog', () => {
     expect(onApply).toHaveBeenCalledWith({
       email_title: 'New Title', email_subject: '', favicon_url: '',
       reset_css_enabled: true, custom_css_enabled: false, custom_css: '',
+      outlook_vml_enabled: false,
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Module-4 E4 — Outlook Compatibility toggle.
+  it('the Outlook Compatibility checkbox reflects the current document setting and toggling it calls onApply with the new value', async () => {
+    const user = userEvent.setup();
+    const onApply = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <DocumentSettingsDialog
+        documentSettings={settings({ outlook_vml_enabled: false })}
+        documentName="August Newsletter"
+        onApply={onApply}
+        onClose={onClose}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox', { name: /Outlook Compatibility/ });
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(checkbox);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ outlook_vml_enabled: true }));
+  });
+
+  it('the Outlook Compatibility checkbox starts checked when the document already has it enabled', () => {
+    render(
+      <DocumentSettingsDialog
+        documentSettings={settings({ outlook_vml_enabled: true })}
+        documentName="August Newsletter"
+        onApply={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('checkbox', { name: /Outlook Compatibility/ })).toBeChecked();
   });
 
   it('an invalid favicon URL shows an inline error and blocks Apply (item 1 — failed validation creates no history entry)', async () => {

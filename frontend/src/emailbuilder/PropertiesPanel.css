@@ -441,6 +441,25 @@
   margin-bottom: 18px;
 }
 
+/* Mobile Column Summary UI — a compact status list (NOT a default
+   ul/li bullet list — no marker, no browser default indentation),
+   using the panel's normal hint font-size/color/line-height. */
+.properties-panel__mobile-width-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-subtle);
+}
+
+.properties-panel__mobile-width-summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
 .properties-panel__column-width-input {
   display: flex;
   align-items: center;

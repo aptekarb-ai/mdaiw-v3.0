@@ -39,6 +39,12 @@ export interface EmailDocumentSettingsSnapshot {
   reset_css_enabled: boolean;
   custom_css_enabled: boolean;
   custom_css: string;
+  // Module-4 E4 — document-level default for the existing per-module
+  // settings.outlookVml opt-in (see edm.ts's EmailModuleSettings
+  // docstring and htmlRenderer.ts's RenderableEmail.outlookVml). Same
+  // "join the existing undo/redo history, PATCH on Save" contract as
+  // every other document setting above — never a second settings system.
+  outlook_vml_enabled: boolean;
 }
 
 export const EMPTY_DOCUMENT_SETTINGS: EmailDocumentSettingsSnapshot = {
@@ -48,6 +54,7 @@ export const EMPTY_DOCUMENT_SETTINGS: EmailDocumentSettingsSnapshot = {
   reset_css_enabled: true,
   custom_css_enabled: false,
   custom_css: '',
+  outlook_vml_enabled: false,
 };
 
 interface HistoryEntry {
@@ -60,7 +67,7 @@ interface HistoryRef {
   index: number;
 }
 
-interface SelectedColumnRef {
+export interface SelectedColumnRef {
   layoutId: string;
   columnId: string;
 }

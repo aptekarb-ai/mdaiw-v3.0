@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { requestAICommand } from '../api/client';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
+import { isSpeechSynthesisSupported, useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import {
   describeAction, DOCUMENT_SCOPE_ACTION_TYPES,
   type AIActionHistoryEntry, type AICommandAction, type AICommandProviderId, type AICommandSelectedModuleContext,
@@ -12,6 +13,12 @@ import { validateEmail } from './emailValidation';
 import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
 import { signatureForIssueId, type RepairCandidate } from './repairEngine';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
+import { findModuleById } from './layoutModel';
+import {
+  boundedHistoryForRequest, clearConversation, loadConversation, saveConversation,
+  type StoredConversationMessage,
+} from './aiConversationStorage';
+import { speakableSummary } from './aiSpeech';
 import type { EmailDocumentContent, EmailModule } from './edm';
 import type { EmailPlatform } from './types';
 import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
@@ -35,9 +42,29 @@ interface PendingProposal {
 }
 
 interface AIEngineerPanelProps {
+  // E10 — the conversation persists per-document, keyed by this id. Never
+  // used for anything else (no network call keys on it beyond the AI
+  // command request's own document-agnostic shape).
+  documentId: number;
+  // E9 — which top-level tab the user is currently on. Threaded through so
+  // both the local intent layer (aiDocumentIntelligence.ts) and the
+  // backend-routed request can answer "what am I looking at"-style
+  // questions without guessing.
+  editorMode: string;
   platform: EmailPlatform;
   width: number;
   selectedModule: EmailModule | null;
+  // E9 — informational context only (see the module docstring on
+  // AIEditorContext below for why this does not yet drive a real
+  // column-scoped edit action).
+  selectedColumn: { layoutId: string; columnId: string } | null;
+  // E7 -> E9/E10 cross-feature integration — set once when the user
+  // arrives here via "Ask AI Engineer"/"Review N more with AI Engineer";
+  // sent as the first user turn, then the caller is told to clear it via
+  // onInitialPromptConsumed so a later tab switch never resends it.
+  initialPrompt?: string | null;
+  initialIssueId?: string;
+  onInitialPromptConsumed?: () => void;
   // Sub-phase 4, item 2 — full module tree + document settings, so this
   // panel can compute the SAME ValidationReport Validation Center shows
   // (validateEmail on the real rendered HTML — item 7: one canonical rule
@@ -54,6 +81,7 @@ interface AIEngineerPanelProps {
   resetCssEnabled: boolean;
   customCssEnabled: boolean;
   customCss: string;
+  outlookVml?: boolean;
   // Applies the action through the existing builder mutation functions
   // (see EmailBuilderWorkspacePage.handleApplyAiAction). Returns false
   // when the action could not be safely applied — e.g. the canvas
@@ -192,12 +220,25 @@ interface PendingRepairProposal {
 }
 
 export function AIEngineerPanel({
-  platform, width, selectedModule, content, emailTitle, emailSubject, faviconUrl,
-  resetCssEnabled, customCssEnabled, customCss,
+  documentId, editorMode, platform, width, selectedModule, selectedColumn, content,
+  emailTitle, emailSubject, faviconUrl,
+  resetCssEnabled, customCssEnabled, customCss, outlookVml,
+  initialPrompt, initialIssueId, onInitialPromptConsumed,
   onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction,
 }: AIEngineerPanelProps) {
   const [subView, setSubView] = useState<'chat' | 'history'>('chat');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // E10 — LAZY initial state, loaded synchronously from THIS document's
+  // persisted conversation before the first render ever paints. This is
+  // deliberate, not just an optimization: an effect-based load (setState
+  // AFTER mount) would leave one render where `messages` is still `[]`,
+  // during which a naive "save on every messages change" effect could
+  // read that stale empty array and overwrite the real persisted data
+  // before the load's own update had a chance to apply — see
+  // appendMessage below for how persistence is done instead (no separate
+  // reactive save effect at all, so this race cannot happen).
+  const [messages, setMessages] = useState<ChatMessage[]>(
+    () => loadConversation(documentId).map((entry) => ({ id: newId('msg'), role: entry.role, text: entry.text })),
+  );
   const [history, setHistory] = useState<AIActionHistoryEntry[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -224,6 +265,69 @@ export function AIEngineerPanel({
   const [clearLearningNotice, setClearLearningNotice] = useState<string | null>(null);
 
   const speech = useSpeechRecognition();
+  // E11 — voice OUTPUT (reading replies aloud), a distinct hook/concern
+  // from `speech` above (voice INPUT/dictation). Same shared hook every
+  // other spoken-response surface in this app already uses (Yukti) — see
+  // useSpeechSynthesis.ts's own docstring; never a second speech library.
+  const voice = useSpeechSynthesis();
+  const voiceSupported = isSpeechSynthesisSupported();
+
+  // E10 — "last discussed" validation issue, so a bare follow-up like
+  // "can you fix it?" right after "explain this issue" can resolve "it"
+  // deterministically — see handleSend's local-intent branch below. This
+  // is a genuinely bounded, real mechanism (not a claim that the
+  // deterministic router understands arbitrary pronoun reference); it
+  // resets whenever a fresh initialIssueId arrives or the document
+  // changes.
+  // A plain ref, not React state: nothing in this component's JSX
+  // displays it, and handleSend() is sometimes invoked in the SAME tick
+  // as a change to it (the initialPrompt effect below) — React state
+  // updates are async/batched, so a ref is what guarantees handleSend
+  // always reads the value that was JUST set, not a stale one.
+  const lastDiscussedIssueIdRef = useRef<string | null>(initialIssueId ?? null);
+  function setLastDiscussedIssueId(id: string | null) {
+    lastDiscussedIssueIdRef.current = id;
+  }
+
+  // E10 — reload when `documentId` changes on an ALREADY-MOUNTED instance
+  // (e.g. the URL's document id changes via client-side routing while the
+  // AI Engineer tab stays open the whole time — the one realistic case
+  // the lazy initial state above does NOT cover, since that only runs
+  // once per component instance). Explicitly skips the very first render
+  // via the ref below — that case is already handled by the lazy initial
+  // state, and re-running this here too would just be a redundant,
+  // harmless-but-wasteful reload, not a bug — the guard keeps intent
+  // clear: this effect's job is CHANGE handling, not initial load.
+  const previousDocumentIdRef = useRef(documentId);
+  useEffect(() => {
+    if (previousDocumentIdRef.current === documentId) return;
+    previousDocumentIdRef.current = documentId;
+    const stored = loadConversation(documentId);
+    setMessages(stored.map((entry) => ({ id: newId('msg'), role: entry.role, text: entry.text })));
+    setLastDiscussedIssueId(null);
+    setHistory([]);
+  }, [documentId]);
+
+  function handleClearConversation() {
+    clearConversation(documentId);
+    setMessages([]);
+    setLastDiscussedIssueId(null);
+    voice.cancel();
+  }
+
+  // E7 -> E9/E10 cross-feature integration — a seed prompt arriving from
+  // Validation Center's "Ask AI Engineer" is sent as the first user turn
+  // exactly once, then reported back as consumed. initialIssueId (when
+  // present) is applied first so the seeded message's own local-intent
+  // match (if it matches 'explain-selected-issue'-style phrasing) already
+  // has the right issue in context.
+  useEffect(() => {
+    if (!initialPrompt) return;
+    if (initialIssueId) setLastDiscussedIssueId(initialIssueId);
+    void handleSend(initialPrompt);
+    onInitialPromptConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new initialPrompt value only, not on every render
+  }, [initialPrompt]);
 
   // Sub-phase 4, item 2/7 — the SAME validateEmail() call Validation
   // Center makes, over the SAME rendered HTML — one canonical report, so
@@ -233,13 +337,14 @@ export function AIEngineerPanel({
   const documentSettings: EmailDocumentSettingsSnapshot = useMemo(() => ({
     email_title: emailTitle, email_subject: emailSubject, favicon_url: faviconUrl,
     reset_css_enabled: resetCssEnabled, custom_css_enabled: customCssEnabled, custom_css: customCss,
-  }), [emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+    outlook_vml_enabled: outlookVml ?? false,
+  }), [emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml]);
 
   const validationReport = useMemo(() => {
     try {
       const html = renderEmailDocument({
         width, content, title: emailTitle, faviconUrl,
-        resetCssEnabled, customCssEnabled, customCss,
+        resetCssEnabled, customCssEnabled, customCss, outlookVml,
       });
       return validateEmail(html, content, platform, {
         emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss,
@@ -247,32 +352,60 @@ export function AIEngineerPanel({
     } catch {
       return null;
     }
-  }, [width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+  }, [width, content, platform, emailTitle, emailSubject, faviconUrl, resetCssEnabled, customCssEnabled, customCss, outlookVml]);
 
   function appendMessage(role: ChatMessage['role'], text: string) {
-    setMessages((current) => [...current, { id: newId('msg'), role, text }]);
+    setMessages((current) => {
+      const next = [...current, { id: newId('msg'), role, text }];
+      // E10 — persisted HERE, inside the functional updater, rather than
+      // a separate reactive "save on messages change" effect — this is
+      // the ONE place that always has the true, up-to-date next array,
+      // with no possible race against a stale/pre-load render (see the
+      // lazy initial-state docstring above for the exact race this
+      // avoids).
+      const forStorage: StoredConversationMessage[] = next.map((m) => ({ role: m.role, text: m.text }));
+      saveConversation(documentId, forStorage);
+      return next;
+    });
+    // E11 — every assistant reply is a candidate for voice output, in
+    // exactly ONE place, so no call site has to remember to speak. New
+    // speech interrupts old speech automatically (useSpeechSynthesis's
+    // speak() cancels before speaking) and stops on unmount/navigation
+    // (the hook's own cleanup effect) — nothing extra needed here.
+    if (role === 'assistant' && voiceSupported && !voice.muted) {
+      const spoken = speakableSummary(text);
+      if (spoken) voice.speak(spoken);
+    }
   }
 
-  async function handleSend() {
-    const message = draft.trim();
+  async function handleSend(overrideMessage?: string) {
+    const message = (overrideMessage ?? draft).trim();
     if (!message || sending || pending || pendingRepair) return;
 
     appendMessage('user', message);
-    setDraft('');
+    if (overrideMessage === undefined) setDraft('');
 
-    // Sub-phase 4, item 2/4 — document-level diagnose/explain/repair
-    // intents are recognized and answered ENTIRELY LOCALLY, before ever
-    // reaching the backend: only this component has a live
-    // ValidationReport, and routing these through the network would mean
-    // either duplicating validation rules server-side (item 7 forbids a
-    // second rule set) or sending the whole rendered HTML over the wire
-    // for no benefit. An unmatched message falls through unchanged to the
-    // normal backend-routed command flow below — module/CSS/title/
-    // subject/favicon commands are entirely unaffected by this addition.
+    // Sub-phase 4, item 2/4 (extended E9/E10) — document-level diagnose/
+    // explain/repair/context intents are recognized and answered ENTIRELY
+    // LOCALLY, before ever reaching the backend: only this component has
+    // a live ValidationReport, and routing these through the network
+    // would mean either duplicating validation rules server-side (item 7
+    // forbids a second rule set) or sending the whole rendered HTML over
+    // the wire for no benefit. An unmatched message falls through
+    // unchanged to the normal backend-routed command flow below —
+    // module/CSS/title/subject/favicon commands are entirely unaffected.
     const intentMatch = matchDocumentIntent(message);
     if (intentMatch && validationReport) {
-      const result = resolveDocumentIntent(intentMatch, validationReport, content.modules, documentSettings);
+      const selectedIssue = lastDiscussedIssueIdRef.current
+        ? validationReport.issues.find((issue) => issue.id === lastDiscussedIssueIdRef.current) ?? null
+        : null;
+      const result = resolveDocumentIntent(intentMatch, validationReport, content.modules, documentSettings, {
+        editorMode, selectedModule, selectedValidationIssue: selectedIssue,
+      });
       appendMessage('assistant', result.reply);
+      if (intentMatch.kind === 'explain-selected-issue' && selectedIssue) {
+        setLastDiscussedIssueId(selectedIssue.id);
+      }
       if (result.repairCandidates && result.repairCandidates.length > 0) {
         setPendingRepair({ messageId: newId('repair'), command: message, candidates: result.repairCandidates });
       } else {
@@ -300,12 +433,37 @@ export function AIEngineerPanel({
       ? { type: selectedModule.type, props: selectedModule.props ?? {} }
       : null;
 
+    // E9 — informational-only column context (never drives a real
+    // column-scoped edit action yet — see AIEngineerPanelProps'
+    // selectedColumn docstring). Resolved from the live module tree
+    // rather than sending raw layoutId/columnId strings, so the backend
+    // only ever sees a whitelisted module type + numeric index.
+    const layoutModule = selectedColumn ? findModuleById(content.modules, selectedColumn.layoutId) : null;
+    const columnIndex = layoutModule?.columns?.findIndex((column) => column.id === selectedColumn?.columnId) ?? -1;
+    const selectedColumnContext = layoutModule && columnIndex >= 0
+      ? { layout_module_type: layoutModule.type, column_index: columnIndex }
+      : null;
+
+    // E9/E10 — the last-discussed validation issue (if any), trimmed to
+    // the same small whitelist the backend serializer expects — see
+    // aiCommand.ts's AICommandValidationIssueContext.
+    const lastIssue = lastDiscussedIssueIdRef.current
+      ? validationReport?.issues.find((issue) => issue.id === lastDiscussedIssueIdRef.current) ?? null
+      : null;
+    const selectedValidationIssueContext = lastIssue
+      ? { id: lastIssue.id, title: lastIssue.title, detail: lastIssue.detail, severity: lastIssue.severity, category: lastIssue.category }
+      : null;
+
     try {
       const response = await requestAICommand({
         message,
         selected_module: selectedContext,
         platform,
         width,
+        editor_mode: editorMode,
+        selected_column: selectedColumnContext,
+        selected_validation_issue: selectedValidationIssueContext,
+        conversation_history: boundedHistoryForRequest(messages).map((m) => ({ role: m.role, content: m.text })),
       });
 
       appendMessage('assistant', response.reply);
@@ -515,6 +673,40 @@ export function AIEngineerPanel({
             onClick={() => setSubView('history')}
           >
             History{history.length > 0 ? ` (${history.length})` : ''}
+          </button>
+        </div>
+        <div className="ai-engineer-panel__toolbar-controls">
+          {voiceSupported && (
+            <>
+              <button
+                type="button"
+                className="ai-engineer-panel__voice-toggle"
+                aria-pressed={!voice.muted}
+                title={voice.muted ? 'Turn on voice output' : 'Turn off voice output'}
+                onClick={() => voice.toggleMuted()}
+              >
+                <span
+                  className={`mdaiw-icon ${voice.muted ? 'mdaiw-icon--volume-off' : 'mdaiw-icon--volume'}`}
+                  aria-hidden="true"
+                />
+                {voice.muted ? 'Voice output off' : 'Voice output on'}
+              </button>
+              {voice.status === 'speaking' && (
+                <button type="button" className="ai-engineer-panel__voice-stop" onClick={() => voice.cancel()}>
+                  <span className="mdaiw-icon mdaiw-icon--stop" aria-hidden="true" />
+                  Stop
+                </button>
+              )}
+            </>
+          )}
+          <button
+            type="button"
+            className="ai-engineer-panel__clear-conversation"
+            onClick={handleClearConversation}
+            disabled={messages.length === 0}
+            title="Clear this email's AI Engineer conversation"
+          >
+            Clear conversation
           </button>
         </div>
       </div>

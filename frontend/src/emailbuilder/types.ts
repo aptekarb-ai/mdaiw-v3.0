@@ -29,6 +29,9 @@ export interface EmailDocument {
   reset_css_enabled: boolean;
   custom_css_enabled: boolean;
   custom_css: string;
+  // Module-4 E4 — document-level default for settings.outlookVml. See
+  // DocumentSettingsDialog.tsx and htmlRenderer.ts's RenderableEmail.
+  outlook_vml_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -55,6 +58,7 @@ export interface UpdateEmailDocumentInput {
   reset_css_enabled?: boolean;
   custom_css_enabled?: boolean;
   custom_css?: string;
+  outlook_vml_enabled?: boolean;
 }
 
 // Feature 04 — a personal Saved Module, as returned by

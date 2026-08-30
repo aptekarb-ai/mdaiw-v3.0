@@ -9,6 +9,8 @@ import {
 import { columnResponsiveClassName, gutterResponsiveClassName } from '../responsiveStyles';
 import { createEmptyColumns, resolveColumnPixelWidths } from '../layoutModel';
 import { DEFAULT_EMAIL_WIDTH } from '../widthOptions';
+import { escapeAttribute, sanitizeUrl } from '../sanitize';
+import { estimateColumnVmlContentAllowancePx, renderVmlBackground } from '../vml';
 
 function layoutDefinition(
   type: EmailModuleType, label: string, columnWidths: number[], tags: string[],
@@ -63,6 +65,27 @@ function layoutDefinition(
       const columns = module.columns ?? createEmptyColumns(module.props.columnWidths.length);
       const gutterPx = resolveDesktopGutterPx(module.settings);
 
+      // Structural Width Contract correction — the layout's OWN internal
+      // padding (the "Internal Padding" control shown for every module,
+      // previously silently ignored by this one renderer) now
+      // participates in the SAME single width equation every other part
+      // of this file already follows:
+      //   P  = availableWidthPx (parent width, already narrowed by this
+      //        module's own Outer Spacer Columns via
+      //        renderModuleWithOuterStructure — never document.width)
+      //   C  = P - paddingLeft - paddingRight   (content/column region)
+      //   A  = C - gutterPx * (N - 1)           (available for columns)
+      // resolveColumnPixelWidths (below) performs the A -> Ci step; this
+      // is the ONE place P -> C happens, so the Properties panel (which
+      // calls the exact same resolveSpacing + this same
+      // resolveColumnPixelWidths via ColumnEditor.tsx) and this renderer
+      // can never diverge. Never below 0 — a pathologically narrow parent
+      // with large padding clamps to a 0px content region rather than
+      // going negative.
+      const layoutSpacing = resolveSpacing(module.settings, 'desktop');
+      const parentWidthPx = availableWidthPx ?? DEFAULT_EMAIL_WIDTH;
+      const contentWidthPx = Math.max(0, parentWidthPx - layoutSpacing.paddingLeft - layoutSpacing.paddingRight);
+
       // Independently Configurable Desktop/Mobile Gutter — the Mobile
       // gutter is a fully separate value that may be nonzero even when
       // Desktop's is 0 (or vice versa) — emit the gutter <td> whenever
@@ -80,22 +103,21 @@ function layoutDefinition(
       // the semantic ratios (module.props.columnWidths — untouched by
       // this, still the persisted source of truth) into exact column
       // pixel widths, with the configured DESKTOP gutter subtracted from
-      // `availableWidthPx` (the immediate parent's real pixel width,
-      // threaded down from renderModuleWithOuterStructure — never a
-      // hard-coded document.width) BEFORE ratio allocation. This is what
-      // makes columns + gutters sum to exactly availableWidthPx instead
-      // of the old `width="N%"` + separate fixed-px gutter <td> in the
-      // same row summing to MORE than the parent (100% + gutter). The
-      // gutter itself is never zeroed to solve this — its configured
-      // pixel value is preserved and actually subtracted correctly.
+      // `contentWidthPx` (the parent width ABOVE, already narrowed by
+      // both this module's own Outer Spacer Columns AND its own internal
+      // padding — never a hard-coded document.width) BEFORE ratio
+      // allocation. This is what makes paddingLeft + columns + gutters +
+      // paddingRight sum to exactly parentWidthPx instead of the old
+      // `width="N%"` + separate fixed-px gutter <td> in the same row
+      // summing to MORE than the parent (100% + gutter). The gutter
+      // itself is never zeroed to solve this — its configured pixel
+      // value is preserved and actually subtracted correctly.
       // Defensive fallback only — the centralized entry point
       // (registryCore.tsx's renderModuleWithOuterStructure, the ONLY
       // caller in production/exported HTML) always supplies a real
       // value; this covers direct definition.renderEmailHtml(module)
       // calls some tests use to inspect a single module's raw output.
-      const { columnPx } = resolveColumnPixelWidths(
-        module.props.columnWidths, gutterPx, availableWidthPx ?? DEFAULT_EMAIL_WIDTH,
-      );
+      const { columnPx } = resolveColumnPixelWidths(module.props.columnWidths, gutterPx, contentWidthPx);
 
       // Module-4 Final Gap Closure, Correction 2 (Feature 05) — the
       // Desktop visual sequence as an array of ORIGINAL column indexes.
@@ -125,7 +147,24 @@ function layoutDefinition(
         const widthPx = columnPx[index] ?? 0;
         const spacing = resolveSpacing(column.settings, 'desktop');
         const valign = column.settings.verticalAlign;
-        const background = column.settings.backgroundColor ? `background-color:${column.settings.backgroundColor};` : '';
+        // E5 — generic per-column background, shared by every registered
+        // layout/ratio through this one column-settings shape (never a
+        // per-layout special case). backgroundColor always stays the CSS
+        // fallback rendered BEHIND the image (declared first, so
+        // background-image paints over it when the image loads, and it
+        // alone still shows if the image fails/is absent).
+        const safeBackgroundImageUrl = column.settings.backgroundImage
+          ? escapeAttribute(sanitizeUrl(column.settings.backgroundImage))
+          : '';
+        const background = (
+          (column.settings.backgroundColor ? `background-color:${column.settings.backgroundColor};` : '')
+          + (safeBackgroundImageUrl ? `background-image:url('${safeBackgroundImageUrl}'); background-size:cover; background-position:center;` : '')
+        );
+        // The `background` HTML attribute is the "normal email clients"
+        // half of the pairing (paired with the CSS above) — only emitted
+        // when an image is actually configured, so a column with none
+        // renders byte-identical to before this field existed.
+        const backgroundAttr = safeBackgroundImageUrl ? ` background="${safeBackgroundImageUrl}"` : '';
         const innerContent = column.modules.length === 0
           ? '&nbsp;'
           : column.modules.map((nested) => {
@@ -145,15 +184,42 @@ function layoutDefinition(
         // standard content-box table-cell rendering, which this app
         // deliberately does not override via box-sizing:border-box
         // (Outlook does not reliably honor it).
-        const innerHtml = moduleTableRow(cell(innerContent, paddingStyle(spacing)));
+        let innerHtml = moduleTableRow(cell(innerContent, paddingStyle(spacing)));
+        // E5 — Classic Outlook (the Word rendering engine) does not
+        // reliably honor CSS background-image or the `background`
+        // attribute on a <td>, so it needs the same VML "ghost table"
+        // fallback Hero's own background variant already uses (reused
+        // via the SAME renderVmlBackground function — never a second VML
+        // system), gated on the SAME settings.outlookVml opt-in every
+        // other module's VML already uses. Uses the column's own
+        // gutter-aware resolved pixel width (widthPx, computed above by
+        // the SAME resolveColumnPixelWidths call the width attribute
+        // uses) — never a second, independent width. If there's no image
+        // configured, or outlookVml is off, this emits no VML at all.
+        if (safeBackgroundImageUrl && module.settings.outlookVml) {
+          innerHtml = renderVmlBackground(
+            {
+              imageSrc: column.settings.backgroundImage!,
+              backgroundColor: column.settings.backgroundColor,
+              paddingTop: spacing.paddingTop,
+              paddingBottom: spacing.paddingBottom,
+              contentAllowancePx: estimateColumnVmlContentAllowancePx(column.modules.length),
+            },
+            widthPx,
+            innerHtml,
+          );
+        }
         // class is appended AFTER width/valign (never before) so the
         // existing `<td width="N" valign="...` literal-prefix tests
         // stay byte-identical whether or not Feature 07 needs a class here.
         // Both the HTML width attribute AND the inline CSS pixel width
         // are emitted (Classic Outlook honors the attribute; modern
-        // clients honor the CSS) — never a bare percentage.
+        // clients honor the CSS) — never a bare percentage. The
+        // background HTML attribute (when present) is appended after
+        // class, for the same "never changes the existing literal
+        // prefix" reason.
         const columnCell = (
-          `<td width="${widthPx}" valign="${valign}" class="${columnResponsiveClassName(module.id, index)}" `
+          `<td width="${widthPx}" valign="${valign}" class="${columnResponsiveClassName(module.id, index)}"${backgroundAttr} `
           + `style="width:${widthPx}px; vertical-align:${valign}; padding:0; ${background}">`
           + `${innerHtml}</td>`
         );
@@ -173,7 +239,38 @@ function layoutDefinition(
         return columnCell + gutterCell;
       }).join('');
 
-      return moduleTable(`<tr>${cells}</tr>`);
+      const columnsTable = moduleTable(`<tr>${cells}</tr>`);
+
+      // Structural Width Contract correction — the parent/central layout
+      // structure's OWN padding (distinct from each column's own
+      // independent padding/background — see the per-column handling
+      // above, and distinct from the whole-module Layout Background,
+      // which now lives at registryCore.tsx's renderModuleWithOuterStructure
+      // instead — see the Layout Background scope correction below).
+      // Applied on an outer wrapping <td> around the columns table —
+      // never on any width-bearing column <td> itself — so padding can
+      // never make a structural column wider than its declared width
+      // (the exact same inner-wrapper strategy already used for each
+      // column's own padding above). Skipped entirely (byte-identical to
+      // before this correction) when there is no padding configured —
+      // the overwhelming default case.
+      const hasLayoutPadding = layoutSpacing.paddingTop > 0 || layoutSpacing.paddingRight > 0
+        || layoutSpacing.paddingBottom > 0 || layoutSpacing.paddingLeft > 0;
+
+      if (!hasLayoutPadding) {
+        return columnsTable;
+      }
+
+      // Layout Background scope correction — the whole-module background
+      // (color/image, including Outer Spacer Columns) is applied ONE
+      // level up, at registryCore.tsx's renderModuleWithOuterStructure —
+      // this file only ever sees the width AFTER outer-spacer narrowing,
+      // so it structurally cannot reach the spacer <td>s a background
+      // scoped to the FULL module row needs to cover. Padding still wraps
+      // here (it only ever affects the CENTRAL region's own width math,
+      // never the outer spacers) — see computeLayoutAvailableWidthPx's
+      // own docstring for the P -> C step this mirrors.
+      return moduleTableRow(cell(columnsTable, paddingStyle(layoutSpacing)));
     },
   };
 }

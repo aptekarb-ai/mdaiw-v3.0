@@ -255,3 +255,162 @@ describe('formatEmailHtml — MSO/VML/Office conditional comment round-trip (Sub
     expect(rawHtml).toContain('MODULE-2:');
   });
 });
+
+// E2 — HTML Formatting Correction. Inline content (a/strong/b/em/i/u/s/
+// small/sub/sup/span/font/code/mark/abbr/cite/q/time/label, plus the
+// `<br>` void element) must stay joined on one line with meaningful
+// whitespace preserved — never fragmented tag-by-tag/text-run-by-run the
+// way every OTHER (block) element still is. Block elements — table, tr,
+// td, div, p, headings, ul, ol, li, and anything not explicitly listed
+// as inline — keep the exact one-tag-per-line/depth-tracking behavior
+// the tests above already lock in; nothing here changes that.
+describe('formatEmailHtml — E2 inline-run correction (does not fragment inline content)', () => {
+  it('keeps "Hello <strong>World</strong>" on one line with the space preserved', () => {
+    expect(formatEmailHtml('Hello <strong>World</strong>')).toBe('Hello <strong>World</strong>');
+  });
+
+  it('never produces "HelloWorld" — the space between text and an inline tag is never lost', () => {
+    const output = formatEmailHtml('Hello <strong>World</strong>');
+    expect(output).not.toContain('HelloWorld');
+    expect(output.replace(/<\/?strong>/g, '')).toBe('Hello World');
+  });
+
+  it('keeps "Click <a href=...>here</a> today" on one line, both surrounding spaces intact', () => {
+    const input = 'Click <a href="https://example.com">here</a> today';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('keeps "<span>Hello</span> <em>world</em>" on one line, the space between the two tags intact', () => {
+    const input = '<span>Hello</span> <em>world</em>';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('keeps nested inline tags together: "<strong>Hello <em>World</em></strong>"', () => {
+    const input = '<strong>Hello <em>World</em></strong>';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('keeps "<a><strong>CTA text</strong></a>" — doubly-nested inline — on one line', () => {
+    const input = '<a href="https://example.com"><strong>CTA text</strong></a>';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('"<strong>Hello</strong> <em>World</em>" stays one line with the separating space intact', () => {
+    const input = '<strong>Hello</strong> <em>World</em>';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('"Text <a>link</a> text" preserves both surrounding spaces', () => {
+    const input = 'Text <a href="https://example.com">link</a> text';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('"Text<br>Text" is not corrupted — both words survive, <br> stays a void element', () => {
+    const output = formatEmailHtml('Text<br>Text');
+    expect(output).toContain('Text');
+    expect((output.match(/Text/g) ?? []).length).toBe(2);
+    expect(output).toContain('<br>');
+  });
+
+  it('only breaks lines at block boundaries: <p>Hello <strong>World</strong> today.</p>', () => {
+    const output = formatEmailHtml('<p>Hello <strong>World</strong> today.</p>');
+    expect(output).toBe('<p>\n  Hello <strong>World</strong> today.\n</p>');
+  });
+
+  it('mixed inline + block content: a <div> containing inline text, then a nested <p>', () => {
+    const input = '<div>\n  Hello <span>World</span>\n  <p>Next paragraph</p>\n</div>';
+    const output = formatEmailHtml(input);
+    expect(output).toBe(
+      '<div>\n  Hello <span>World</span>\n  <p>\n    Next paragraph\n  </p>\n</div>',
+    );
+  });
+
+  it('a table cell whose entire content is an inline-wrapped link is not fragmented into one line per tag (Feature 05 nested-column shape)', () => {
+    const input = '<table><tr><td>Click <strong>here</strong> to continue</td></tr></table>';
+    const output = formatEmailHtml(input);
+    expect(output).toBe(
+      '<table>\n  <tr>\n    <td>\n      Click <strong>here</strong> to continue\n    </td>\n  </tr>\n</table>',
+    );
+  });
+
+  it('still breaks a line for every block element (table, tr, td, div, p, h1, ul, li) — only inline elements are joined', () => {
+    const input = '<div><h1>Title</h1><ul><li>One</li><li>Two</li></ul><p>End</p></div>';
+    const output = formatEmailHtml(input);
+    const lines = output.split('\n').map((line) => line.trim());
+    expect(lines).toEqual([
+      '<div>', '<h1>', 'Title', '</h1>', '<ul>', '<li>', 'One', '</li>', '<li>', 'Two', '</li>', '</ul>', '<p>', 'End', '</p>', '</div>',
+    ]);
+  });
+
+  it('preserves a meaningful multi-space run inside an inline context verbatim', () => {
+    const input = '<p>Hello   <strong>World</strong></p>';
+    expect(formatEmailHtml(input)).toBe('<p>\n  Hello   <strong>World</strong>\n</p>');
+  });
+
+  it('does not corrupt HTML entities adjacent to inline tags (&nbsp;, &amp;, &#39;)', () => {
+    const input = 'Terms &amp; Conditions&nbsp;<a href="https://example.com">apply</a>&#39;s here';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('does not corrupt an AMPscript block (%%[ ... ]%%) embedded next to inline tags', () => {
+    const input = 'Hi <strong>%%[ IF @isVip == true THEN ]%%VIP%%[ ENDIF ]%%</strong> customer';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('does not corrupt a personalization token (%%FirstName%%) embedded next to inline tags', () => {
+    const input = 'Hello <strong>%%FirstName%%</strong>, welcome back';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('does not corrupt a style attribute containing semicolons and a URL on an inline or block tag', () => {
+    const input = '<span style="color:#0082AD; background-image:url(\'https://cdn.example.com/x.png?a=1;b=2\');">Text</span>';
+    expect(formatEmailHtml(input)).toBe(input);
+  });
+
+  it('an MSO conditional comment sitting directly beside inline content does not get absorbed into the inline run, and does not break it either', () => {
+    const input = 'Hello <strong>World</strong><!--[if mso]>MSO-ONLY<![endif]--> today';
+    const output = formatEmailHtml(input);
+    const lines = output.split('\n');
+    expect(lines).toContain('<!--[if mso]>MSO-ONLY<![endif]-->');
+    expect(output).toContain('Hello <strong>World</strong>');
+    expect(output).toContain('today');
+  });
+
+  it('a module-content-cell-shaped snippet (width-bearing <td> wrapping a text run) with inline formatting inside it does not fragment the inline run', () => {
+    // This app's own modules currently escape all user text (no module
+    // emits raw inline HTML today — see e.g. the Text module's own
+    // escapeHtml call), so this mirrors the general STRUCTURAL shape a
+    // module's content cell renders as (a width-bearing <td> wrapping
+    // text), populated with inline tags, to prove the formatter itself
+    // handles this shape correctly regardless of what currently produces
+    // it — the correction is about the formatter's own correctness, not
+    // a claim that today's renderer already emits inline tags.
+    const input = (
+      '<td width="100%" style="padding:20px; text-align:left; font-size:16px;">'
+      + 'Hello <strong>World</strong>, click <a href="https://example.com">here</a>.'
+      + '</td>'
+    );
+    const formatted = formatEmailHtml(input);
+    expect(formatted).toContain('Hello <strong>World</strong>, click <a href="https://example.com">here</a>.');
+  });
+
+  it('Raw -> Formatted -> Raw stays lossless for HTML containing inline-formatted content (the underlying raw string is never mutated, and re-formatting is deterministic)', () => {
+    const rawHtml = '<table><tr><td>Hello <strong>World</strong> today.</td></tr></table>';
+    const formatted = formatEmailHtml(rawHtml);
+    expect(formatEmailHtml(rawHtml)).toBe(formatted);
+    expect(rawHtml).toBe('<table><tr><td>Hello <strong>World</strong> today.</td></tr></table>');
+    expect(formatted).toContain('Hello <strong>World</strong> today.');
+  });
+
+  it('formatting never mutates the input string (pure function contract)', () => {
+    const input = 'Hello <strong>World</strong>';
+    const snapshot = input;
+    formatEmailHtml(input);
+    expect(input).toBe(snapshot);
+  });
+
+  it('an unrecognized/exotic tag name defaults to block behavior (safe allowlist, not a denylist)', () => {
+    const output = formatEmailHtml('<custom-widget>Hello <strong>World</strong></custom-widget>');
+    expect(output).toBe('<custom-widget>\n  Hello <strong>World</strong>\n</custom-widget>');
+  });
+});

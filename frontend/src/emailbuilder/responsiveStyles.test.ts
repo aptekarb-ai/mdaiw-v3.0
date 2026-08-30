@@ -158,16 +158,30 @@ describe('renderResponsiveStyles', () => {
     expect(renderResponsiveStyles(withModules([layout]))).toBe('');
   });
 
-  // --- Instruction 24: mobile column gap ---------------------------------------
-  it('Mobile column gap adds padding-bottom on every stacked column except the last', () => {
+  // --- Mobile gutter/stacking correction ----------------------------------------
+  // settings.mobileColumnGap (the older, separate "Mobile column gap"
+  // field/UI control — formerly "Instruction 24") has been retired as a
+  // rendering mechanism: mobileColumnGutterPx/hideGutterOnMobile is now
+  // the single source of truth for vertical spacing between stacked
+  // columns, so it can never double up with the gutter-based spacer. The
+  // field itself is still preserved through migration (non-destructive),
+  // it just has no effect on the rendered CSS anymore.
+  it('a legacy mobileColumnGap value has no rendering effect — no padding-bottom rule is emitted for it', () => {
     const layout = createModule('layout-3col', 0);
     layout.settings = { ...layout.settings, mobileColumnGap: { value: 12, unit: 'px' } };
+    const css = renderResponsiveStyles(withModules([layout]));
+    expect(css).not.toMatch(/padding-bottom/);
+  });
+
+  it('vertical spacing between stacked columns comes from the Mobile gutter alone, never doubled up with mobileColumnGap', () => {
+    const layout = createModule('layout-3col', 0);
+    layout.settings = {
+      ...layout.settings, mobileColumnGutterPx: 20, hideGutterOnMobile: false, mobileColumnGap: { value: 12, unit: 'px' },
+    };
     const layoutCls = moduleResponsiveClassName(layout.id);
     const css = renderResponsiveStyles(withModules([layout]));
-    expect(css).toContain(`.${layoutCls}-col0{padding-bottom:12px !important;}`);
-    expect(css).toContain(`.${layoutCls}-col1{padding-bottom:12px !important;}`);
-    expect(css).not.toContain(`.${layoutCls}-col2{padding-bottom:12px !important;}`);
-    expect(css).not.toMatch(/margin/);
+    expect(css).toContain(`.${layoutCls}-gut0{display:block !important; width:100% !important; height:20px !important;`);
+    expect(css).not.toMatch(/padding-bottom/);
   });
 
   // --- Nested modules ------------------------------------------------------------
