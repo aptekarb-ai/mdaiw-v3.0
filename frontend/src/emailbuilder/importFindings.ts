@@ -13,11 +13,12 @@
 // silently becoming (or being confused with) persistent validation
 // errors.
 export type ImportFindingCategory =
-  | 'normalized'          // imported, but with a lossy/adjusted mapping
+  | 'normalized'          // imported, but with a lossy/adjusted mapping (includes styling approximation)
   | 'unsupported'         // no existing module can represent this — dropped
   | 'security'            // actively dangerous content — stripped
   | 'unresolved-resource' // an image/link source could not be safely resolved
-  | 'structural-conversion'; // column/table structure required normalization
+  | 'structural-conversion' // column/table/spacer/gutter structure required normalization
+  | 'outlook-regeneration'; // source MSO/VML content is not carried over — the destination renderer regenerates Outlook compatibility itself
 
 export interface ImportFinding {
   category: ImportFindingCategory;

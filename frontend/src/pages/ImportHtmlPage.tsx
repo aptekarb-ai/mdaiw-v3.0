@@ -21,6 +21,7 @@ const FINDING_CATEGORY_LABELS: Record<ImportFinding['category'], string> = {
   security: 'Removed for security',
   'unresolved-resource': 'Unresolved resource',
   'structural-conversion': 'Structural conversion',
+  'outlook-regeneration': 'Outlook compatibility regenerated',
 };
 
 // Phase C (Import HTML) — the ONE import experience shared by Dashboard's
