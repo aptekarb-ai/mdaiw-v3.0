@@ -166,6 +166,60 @@ export interface AICommandHistoryTurn {
   content: string;
 }
 
+// R4-A (Import HTML AI Reconstruction) — the same "small, whitelisted,
+// bounded" contract selected_validation_issue already established for
+// E9, applied to an Import Review reconstruction instead of a
+// validation issue. Never the raw imported HTML, never a full
+// DetectedStructure/FidelityReport dump — see
+// importReconstructionContext.ts's buildImportReconstructionContext,
+// the ONE place that condenses those two (already-existing, R1/R2)
+// artifacts into this shape. Field names are snake_case to match the
+// wire format exactly, same convention as AIComposeItem above.
+export interface AICommandImportFindingSummary {
+  category: string;
+  source: string;
+  location: string;
+  reason: string;
+}
+
+export interface AICommandFidelityCategorySummary {
+  id: string;
+  status: string;
+  summary: string;
+  finding_count: number;
+  // Capped sample, never the full findings list for a category with
+  // many — see MAX_SAMPLE_FINDINGS_PER_CATEGORY in
+  // importReconstructionContext.ts.
+  sample_findings: AICommandImportFindingSummary[];
+}
+
+export interface AICommandRegionSummary {
+  role: string;
+  confidence: number;
+  source_position: string;
+  // First ~120 chars only — a preview for grounding, never the full
+  // source text of every region in the document.
+  content_preview?: string;
+  column_ratio?: number[];
+  has_image: boolean;
+  has_links: boolean;
+  background_color?: string;
+  align?: string;
+}
+
+export interface AICommandImportReconstructionContext {
+  document_width: number;
+  module_count: number;
+  // The TRUE total number of detected regions, even when `regions`
+  // below has been capped/truncated — so the model knows it may be
+  // seeing a partial list, never silently assumes completeness.
+  region_count: number;
+  regions: AICommandRegionSummary[];
+  // Always exactly the 8 FidelityReport categories, in FIDELITY_CATEGORY_ORDER.
+  fidelity_categories: AICommandFidelityCategorySummary[];
+  has_mso_conditional_content: boolean;
+}
+
 export interface AICommandRequest {
   message: string;
   selected_module?: AICommandSelectedModuleContext | null;
@@ -178,6 +232,12 @@ export interface AICommandRequest {
   selected_validation_issue?: AICommandValidationIssueContext | null;
   // E10 — bounded prior turns for this SAME document's conversation only.
   conversation_history?: AICommandHistoryTurn[];
+  // R4-A — additive, optional; present only for an Import Review
+  // reconstruction-review conversation (see
+  // ImportReviewWorkspace.tsx/AIEngineerPanel.tsx's R4-B wiring). Every
+  // existing caller/test that omits this keeps compiling and behaving
+  // unchanged, same convention as every prior additive context field.
+  import_reconstruction?: AICommandImportReconstructionContext | null;
 }
 
 // Phase A — 3-way provider identifier, extended from V1's

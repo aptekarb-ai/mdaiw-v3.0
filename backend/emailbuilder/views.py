@@ -156,6 +156,11 @@ class EmailAICommandView(APIView):
             # aiConversationStorage.ts's own docstring for the client-side
             # persistence decision).
             'conversation_history': data.get('conversation_history') or [],
+            # R4-A (Import HTML AI Reconstruction) — additive, optional;
+            # present only for an Import Review reconstruction-review
+            # conversation. See ai_command_openai.py's _build_safe_context
+            # for how the optional AI provider actually uses this.
+            'import_reconstruction': data.get('import_reconstruction'),
             # Used only by the optional AI provider's own separate
             # throttle (ai_command_openai.py) — never logged or returned.
             '_rate_limit_identifier': str(request.user.pk),

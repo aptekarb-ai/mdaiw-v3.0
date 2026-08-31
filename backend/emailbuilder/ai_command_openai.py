@@ -64,7 +64,11 @@ _SYSTEM_PROMPT = (
     'tab the user is on), selected_column (which column is focused — informational only, you '
     'cannot yet target a column directly, only the currently selected module), and '
     'selected_validation_issue (a specific compatibility/accessibility issue the user was just '
-    'looking at). Prior turns of this SAME conversation may be included as ordinary user/'
+    'looking at), and import_reconstruction (present only when this conversation exists to review '
+    'an imported HTML email\'s reconstruction into this builder — a bounded summary of the '
+    'detected source regions and the reconstruction fidelity report; never the raw imported HTML, '
+    'and never a request to invent content not present in that summary). Prior turns of this SAME '
+    'conversation may be included as ordinary user/'
     'assistant messages before the current one — use them to resolve a follow-up like "make it '
     'darker" or "can you fix it" against what was just discussed, but never assume anything '
     'about a different conversation or document. '
@@ -245,7 +249,84 @@ def _build_safe_context(context):
         'editor_mode': safe_editor_mode,
         'selected_column': safe_column,
         'selected_validation_issue': safe_issue,
+        'import_reconstruction': _build_safe_import_reconstruction(context.get('import_reconstruction')),
     }, safe_history
+
+
+# R4-A (Import HTML AI Reconstruction) — same defensive-re-check posture
+# as every other _build_safe_context branch above: the serializer
+# (serializers.py::ImportReconstructionContextSerializer) already bounds
+# this on the way in, but this function never trusts the caller's shape
+# either. Caps are re-applied here too (never assume the caller's own
+# cap held) — MAX_REGIONS/MAX_SAMPLE_FINDINGS mirror
+# importReconstructionContext.ts's own constants, kept in sync manually.
+_MAX_IMPORT_REGIONS = 20
+_MAX_IMPORT_SAMPLE_FINDINGS = 3
+_IMPORT_FIDELITY_CATEGORY_IDS = ('structure', 'content', 'typography', 'spacing', 'images', 'links', 'responsive', 'outlook')
+_IMPORT_FIDELITY_STATUSES = ('preserved', 'normalized', 'approximated', 'removed', 'unsupported')
+
+
+def _build_safe_import_finding(raw):
+    if not isinstance(raw, dict):
+        return None
+    if not all(isinstance(raw.get(key), str) for key in ('category', 'source', 'location', 'reason')):
+        return None
+    return {
+        'category': raw['category'][:60], 'source': raw['source'][:200],
+        'location': raw['location'][:100], 'reason': raw['reason'][:500],
+    }
+
+
+def _build_safe_import_reconstruction(raw):
+    if not isinstance(raw, dict):
+        return None
+
+    regions = []
+    raw_regions = raw.get('regions')
+    if isinstance(raw_regions, list):
+        for region in raw_regions[:_MAX_IMPORT_REGIONS]:
+            if not isinstance(region, dict) or not isinstance(region.get('role'), str):
+                continue
+            regions.append({
+                'role': region['role'][:40],
+                'confidence': region.get('confidence') if isinstance(region.get('confidence'), (int, float)) else None,
+                'source_position': region.get('source_position')[:100] if isinstance(region.get('source_position'), str) else None,
+                'content_preview': region.get('content_preview')[:200] if isinstance(region.get('content_preview'), str) else None,
+                'column_ratio': region.get('column_ratio') if isinstance(region.get('column_ratio'), list) else None,
+                'has_image': bool(region.get('has_image')),
+                'has_links': bool(region.get('has_links')),
+                'background_color': region.get('background_color')[:20] if isinstance(region.get('background_color'), str) else None,
+                'align': region.get('align')[:10] if isinstance(region.get('align'), str) else None,
+            })
+
+    categories = []
+    raw_categories = raw.get('fidelity_categories')
+    if isinstance(raw_categories, list):
+        for category in raw_categories:
+            if not isinstance(category, dict):
+                continue
+            if category.get('id') not in _IMPORT_FIDELITY_CATEGORY_IDS or category.get('status') not in _IMPORT_FIDELITY_STATUSES:
+                continue
+            if not isinstance(category.get('summary'), str):
+                continue
+            sample_findings = category.get('sample_findings')
+            safe_findings = []
+            if isinstance(sample_findings, list):
+                safe_findings = [f for f in (_build_safe_import_finding(x) for x in sample_findings[:_MAX_IMPORT_SAMPLE_FINDINGS]) if f]
+            categories.append({
+                'id': category['id'], 'status': category['status'], 'summary': category['summary'][:300],
+                'finding_count': category.get('finding_count') if isinstance(category.get('finding_count'), int) else len(safe_findings),
+                'sample_findings': safe_findings,
+            })
+
+    return {
+        'document_width': raw.get('document_width') if isinstance(raw.get('document_width'), int) else None,
+        'module_count': raw.get('module_count') if isinstance(raw.get('module_count'), int) else None,
+        'region_count': raw.get('region_count') if isinstance(raw.get('region_count'), int) else None,
+        'regions': regions,
+        'fidelity_categories': categories,
+        'has_mso_conditional_content': bool(raw.get('has_mso_conditional_content')),
+    }
 
 
 class OpenAIEmailCommandProvider(EmailCommandProvider):

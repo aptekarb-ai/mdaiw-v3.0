@@ -3658,6 +3658,85 @@ class EmailAICommandViewTests(TestCase):
         self.assertEqual(body['provider'], 'deterministic')
         self.assertEqual(body['action']['type'], 'INSERT_MODULE')
 
+    # ------------------------------------------------------------------
+    # R4-A (Import HTML AI Reconstruction) -- bounded reconstruction
+    # context + request contract.
+    # ------------------------------------------------------------------
+
+    def _minimal_import_reconstruction(self, **overrides):
+        payload = {
+            'document_width': 600,
+            'module_count': 10,
+            'region_count': 10,
+            'regions': [{
+                'role': 'header', 'confidence': 0.95, 'source_position': 'row 2',
+                'has_image': True, 'has_links': True,
+            }],
+            'fidelity_categories': [{
+                'id': 'structure', 'status': 'approximated',
+                'summary': 'Source column ratio 38/62 was approximated to supported layout 40/60.',
+                'finding_count': 1,
+                'sample_findings': [{
+                    'category': 'structural-conversion', 'source': '<tr> (2 columns)', 'location': 'row 8',
+                    'reason': 'Source column widths do not exactly match any supported layout split.',
+                }],
+            }],
+            'has_mso_conditional_content': False,
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_accepts_bounded_r4a_import_reconstruction_context(self):
+        self.client.force_login(self.user)
+        response = self._post({'message': 'review the reconstruction', 'import_reconstruction': self._minimal_import_reconstruction()})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['success'])
+
+    def test_import_reconstruction_over_cap_regions_rejected(self):
+        self.client.force_login(self.user)
+        oversized_regions = [{'role': 'paragraph', 'confidence': 1, 'source_position': f'row {i}'} for i in range(21)]
+        response = self._post({
+            'message': 'review the reconstruction',
+            'import_reconstruction': self._minimal_import_reconstruction(regions=oversized_regions, region_count=21),
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_import_reconstruction_invalid_category_id_rejected(self):
+        self.client.force_login(self.user)
+        bad_categories = [{'id': 'not-a-real-category', 'status': 'preserved', 'summary': 'x', 'finding_count': 0, 'sample_findings': []}]
+        response = self._post({
+            'message': 'review the reconstruction',
+            'import_reconstruction': self._minimal_import_reconstruction(fidelity_categories=bad_categories),
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_import_reconstruction_invalid_status_rejected(self):
+        self.client.force_login(self.user)
+        bad_categories = [{'id': 'structure', 'status': 'perfect', 'summary': 'x', 'finding_count': 0, 'sample_findings': []}]
+        response = self._post({
+            'message': 'review the reconstruction',
+            'import_reconstruction': self._minimal_import_reconstruction(fidelity_categories=bad_categories),
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_deterministic_provider_still_works_with_import_reconstruction_context_present(self):
+        """The free, always-available deterministic router must never
+        break just because the R4-A import_reconstruction context is
+        present -- it simply ignores what it doesn't use, same posture
+        as every other additive context field."""
+        self.client.force_login(self.user)
+        response = self._post({'message': 'add a button', 'import_reconstruction': self._minimal_import_reconstruction()})
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['provider'], 'deterministic')
+        self.assertEqual(body['action']['type'], 'INSERT_MODULE')
+
+    def test_import_reconstruction_omitted_behaves_exactly_as_before(self):
+        self.client.force_login(self.user)
+        response = self._post({'message': 'add a button'})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['success'])
+
 
 class BuildSafeContextTests(TestCase):
     """Module-4 E9/E10 -- direct unit tests of
@@ -3735,6 +3814,76 @@ class BuildSafeContextTests(TestCase):
             'conversation_history': [{'role': 'user', 'content': 'x' * 5000}],
         })
         self.assertLessEqual(len(history[0]['content']), 1000)
+
+    # ------------------------------------------------------------------
+    # R4-A (Import HTML AI Reconstruction) -- direct unit tests of
+    # _build_safe_import_reconstruction, same defense-in-depth posture
+    # as every E9/E10 test above: must be safe even called with a raw
+    # dict that bypassed the serializer entirely.
+    # ------------------------------------------------------------------
+
+    def test_import_reconstruction_none_when_absent(self):
+        safe, _ = ai_command_openai_module._build_safe_context({})
+        self.assertIsNone(safe['import_reconstruction'])
+
+    def test_import_reconstruction_whitelists_valid_fields(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'import_reconstruction': {
+                'document_width': 600, 'module_count': 10, 'region_count': 10,
+                'regions': [{'role': 'header', 'confidence': 0.95, 'source_position': 'row 2', 'has_image': True, 'has_links': True}],
+                'fidelity_categories': [{
+                    'id': 'structure', 'status': 'approximated', 'summary': 'Approximated.', 'finding_count': 1,
+                    'sample_findings': [{'category': 'structural-conversion', 'source': '<tr>', 'location': 'row 8', 'reason': 'mismatch'}],
+                }],
+                'has_mso_conditional_content': False,
+            },
+        })
+        result = safe['import_reconstruction']
+        self.assertEqual(result['document_width'], 600)
+        self.assertEqual(result['regions'][0]['role'], 'header')
+        self.assertEqual(result['fidelity_categories'][0]['status'], 'approximated')
+        self.assertEqual(result['fidelity_categories'][0]['sample_findings'][0]['source'], '<tr>')
+
+    def test_import_reconstruction_caps_regions_even_if_caller_bypasses_serializer(self):
+        oversized_regions = [{'role': 'paragraph', 'confidence': 1, 'source_position': f'row {i}'} for i in range(50)]
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'import_reconstruction': {'regions': oversized_regions},
+        })
+        self.assertLessEqual(len(safe['import_reconstruction']['regions']), 20)
+
+    def test_import_reconstruction_rejects_invalid_category_id(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'import_reconstruction': {
+                'fidelity_categories': [{'id': 'not-a-real-category', 'status': 'preserved', 'summary': 'x', 'finding_count': 0}],
+            },
+        })
+        self.assertEqual(safe['import_reconstruction']['fidelity_categories'], [])
+
+    def test_import_reconstruction_ignores_malformed_region_entries(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'import_reconstruction': {
+                'regions': [
+                    {'role': 'header', 'confidence': 0.9, 'source_position': 'row 1'},
+                    {'confidence': 0.5},  # missing role
+                    'not even a dict',
+                ],
+            },
+        })
+        self.assertEqual(len(safe['import_reconstruction']['regions']), 1)
+        self.assertEqual(safe['import_reconstruction']['regions'][0]['role'], 'header')
+
+    def test_forged_unapproved_import_reconstruction_keys_never_leak(self):
+        safe, _ = ai_command_openai_module._build_safe_context({
+            'import_reconstruction': {
+                'document_width': 600,
+                'internal_secret_field': 'should never appear',
+                'regions': [{'role': 'header', 'confidence': 0.9, 'source_position': 'row 1', 'other_users_document_id': 999999}],
+            },
+        })
+        serialized = json.dumps(safe['import_reconstruction'])
+        self.assertNotIn('internal_secret_field', serialized)
+        self.assertNotIn('other_users_document_id', serialized)
+        self.assertNotIn('999999', serialized)
 
 
 class OpenAIEmailCommandProviderTests(TestCase):

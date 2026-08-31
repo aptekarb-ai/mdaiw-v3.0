@@ -273,6 +273,86 @@ class ConversationTurnSerializer(serializers.Serializer):
 # server never trusts a client-side cap alone.
 MAX_CONVERSATION_HISTORY_TURNS = 8
 
+# R4-A (Import HTML AI Reconstruction) — the SAME "server never trusts a
+# client-side cap alone" posture as MAX_CONVERSATION_HISTORY_TURNS above,
+# applied to importReconstructionContext.ts's own caps (MAX_REGIONS_SENT/
+# MAX_SAMPLE_FINDINGS_PER_CATEGORY). Kept in sync manually — both sides
+# are small, stable, documented constants, not runtime-shared config.
+MAX_IMPORT_REGIONS = 20
+MAX_IMPORT_SAMPLE_FINDINGS_PER_CATEGORY = 3
+MAX_IMPORT_FIDELITY_CATEGORIES = 8
+
+IMPORT_FIDELITY_CATEGORY_IDS = ['structure', 'content', 'typography', 'spacing', 'images', 'links', 'responsive', 'outlook']
+IMPORT_FIDELITY_STATUSES = ['preserved', 'normalized', 'approximated', 'removed', 'unsupported']
+IMPORT_FINDING_CATEGORIES = ['normalized', 'unsupported', 'security', 'unresolved-resource', 'structural-conversion', 'outlook-regeneration']
+# frontend/src/emailbuilder/htmlImportAnalysis.ts's DetectedRegionRole —
+# kept in sync manually, same posture as the fidelity constants above.
+IMPORT_REGION_ROLES = [
+    'preheader', 'header', 'hero', 'heading', 'paragraph', 'cta', 'image', 'columns', 'divider', 'footer', 'unknown',
+]
+
+
+class ImportFindingSummarySerializer(serializers.Serializer):
+    """R4-A — a condensed ImportFinding (see importFindings.ts): category/
+    source/location/reason only, never `outcome`/`recommendation` (kept
+    off the wire to hold the per-finding payload down; the reason alone
+    is enough for the AI to explain a difference)."""
+
+    category = serializers.ChoiceField(choices=IMPORT_FINDING_CATEGORIES)
+    source = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
+    location = serializers.CharField(max_length=100, trim_whitespace=True, allow_blank=False)
+    reason = serializers.CharField(max_length=500, trim_whitespace=True, allow_blank=False)
+
+
+class ImportFidelityCategorySummarySerializer(serializers.Serializer):
+    """R4-A — one FidelityCategoryResult (htmlImportFidelity.ts), condensed:
+    `findings` itself is never sent, only a bounded `sample_findings` plus
+    the total `finding_count` — the model can reason about "this category
+    has more issues than shown" without receiving an unbounded list."""
+
+    id = serializers.ChoiceField(choices=IMPORT_FIDELITY_CATEGORY_IDS)
+    status = serializers.ChoiceField(choices=IMPORT_FIDELITY_STATUSES)
+    summary = serializers.CharField(max_length=300, trim_whitespace=True, allow_blank=False)
+    finding_count = serializers.IntegerField(min_value=0)
+    sample_findings = ImportFindingSummarySerializer(many=True, required=False, default=list, max_length=MAX_IMPORT_SAMPLE_FINDINGS_PER_CATEGORY)
+
+
+class ImportRegionSummarySerializer(serializers.Serializer):
+    """R4-A — one condensed DetectedRegion (htmlImportAnalysis.ts).
+    `content_preview` is a short excerpt, never the full source text of
+    every region in the document — see
+    importReconstructionContext.ts's CONTENT_PREVIEW_MAX_CHARS."""
+
+    role = serializers.ChoiceField(choices=IMPORT_REGION_ROLES)
+    confidence = serializers.FloatField(min_value=0, max_value=1)
+    source_position = serializers.CharField(max_length=100, trim_whitespace=True, allow_blank=False)
+    content_preview = serializers.CharField(max_length=200, required=False, allow_null=True, default=None)
+    column_ratio = serializers.ListField(child=serializers.FloatField(), required=False, allow_null=True, default=None, max_length=8)
+    has_image = serializers.BooleanField(default=False)
+    has_links = serializers.BooleanField(default=False)
+    background_color = serializers.CharField(max_length=20, required=False, allow_null=True, default=None)
+    align = serializers.CharField(max_length=10, required=False, allow_null=True, default=None)
+
+
+class ImportReconstructionContextSerializer(serializers.Serializer):
+    """R4-A (Import HTML AI Reconstruction) — the bounded reconstruction
+    context an "Review reconstruction with AI Engineer" conversation
+    attaches (see importReconstructionContext.ts's
+    buildImportReconstructionContext, the ONE place on the frontend that
+    builds this shape from R1's DetectedStructure + R2's FidelityReport).
+    Never the raw imported HTML — every field here is either a small
+    scalar or a capped list of already-condensed summaries. Malformed/
+    over-cap input is rejected by this serializer the same way every
+    other AICommandRequest field already is (DRF's own field-level
+    errors -> 400), never silently truncated by view code."""
+
+    document_width = serializers.IntegerField(min_value=1)
+    module_count = serializers.IntegerField(min_value=0)
+    region_count = serializers.IntegerField(min_value=0)
+    regions = ImportRegionSummarySerializer(many=True, required=False, default=list, max_length=MAX_IMPORT_REGIONS)
+    fidelity_categories = ImportFidelityCategorySummarySerializer(many=True, required=False, default=list, max_length=MAX_IMPORT_FIDELITY_CATEGORIES)
+    has_mso_conditional_content = serializers.BooleanField(default=False)
+
 
 class EmailAICommandRequestSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=False)
@@ -291,6 +371,10 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     conversation_history = ConversationTurnSerializer(
         many=True, required=False, default=list, max_length=MAX_CONVERSATION_HISTORY_TURNS,
     )
+    # R4-A — additive, optional; present only for an Import Review
+    # reconstruction-review conversation. A request that omits this
+    # (every pre-R4 client) behaves exactly as before.
+    import_reconstruction = ImportReconstructionContextSerializer(required=False, allow_null=True, default=None)
 
 
 class LearningSignalRequestSerializer(serializers.Serializer):
