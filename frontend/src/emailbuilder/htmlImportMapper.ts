@@ -76,14 +76,14 @@ export function extractImportedTitle(document: Document): string {
 
 // --- Style -> typed props ----------------------------------------------
 
-function readColor(declarations: Map<string, string>, property: string): string | null {
+export function readColor(declarations: Map<string, string>, property: string): string | null {
   const value = declarations.get(property);
   if (!value) return null;
   const trimmed = value.trim();
   return HEX_COLOR.test(trimmed) ? trimmed.toLowerCase() : null;
 }
 
-function readPx(declarations: Map<string, string>, property: string): number | null {
+export function readPx(declarations: Map<string, string>, property: string): number | null {
   const value = declarations.get(property);
   if (!value) return null;
   const match = /^(\d+(?:\.\d+)?)px$/.exec(value.trim());
@@ -99,7 +99,7 @@ function readFontFamily(declarations: Map<string, string>): string | undefined {
   return match && isValidFontId(match.id) ? match.id : undefined;
 }
 
-function readAlign(declarations: Map<string, string>, attrAlign: string | null): HorizontalAlign | undefined {
+export function readAlign(declarations: Map<string, string>, attrAlign: string | null): HorizontalAlign | undefined {
   const raw = (declarations.get('text-align') ?? attrAlign ?? '').trim().toLowerCase();
   if (raw === 'left' || raw === 'center' || raw === 'right') return raw;
   return undefined;
@@ -109,7 +109,7 @@ function readAlign(declarations: Map<string, string>, attrAlign: string | null):
 // legacy `align="..."` attribute) — used to carry alignment onto a leaf
 // module (image/button) from either the element itself or, when it has
 // none of its own, its immediate containing cell/container.
-function elementAlignHint(el: Element): HorizontalAlign | undefined {
+export function elementAlignHint(el: Element): HorizontalAlign | undefined {
   const declarations = extractStyleDeclarations(readAllowedAttribute(el, 'style') ?? '');
   return readAlign(declarations, readAllowedAttribute(el, 'align'));
 }
@@ -135,7 +135,7 @@ function hasNonZeroPaddingAllSides(declarations: Map<string, string>): boolean {
 // ("12px 24px" = vertical/horizontal) collapses onto. A 3- or 4-value
 // shorthand averages its two vertical (top/bottom) and two horizontal
 // (left/right) values rather than picking one side arbitrarily.
-function readPaddingHV(declarations: Map<string, string>): { horizontal: number; vertical: number } | null {
+export function readPaddingHV(declarations: Map<string, string>): { horizontal: number; vertical: number } | null {
   const shorthand = declarations.get('padding');
   if (shorthand) {
     const parts = shorthand.trim().split(/\s+/).map((p) => {
@@ -171,7 +171,7 @@ function readPaddingHV(declarations: Map<string, string>): { horizontal: number;
 // font size for this module (falling back to the Text module's own
 // default, 16, when the source specified no font-size either) — the
 // same "resolve against this element's own font size" rule browsers use.
-function readLineHeightPx(declarations: Map<string, string>, resolvedFontSizePx: number): number | null {
+export function readLineHeightPx(declarations: Map<string, string>, resolvedFontSizePx: number): number | null {
   const value = declarations.get('line-height');
   if (!value) return null;
   const trimmed = value.trim();
@@ -191,7 +191,7 @@ function readLineHeightPx(declarations: Map<string, string>, resolvedFontSizePx:
 // textFromInlineContent's own docstring for this same, pre-existing,
 // accepted limitation); it silently keeps the module's normal weight,
 // same as today.
-function isWholeLineBold(el: Element): boolean {
+export function isWholeLineBold(el: Element): boolean {
   const tag = el.tagName.toLowerCase();
   if (tag === 'strong' || tag === 'b') return true;
   const children = Array.from(el.children);
@@ -223,7 +223,7 @@ function isWholeLineBold(el: Element): boolean {
 // guess), consistent with readColor's existing behavior elsewhere. A
 // background image goes through the exact same isSafeResourceUrl policy
 // as an <img>'s own src — never a laxer rule for a decorative image.
-function readBackground(el: Element): { color?: string; image?: string } {
+export function readBackground(el: Element): { color?: string; image?: string } {
   const result: { color?: string; image?: string } = {};
   const style = readAllowedAttribute(el, 'style');
   const declarations = style ? extractStyleDeclarations(style) : new Map<string, string>();
@@ -270,7 +270,7 @@ function applyOuterSpacingPx(module: EmailModule, leftPx: number, rightPx: numbe
 // non-zero padding on all sides. Never inferred from position, text
 // content, or ancestor styling — an unstyled link is never guessed into
 // a button.
-function looksLikeButtonAnchor(anchor: Element): boolean {
+export function looksLikeButtonAnchor(anchor: Element): boolean {
   const style = readAllowedAttribute(anchor, 'style');
   if (!style) return false;
   const declarations = extractStyleDeclarations(style);
@@ -348,7 +348,7 @@ function deriveSourceWidths(cells: Element[]): number[] | null {
   return cells.map(() => 1);
 }
 
-function pickLayoutType(
+export function pickLayoutType(
   cells: Element[],
 ): { type: EmailModuleType; widths: number[]; exact: boolean; sourceRatio: number[] } | null {
   const candidates = layoutCandidatesForColumnCount(cells.length);
@@ -412,7 +412,7 @@ function isSpacerCandidate(cell: Element): boolean {
   return isEmptyOfContent(cell);
 }
 
-interface RowCellClassification {
+export interface RowCellClassification {
   contentCells: Element[];
   outerLeftPx: number;
   outerRightPx: number;
@@ -432,7 +432,7 @@ interface RowCellClassification {
 // `gutterApproximated` telling the caller to report that specific loss
 // (never silently — see the 'structural-conversion' finding this
 // produces in mapTableAsRows).
-function classifyRowCells(cells: Element[]): RowCellClassification {
+export function classifyRowCells(cells: Element[]): RowCellClassification {
   const working = [...cells];
   let outerLeftPx = 0;
   let outerRightPx = 0;
@@ -465,7 +465,7 @@ function classifyRowCells(cells: Element[]): RowCellClassification {
 
 // --- Leaf classification -------------------------------------------------
 
-function textFromInlineContent(el: Element): string {
+export function textFromInlineContent(el: Element): string {
   // Inline formatting (em/i/u) and <br> contribute their text content
   // only — the `text` module prop has no rich-run sub-structure to
   // preserve most inline emphasis distinctly; this is a known, accepted
@@ -525,7 +525,7 @@ function buildTextModule(
   return module;
 }
 
-function readImageWidthPx(img: Element): number | null {
+export function readImageWidthPx(img: Element): number | null {
   const attr = readAllowedAttribute(img, 'width');
   if (attr) {
     const parsed = parseFloat(attr);
@@ -673,14 +673,14 @@ function describeAnchorLossIfAny(anchor: Element, location: string, findings: Im
 
 // --- Tree walking ---------------------------------------------------------
 
-function directChildElements(el: Element): Element[] {
+export function directChildElements(el: Element): Element[] {
   return Array.from(el.children);
 }
 
 // Resolves through the CLOSED transparent-container allowlist only —
 // never unknown/custom tags. Returns the list of elements to actually
 // consider at this level (unwrapping recursively as needed).
-function resolveTransparent(elements: Element[]): Element[] {
+export function resolveTransparent(elements: Element[]): Element[] {
   const resolved: Element[] = [];
   for (const el of elements) {
     const tag = el.tagName.toLowerCase();
@@ -693,12 +693,12 @@ function resolveTransparent(elements: Element[]): Element[] {
   return resolved;
 }
 
-interface WalkContext {
+export interface WalkContext {
   findings: ImportFinding[];
   orderCounter: { value: number };
 }
 
-function nextOrder(ctx: WalkContext): number {
+export function nextOrder(ctx: WalkContext): number {
   const order = ctx.orderCounter.value;
   ctx.orderCounter.value += 1;
   return order;
@@ -919,7 +919,7 @@ function mapNestedTableFlattened(table: Element, location: string, ctx: WalkCont
 // them outright.
 const NAV_LINK_CAP = 6;
 
-function findLogoImageIn(cell: Element): Element | null {
+export function findLogoImageIn(cell: Element): Element | null {
   const imgs = Array.from(cell.querySelectorAll('img'));
   if (imgs.length !== 1) return null;
   const clone = cell.cloneNode(true) as Element;
@@ -930,7 +930,7 @@ function findLogoImageIn(cell: Element): Element | null {
   return imgs[0];
 }
 
-function tryDetectHeaderRow(
+export function tryDetectHeaderRow(
   cells: Element[], ctx: WalkContext, location: string, rowBackgroundFallback: { color?: string; image?: string },
 ): EmailModule | null {
   // Deliberately requires BOTH a logo cell AND a links cell — a bare
@@ -1081,7 +1081,7 @@ function collectFooterSignals(cell: Element): FooterSignals {
   };
 }
 
-function tryDetectFooterCell(
+export function tryDetectFooterCell(
   cell: Element, ctx: WalkContext, location: string, rowBackgroundFallback: { color?: string; image?: string },
 ): EmailModule | null {
   if (hasDangerousDescendant(cell)) return null; // defer to the generic per-element path
@@ -1221,7 +1221,7 @@ function mapTableAsRows(table: Element, ctx: WalkContext): EmailModule[] {
 // of replaying the source's own conditional block. Deliberately at most
 // ONE finding for the whole document, not one per comment — this is a
 // single, document-level fact, not a per-element loss.
-function documentHasMsoConditionalContent(document: Document): boolean {
+export function documentHasMsoConditionalContent(document: Document): boolean {
   if (!document.body) return false;
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT);
   let node = walker.nextNode();
