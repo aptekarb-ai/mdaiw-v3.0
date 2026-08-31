@@ -4,7 +4,7 @@ import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/use
 import { isSpeechSynthesisSupported, useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import {
   describeAction, DOCUMENT_SCOPE_ACTION_TYPES,
-  type AIActionHistoryEntry, type AICommandAction, type AICommandImportReconstructionContext,
+  type AIActionHistoryEntry, type AICommandAction, type AICommandCopySourceContext, type AICommandImportReconstructionContext,
   type AICommandProviderId, type AICommandSelectedModuleContext, type RepairActionItem,
 } from './aiCommand';
 import { detectCustomCssWarnings } from './emailCss';
@@ -16,7 +16,7 @@ import { createConsumedHandoffTracker, type AIEngineerHandoff } from './aiEngine
 import { formatReconstructionReviewMessage } from './reconstructionReview';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { findModuleById } from './layoutModel';
-import { resolveReference, type LastReferent } from './referenceResolver';
+import { resolveCopySourceRequest, resolveReference, type LastReferent } from './referenceResolver';
 import { FIDELITY_CATEGORY_ORDER } from './htmlImportFidelity';
 import {
   boundedHistoryForRequest, clearConversation, loadConversation, saveConversation,
@@ -341,6 +341,13 @@ export function AIEngineerPanel({
   // (or the next resolution) is always the source of truth after that.
   const resolvedModuleOverrideRef = useRef<AICommandSelectedModuleContext | null>(null);
 
+  // R4-B4 Closure §B/§C — set for exactly one outgoing request when
+  // resolveCopySourceRequest() has already read a property value from a
+  // resolved source module (see handleSend's own copy-source block
+  // below), then cleared — same one-turn-only convention as
+  // resolvedModuleOverrideRef above.
+  const copySourceContextRef = useRef<AICommandCopySourceContext | null>(null);
+
   // C-3 remediation — explicit pending-repair context for the placeholder-
   // link conversational flow: which real module (never "whatever's
   // currently selected") is awaiting a destination URL, so a later bare
@@ -616,7 +623,7 @@ export function AIEngineerPanel({
     // expression at all (the common case) passes through unchanged.
     const resolverLayoutModule = selectedColumn ? findModuleById(content.modules, selectedColumn.layoutId) : null;
     const resolverColumnIndex = resolverLayoutModule?.columns?.findIndex((c) => c.id === selectedColumn?.columnId) ?? -1;
-    const referentialResolution = resolveReference({
+    const referentialCtx = {
       message,
       modules: content.modules,
       selectedModule: selectedModule ? { id: selectedModule.id, type: selectedModule.type, label: `the selected ${selectedModule.type} module` } : null,
@@ -633,7 +640,51 @@ export function AIEngineerPanel({
       importReconstructionContext: importReconstructionContextRef.current,
       lastDiscussedReconstructionCategory: lastDiscussedReconstructionCategoryRef.current,
       lastReferent: lastReferentRef.current,
-    });
+    };
+
+    // R4-B4 Closure §B/§C — "use the same padding as the previous
+    // section", "give this the same spacing as the section above", "use
+    // the same background color as the previous module", "make these
+    // columns the same ratio as the previous layout". Checked BEFORE
+    // resolveReference() below: a copy-source message like "the same
+    // padding as THE PREVIOUS SECTION" would otherwise also trip
+    // resolveReference()'s own section-reference branch (matching
+    // "previous section" as an ordinary TARGET reference), which is not
+    // what this message means. A 'declined' result (ambiguous target/
+    // source, or an honestly-unsupported property/target combination —
+    // see resolveCopySourceRequest's own docstring) is answered locally,
+    // exactly like resolveReference()'s 'ambiguous' branch below: no
+    // wasted round trip, no mutation, no silent guess. A 'resolved'
+    // result carries the ALREADY-READ value forward into the outgoing
+    // request's context (copySourceContextRef) so the backend only ever
+    // builds + validates the existing canonical action from it — see
+    // compute_copy_source_result()'s own docstring for why this never
+    // becomes a second mutation system.
+    copySourceContextRef.current = null;
+    const copySourceRequest = resolveCopySourceRequest(referentialCtx);
+    if (copySourceRequest.status === 'declined') {
+      appendMessage('assistant', copySourceRequest.message);
+      setHistory((current) => [...current, {
+        id: newId('hist'),
+        command: message,
+        interpretation: copySourceRequest.message,
+        action: { type: 'NONE' },
+        status: 'clarification',
+        summary: copySourceRequest.message,
+        provider: 'deterministic',
+        requiresConfirmation: false,
+      }]);
+      return;
+    }
+    if (copySourceRequest.status === 'resolved') {
+      copySourceContextRef.current = {
+        property: copySourceRequest.property,
+        value: copySourceRequest.value,
+        source_label: copySourceRequest.sourceLabel,
+      };
+    }
+
+    const referentialResolution = resolveReference(referentialCtx);
 
     if (referentialResolution.status === 'ambiguous') {
       appendMessage('assistant', referentialResolution.clarifyingQuestion);
@@ -719,7 +770,11 @@ export function AIEngineerPanel({
         // provider is active. null for every other conversation, same as
         // every other optional context field.
         import_reconstruction: importReconstructionContextRef.current,
+        // R4-B4 Closure §B/§C — see the copy-source block earlier in
+        // this function; null on every ordinary turn.
+        copy_source: copySourceContextRef.current,
       });
+      copySourceContextRef.current = null;
 
       appendMessage('assistant', response.reply);
       setLastProvider(response.provider);

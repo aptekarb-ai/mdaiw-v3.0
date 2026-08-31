@@ -115,8 +115,8 @@ _INTENT_PHRASES = {
     CanonicalIntent.SET_LINK: {
         'en': ('set the link', 'change the link', 'update the url', 'set the url', 'fix the link'),
         'hi': ('लिंक बदलो', 'लिंक सेट करो', 'यूआरएल बदलो'),
-        'es': ('cambia el enlace', 'establece el enlace', 'actualiza la url'),
-        'fr': ('change le lien', 'définis le lien', 'mets à jour le lien'),
+        'es': ('cambia el enlace', 'establece el enlace', 'actualiza la url', 'arregla el enlace'),
+        'fr': ('change le lien', 'définis le lien', 'mets à jour le lien', 'répare le lien'),
     },
     CanonicalIntent.CHANGE_SPACING: {
         'en': ('change the spacing', 'change the padding', 'more padding', 'less padding', 'change the gutter'),
@@ -126,7 +126,12 @@ _INTENT_PHRASES = {
     },
     CanonicalIntent.CHANGE_ALIGNMENT: {
         'en': ('center it', 'center this', 'align left', 'align right', 'change the alignment'),
-        'hi': ('बीच में करो', 'संरेखण बदलो'),
+        # 'बीच में' ("in the middle/center") alone, not tied to one verb
+        # conjugation (करो/करें/करना/...) — R4-B4 §4's own worked example
+        # uses "करें" (polite), an earlier draft used "करो" (informal);
+        # matching the noun phrase, not the verb, covers both and any
+        # other conjugation a real user might type.
+        'hi': ('बीच में', 'संरेखण बदलो'),
         'es': ('céntralo', 'alinea a la izquierda', 'alinea a la derecha', 'cambia la alineación'),
         'fr': ('centre-le', 'aligne à gauche', 'aligne à droite', 'change l\'alignement'),
     },
@@ -183,13 +188,59 @@ _INTENT_PHRASES = {
     },
 }
 
-# The subset of canonical intents wired all the way through to a real
-# deterministic execution path today (see ai_command.py's
-# apply_canonical_intent()) — everything else in CanonicalIntent.values
-# is still detected/classified (useful as an LLM-tier hint, see the
-# module docstring) but has no direct Tier-0 executor yet. Never claim
-# more coverage than this set actually has.
-EXECUTABLE_INTENTS = frozenset({CanonicalIntent.FIX_CONTRAST})
+# R4-B4 §1 — every canonical intent now has a real Tier-0 executor (see
+# ai_command.py's apply_canonical_intent()). Kept as an explicit
+# allow-list (not "all of CanonicalIntent.values") on purpose: a future
+# canonical intent added to the enum without a matching executor must
+# fail this checkpoint's own tests (test_intent_normalization.py) rather
+# than silently claim coverage it doesn't have.
+EXECUTABLE_INTENTS = frozenset({
+    CanonicalIntent.FIX_CONTRAST, CanonicalIntent.SET_LINK, CanonicalIntent.CHANGE_SPACING,
+    CanonicalIntent.CHANGE_ALIGNMENT, CanonicalIntent.SET_BACKGROUND, CanonicalIntent.ENABLE_OUTLOOK_FALLBACK,
+    CanonicalIntent.EXPLAIN_VALIDATION_ISSUE, CanonicalIntent.COMPARE_IMPORT_RECONSTRUCTION,
+    CanonicalIntent.CHANGE_COLUMN_RATIO, CanonicalIntent.SET_IMAGE,
+})
+
+# R4-B4 §4 — a small, bounded, multilingual alignment-word lookup used
+# ONLY by CHANGE_ALIGNMENT's canonical-intent executor (never by the
+# English deterministic router's own _ALIGN_PATTERN, which is untouched)
+# — closes the exact gap the R4-B4 spec's own worked example needs: a
+# Hindi "बीच में" ("in the middle"/center) has no English "center"
+# substring for the English-only alignment regex to find. Deliberately
+# tiny — left/center/right only, matching the manifest's own `align`
+# field's value set exactly (never a value validate_action() wouldn't
+# also accept from the English path).
+ALIGNMENT_WORDS = {
+    'en': {
+        'left': 'left', 'center': 'center', 'centre': 'center', 'right': 'right', 'middle': 'center',
+        'centered': 'center', 'centred': 'center',
+    },
+    'hi': {'बाएं': 'left', 'बायें': 'left', 'बीच': 'center', 'केंद्र': 'center', 'दाएं': 'right', 'दायें': 'right'},
+    'es': {'izquierda': 'left', 'centro': 'center', 'centrado': 'center', 'derecha': 'right'},
+    'fr': {'gauche': 'left', 'centre': 'center', 'centré': 'center', 'droite': 'right'},
+}
+
+
+def find_alignment_value(text, language):
+    """Returns 'left'/'center'/'right', or None. `language` should come
+    from detect_language(text) — passed in rather than re-detected here
+    so a caller that already knows the language (e.g. having just called
+    normalize_intent()) never pays for a second detection pass. Word-
+    boundary matched (never a bare substring check) — "right" must never
+    match inside "copyright"/"alright"."""
+    words = ALIGNMENT_WORDS.get(language, {})
+    haystack = text if language == 'hi' else text.lower()
+    for word, value in words.items():
+        if re.search(rf'\b{re.escape(word)}\b', haystack):
+            return value
+    # Always also check English words — a mixed-language message
+    # ("इस बटन को left करो") should still resolve.
+    if language != 'en':
+        lowered = text.lower()
+        for word, value in ALIGNMENT_WORDS['en'].items():
+            if re.search(rf'\b{re.escape(word)}\b', lowered):
+                return value
+    return None
 
 
 def normalize_intent(message):

@@ -3317,6 +3317,55 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     expect(textarea.value).toContain('<!--[if !mso]><!-->');
   });
 
+  // R4-B4 §1/§2 (CHANGE_SPACING) — proves the settings merge-safety fix:
+  // an AI-proposed `desktop` padding patch must be visible in the
+  // rendered output AND must not have wiped the module's other desktop
+  // settings (proven by the module still rendering with its own
+  // existing content/structure intact, not just an empty/corrupted
+  // settings object).
+  it('UPDATE_MODULE_SETTINGS with a desktop padding patch applies and merges safely (visible in Code view)', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'Content');
+    await user.click(await screen.findByRole('button', { name: 'Add Text' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I will set the selected text module's padding to 42px on all sides. Please confirm.",
+      action: {
+        type: 'UPDATE_MODULE_SETTINGS', target: 'selected', module_type: 'text',
+        patch: { desktop: { paddingTop: 42, paddingRight: 42, paddingBottom: 42, paddingLeft: 42 } },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'give this 42px padding');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    // Waits for the proposal card's own title, not the reply text — the
+    // reply is ALSO echoed into the proposal card's detail paragraph
+    // (same "duplicate text across chat message + proposal card"
+    // ambiguity documented elsewhere in this file), so a plain
+    // getByText/findByText on the reply text would ambiguously match twice.
+    await screen.findByText(/Update the selected text module's settings/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('42px');
+    // The module's own text content still renders — proves the merge
+    // never replaced settings with a bare {desktop: {...4 padding
+    // keys...}} object that silently dropped everything else about the
+    // module (a real risk with a naive shallow-replace of the nested
+    // `desktop` key — see EmailBuilderWorkspacePage.tsx's own comment
+    // on this exact fix).
+    expect(textarea.value).toContain('Add your heading or paragraph text here.');
+  });
+
   it('APPLY_OUTLOOK_WRAPPER enables the background-image VML fallback, visible in Code view', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();

@@ -238,6 +238,19 @@ export interface AICommandRequest {
   // existing caller/test that omits this keeps compiling and behaving
   // unchanged, same convention as every prior additive context field.
   import_reconstruction?: AICommandImportReconstructionContext | null;
+  // R4-B4 Closure §B/§C — present only when referenceResolver.ts's
+  // resolveCopySourceRequest has already resolved a "same X as the
+  // previous section/layout" request and read the value client-side.
+  // Every existing caller/test that omits this keeps compiling and
+  // behaving unchanged, same convention as every prior additive context
+  // field.
+  copy_source?: AICommandCopySourceContext | null;
+}
+
+export interface AICommandCopySourceContext {
+  property: 'padding' | 'backgroundColor' | 'align' | 'columnRatio';
+  value: unknown;
+  source_label: string;
 }
 
 // Phase A — 3-way provider identifier, extended from V1's

@@ -354,6 +354,23 @@ class ImportReconstructionContextSerializer(serializers.Serializer):
     has_mso_conditional_content = serializers.BooleanField(default=False)
 
 
+class CopySourceContextSerializer(serializers.Serializer):
+    """R4-B4 Closure §B/§C — a property value ALREADY READ client-side
+    (referenceResolver.ts's resolveCopySourceRequest) from a resolved
+    source module/column, for a "same padding/background/ratio as the
+    previous section/column N" request. Never used to look anything up
+    server-side — `value`'s shape depends on `property` (padding -> a
+    4-key numeric dict, backgroundColor -> a string, columnRatio -> a
+    list of numbers), and is validated per-property in
+    ai_command.compute_copy_source_result, which never trusts this shape
+    alone (that function's own patch/validate_action() calls are the
+    real gate, exactly like every other canonical-intent action)."""
+
+    property = serializers.ChoiceField(choices=['padding', 'backgroundColor', 'align', 'columnRatio'])
+    value = serializers.JSONField()
+    source_label = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
+
+
 class EmailAICommandRequestSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=False)
     selected_module = SelectedModuleContextSerializer(required=False, allow_null=True, default=None)
@@ -375,6 +392,12 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     # reconstruction-review conversation. A request that omits this
     # (every pre-R4 client) behaves exactly as before.
     import_reconstruction = ImportReconstructionContextSerializer(required=False, allow_null=True, default=None)
+    # R4-B4 Closure §B/§C — additive, optional; present only when the
+    # frontend's reference resolver has already resolved a "same X as
+    # the previous section/column N" request and read the value. A
+    # request that omits this (every pre-closure-pass client) behaves
+    # exactly as before.
+    copy_source = CopySourceContextSerializer(required=False, allow_null=True, default=None)
 
 
 class LearningSignalRequestSerializer(serializers.Serializer):

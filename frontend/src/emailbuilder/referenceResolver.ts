@@ -1,4 +1,5 @@
 import type { EmailModule } from './edm';
+import { isLayoutModuleType } from './layoutModel';
 import type { AICommandImportReconstructionContext } from './aiCommand';
 
 // R4-B3 §B — the Referential Context Resolver R4-B2's own report
@@ -316,4 +317,156 @@ export function resolveReference(ctx: ReferentialResolutionContext): Referential
   }
 
   return { status: 'no-referring-expression' };
+}
+
+// R4-B4 Closure §B/§C — "use the same padding as the previous section",
+// "give this the same spacing as the section above", "use the same
+// background color as the previous module", "make these columns the
+// same ratio as the previous layout". A DIFFERENT kind of resolution
+// from resolveReference() above: that function answers "what does 'it'/
+// 'this'/'the previous section' refer to" for the TARGET of an ordinary
+// command; this one additionally READS a whitelisted property value off
+// a resolved SOURCE module so the caller (AIEngineerPanel.tsx) can hand
+// it, already-read, to the backend's compute_copy_source_result() —
+// which still builds the mutation through the EXISTING UPDATE_MODULE_
+// SETTINGS/UPDATE_MODULE_PROPS/RESTRUCTURE_LAYOUT actions and the EXISTING
+// validate_action() gate (see that function's own docstring). This
+// resolver NEVER mutates anything itself and NEVER reads more than the
+// one property family the message names — "no silent guesses" applies
+// here exactly as it does to resolveReference().
+//
+// Deliberately narrow, matching only the source phrasings this pass's
+// spec gives verbatim ("the previous section"/"the section above"/"the
+// previous module"/"the previous layout") against the TOP-LEVEL document
+// order — "section" and "module" are treated as synonyms for one
+// top-level EmailModule, one slot before the target. A source resolved
+// from inside a column, or an ordinal "column N" SOURCE, is out of
+// scope for this pass (see the column-target decline branch below for
+// the one column-related example the spec does give) — not a silent
+// guess either way, since every unrecognized shape below falls through
+// to 'not-a-copy-request' and is handled by the normal command path.
+export type CopySourcePropertyFamily = 'padding' | 'backgroundColor' | 'align' | 'columnRatio';
+
+export type CopySourceRequest =
+  | { status: 'not-a-copy-request' }
+  | { status: 'declined'; message: string }
+  | { status: 'resolved'; property: CopySourcePropertyFamily; value: unknown; sourceLabel: string };
+
+const COPY_TRIGGER_RE = /\bsame\b[\s\S]*\bas\b/i;
+const PADDING_WORD_RE = /\b(padding|spacing)\b/i;
+const BACKGROUND_WORD_RE = /\bbackground\s*colou?r\b/i;
+const RATIO_WORD_RE = /\b(ratio|widths?)\b/i;
+const ALIGNMENT_WORD_RE = /\balignment\b/i;
+const COLUMN_TARGET_RE = /\bthis\s+column\b/i;
+const PREVIOUS_SOURCE_RE = /\b(?:the\s+)?(?:previous|prior)\s+(section|module|layout)\b|\b(?:the\s+)?section\s+above\b/i;
+
+const NOT_UNDERSTOOD_SOURCE_MESSAGE =
+  'I can copy padding, background color, alignment, or column ratio from "the previous section"/"the section above"/'
+  + '"the previous layout" right now — try one of those, or tell me exactly which module to match.';
+
+function readBackgroundColor(module: EmailModule): string | undefined {
+  const propsValue = (module.props as Record<string, unknown>)?.backgroundColor;
+  if (typeof propsValue === 'string' && propsValue.trim()) return propsValue;
+  const settingsValue = module.settings?.backgroundColor;
+  return typeof settingsValue === 'string' && settingsValue.trim() ? settingsValue : undefined;
+}
+
+function readAlign(module: EmailModule): string | undefined {
+  const value = (module.props as Record<string, unknown>)?.align;
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+export function resolveCopySourceRequest(ctx: ReferentialResolutionContext): CopySourceRequest {
+  const { message } = ctx;
+  if (!COPY_TRIGGER_RE.test(message)) return { status: 'not-a-copy-request' };
+
+  // §B example 4 — "make this column use the same alignment as column
+  // 1." Columns genuinely have no horizontal-alignment setting of their
+  // own in this builder (ColumnContainerSettings only carries a vertical
+  // top/middle/bottom align — see edm.ts) — there is no existing action
+  // this could ever route through without inventing a new mutation
+  // capability, which §B explicitly forbids. Honest capability decline,
+  // matching the spec's own worked example ("the previous module has an
+  // image background, but this module type does not support image
+  // backgrounds") rather than a silent no-op or a wrong guess.
+  if (ALIGNMENT_WORD_RE.test(message) && COLUMN_TARGET_RE.test(message)) {
+    return {
+      status: 'declined',
+      message:
+        "Columns don't have their own alignment setting in this builder — alignment is set per module. "
+        + "Select the specific module inside the column you'd like to align instead.",
+    };
+  }
+
+  let property: CopySourcePropertyFamily | null = null;
+  if (RATIO_WORD_RE.test(message) && /\b(column|layout)\b/i.test(message)) property = 'columnRatio';
+  else if (BACKGROUND_WORD_RE.test(message)) property = 'backgroundColor';
+  else if (ALIGNMENT_WORD_RE.test(message)) property = 'align';
+  else if (PADDING_WORD_RE.test(message)) property = 'padding';
+
+  if (!property) return { status: 'not-a-copy-request' };
+
+  const sourceMatch = message.match(PREVIOUS_SOURCE_RE);
+  if (!sourceMatch) return { status: 'declined', message: NOT_UNDERSTOOD_SOURCE_MESSAGE };
+
+  if (property === 'columnRatio') {
+    if (!ctx.selectedModule || !isLayoutModuleType(ctx.selectedModule.type as never)) {
+      return { status: 'declined', message: 'Select a multi-column layout section first, then I can match its column ratio to another layout.' };
+    }
+  } else if (!ctx.selectedModule) {
+    return { status: 'declined', message: 'Select the module you want to update first, then I can copy that property from the previous section.' };
+  }
+
+  const topLevel = ctx.modules;
+  const targetIndex = topLevel.findIndex((m) => m.id === ctx.selectedModule!.id);
+  if (targetIndex === -1) {
+    return {
+      status: 'declined',
+      message:
+        'The "previous section" reference only works for a top-level section right now — select one directly on '
+        + 'the canvas (not a module nested inside a column).',
+    };
+  }
+  if (targetIndex === 0) {
+    return { status: 'declined', message: 'The selected module is already the first section in this email — there is no previous section to copy from.' };
+  }
+
+  const sourceModule = topLevel[targetIndex - 1];
+  const sourceLabel = `the previous section (${moduleLabel(sourceModule, targetIndex - 1)})`;
+
+  if (property === 'padding') {
+    return { status: 'resolved', property, value: { ...sourceModule.settings.desktop }, sourceLabel };
+  }
+
+  if (property === 'backgroundColor') {
+    const value = readBackgroundColor(sourceModule);
+    if (value === undefined) {
+      return { status: 'declined', message: `${sourceLabel} has no background color set, so there is nothing to copy.` };
+    }
+    return { status: 'resolved', property, value, sourceLabel };
+  }
+
+  if (property === 'align') {
+    const value = readAlign(sourceModule);
+    if (value === undefined) {
+      return { status: 'declined', message: `${sourceLabel} has no alignment of its own to copy.` };
+    }
+    return { status: 'resolved', property, value, sourceLabel };
+  }
+
+  // property === 'columnRatio' — the SOURCE layout's own builder-level
+  // column widths (LayoutModuleProps.columnWidths), never rendered pixel
+  // widths. computeLayoutAvailableWidthPx/resolveColumnPixelWidths, outer
+  // spacing, gutter, and internal padding stay fully authoritative on
+  // the render side — this only ever reads the percentage array that
+  // already drives them, the same value RESTRUCTURE_LAYOUT already
+  // takes from typed "70/30"-style commands.
+  if (!isLayoutModuleType(sourceModule.type as never)) {
+    return { status: 'declined', message: `${sourceLabel} is not a multi-column layout, so it has no column ratio to copy.` };
+  }
+  const widths = (sourceModule.props as Record<string, unknown>)?.columnWidths;
+  if (!Array.isArray(widths) || widths.length === 0) {
+    return { status: 'declined', message: `I could not read a column ratio from ${sourceLabel}.` };
+  }
+  return { status: 'resolved', property, value: widths, sourceLabel };
 }

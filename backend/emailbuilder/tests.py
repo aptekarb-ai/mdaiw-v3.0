@@ -2079,7 +2079,20 @@ class RuleBasedEmailCommandProviderTests(TestCase):
         self.assertTrue(result.reply)
 
     def test_unsupported_command_safe_response(self):
+        # R4-B4 §1/§3 — WAS the generic "I'm not sure how to do that yet"
+        # fallback; the widened column-ratio detection (§3's own "make
+        # this 70/30" / "make these columns 70/30" natural-variation
+        # coverage) now correctly recognizes "two columns 40/60" as a
+        # column-ratio request and asks the user to select a layout
+        # module first — a more correct, capability-aware response, not
+        # a regression. A message that still has no vocabulary match at
+        # all is exercised separately below.
         result = self.provider.resolve('convert this section to two columns 40/60', {})
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertIn('Select a module on the canvas first', result.reply)
+
+    def test_genuinely_unrecognized_command_gets_the_generic_fallback(self):
+        result = self.provider.resolve('reorganize everything completely', {})
         self.assertEqual(result.action['type'], ActionType.NONE)
         self.assertIn('not sure how to do that yet', result.reply)
 
@@ -3743,6 +3756,95 @@ class EmailAICommandViewTests(TestCase):
         response = self._post({'message': 'add a button'})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()['success'])
+
+    # R4-B4 Closure §B/§C — a copy_source request bypasses the whole
+    # provider chain (deterministic/local/openai) entirely — see the
+    # view's own copy_source branch. These prove that end to end through
+    # the real HTTP endpoint, not just compute_copy_source_result() in
+    # isolation (already covered in test_canonical_actions.py).
+
+    def test_copy_source_padding_end_to_end(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'use the same padding as the previous section',
+            'selected_module': {'type': 'text', 'props': {}},
+            'copy_source': {
+                'property': 'padding',
+                'value': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20},
+                'source_label': 'the previous section',
+            },
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['action']['type'], 'UPDATE_MODULE_SETTINGS')
+        self.assertEqual(
+            body['action']['patch'],
+            {'desktop': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20}},
+        )
+        # Deterministic, not routed through any AI provider label.
+        self.assertNotIn(body['provider'], ('local', 'openai'))
+
+    def test_copy_source_never_reaches_openai_even_when_openai_is_the_selected_provider(self):
+        self.client.force_login(self.user)
+        with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY='sk-test-not-a-real-key'):
+            response = self._post({
+                'message': 'use the same padding as the previous section',
+                'selected_module': {'type': 'text', 'props': {}},
+                'copy_source': {
+                    'property': 'padding',
+                    'value': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20},
+                    'source_label': 'the previous section',
+                },
+            })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        # Had this reached OpenAIEmailCommandProvider with a fake key and
+        # no network mock, it would raise/degrade to the safe fallback
+        # reply rather than return this exact deterministic action — the
+        # real assertion is the EXACT expected action, proving the
+        # deterministic copy_source path (not a lucky fallback) answered.
+        self.assertEqual(body['action']['type'], 'UPDATE_MODULE_SETTINGS')
+        self.assertNotIn(body['provider'], ('local', 'openai'))
+
+    def test_copy_source_unsupported_target_declines_honestly(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'use the same background color as the previous module',
+            'selected_module': {'type': 'spacer', 'props': {}},
+            'copy_source': {'property': 'backgroundColor', 'value': '#112233', 'source_label': 'the previous module'},
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['action']['type'], 'NONE')
+        self.assertIn('does not support', body['reply'])
+
+    def test_copy_source_malformed_shape_rejected_by_serializer(self):
+        self.client.force_login(self.user)
+        response = self._post({
+            'message': 'use the same padding as the previous section',
+            'selected_module': {'type': 'text', 'props': {}},
+            'copy_source': {'property': 'not-a-real-property', 'value': {}, 'source_label': 'x'},
+        })
+        self.assertEqual(response.status_code, 400)
+
+    def test_copy_source_localizes_the_reply_for_a_non_english_message(self):
+        self.client.force_login(self.user)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL=''):
+            # No local endpoint configured — must degrade to the English
+            # reply, never error, never silently call OpenAI.
+            response = self._post({
+                'message': 'usa el mismo espaciado que la seccion anterior',
+                'selected_module': {'type': 'text', 'props': {}},
+                'copy_source': {
+                    'property': 'padding',
+                    'value': {'paddingTop': 12, 'paddingRight': 12, 'paddingBottom': 12, 'paddingLeft': 12},
+                    'source_label': 'the previous section',
+                },
+            })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['action']['type'], 'UPDATE_MODULE_SETTINGS')
+        self.assertIn('padding', body['reply'])
 
 
 class BuildSafeContextTests(TestCase):

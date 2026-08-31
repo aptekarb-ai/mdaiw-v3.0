@@ -237,12 +237,25 @@ def _is_vml_background_module(module_type):
 
 # Sub-phase 6, work package D — the bounded, explicit allow-list of
 # EmailModuleSettings keys the AI may ever patch via UPDATE_MODULE_SETTINGS.
-# Deliberately NOT the whole settings object (padding/outerSpacing/
-# columnGutter are left to the manual Properties panel for now) — same
-# "small, explicit, never arbitrary" posture _validate_patch already
-# enforces for props via the capability manifest.
+# Deliberately NOT the whole settings object (outerSpacing/columnGutter
+# remain manual-Properties-panel-only) — same "small, explicit, never
+# arbitrary" posture _validate_patch already enforces for props via the
+# capability manifest.
 _SETTINGS_BOOLEAN_FIELDS = frozenset({'outlookVml', 'mobileStack'})
 _SETTINGS_ENUM_FIELDS = {'visibility': frozenset({'all', 'hideMobile', 'hideDesktop'})}
+
+# R4-B4 §1/§2 — CHANGE_SPACING. Desktop padding only (mobile inherits
+# desktop unless separately overridden, same convention every other
+# spacing UI in this app already follows — see edm.ts's own
+# resolveSpacing() docstring); bounded 0-200px, matching this app's
+# existing padding-slider ranges elsewhere. Every value is validated
+# here — a proposal can never carry an out-of-range or non-numeric
+# padding value, regardless of which provider produced it.
+_SETTINGS_NESTED_NUMERIC_FIELDS = {
+    'desktop': {
+        'paddingTop': (0, 200), 'paddingRight': (0, 200), 'paddingBottom': (0, 200), 'paddingLeft': (0, 200),
+    },
+}
 
 
 def _validate_settings_patch(patch):
@@ -257,6 +270,21 @@ def _validate_settings_patch(patch):
         allowed_values = _SETTINGS_ENUM_FIELDS.get(key)
         if allowed_values is not None and value in allowed_values:
             safe[key] = value
+            continue
+        nested_fields = _SETTINGS_NESTED_NUMERIC_FIELDS.get(key)
+        if nested_fields is not None and isinstance(value, dict):
+            safe_nested = {}
+            for nested_key, nested_value in value.items():
+                bounds = nested_fields.get(nested_key)
+                if bounds is None:
+                    continue
+                if isinstance(nested_value, bool) or not isinstance(nested_value, (int, float)):
+                    continue
+                low, high = bounds
+                if low <= nested_value <= high:
+                    safe_nested[nested_key] = nested_value
+            if safe_nested:
+                safe[key] = safe_nested
     return safe or None
 
 
@@ -1183,7 +1211,25 @@ _HIDE_DESKTOP_PATTERN = re.compile(r'\bhide\b.*\bdesktop\b|\bdesktop\b.*\bhide\b
 _SHOW_ALL_VISIBILITY_PATTERN = re.compile(r'\bshow\b.*\b(both|everywhere)\b', re.IGNORECASE)
 _COLUMN_WIDTHS_PATTERN = re.compile(r'\bcolumns?\b.*\bwidths?\b|\bwidths?\b.*\bcolumns?\b', re.IGNORECASE)
 _WIDTH_NUMBERS_PATTERN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:%|percent)?')
-_ALIGN_PATTERN = re.compile(r'\balign(?:ment)?\b.*\b(left|center|right)\b|\b(left|center|right)\s*align', re.IGNORECASE)
+# R4-B4 §3 — widened trigger (never a required exact "align" word): also
+# recognizes "center this/it/that", "in the middle", "put ... left/
+# center/right/middle" — the exact natural-command-variation phrasings
+# §3 itself lists ("make this centered", "center it", "align this in
+# the middle", "put this button in the center"). VALUE extraction no
+# longer relies on this regex's own capture groups — see
+# intent_normalization.find_alignment_value(), used by both
+# _extract_style_patch below and apply_canonical_intent's multilingual
+# path, so English and non-English alignment recognition share the
+# SAME word-boundary-matched value lookup, never two implementations.
+_ALIGN_PATTERN = re.compile(
+    r'\balign(?:ment)?\b'
+    r'|\b(?:left|center|centre|right|middle)\s*align'
+    r'|\b(?:center|centre|left|right)\s+(?:this|it|that)\b'
+    r'|\bin\s+the\s+(?:middle|center|centre)\b'
+    r'|\bput\b.{0,20}\b(?:left|center|centre|right|middle)\b'
+    r'|\bcentered\b|\bcentred\b',
+    re.IGNORECASE,
+)
 _FONT_SIZE_PATTERN = re.compile(r'\bfont\s*size\s*(?:to|=|:)?\s*(\d+)\b', re.IGNORECASE)
 _BIGGER_PATTERN = re.compile(r'\b(bigger|larger|increase)\b', re.IGNORECASE)
 _SMALLER_PATTERN = re.compile(r'\b(smaller|decrease)\b', re.IGNORECASE)
@@ -1245,7 +1291,33 @@ _PLACEHOLDER_LINK_FIX_PATTERN = re.compile(
     r'\bplaceholder\s+link\b|\bfix\b.*\b(?:this|the|it)\b.*\blink\b|\blink\b.*\bfix\b',
     re.IGNORECASE,
 )
+# R4-B4 §1 — SET_LINK, broader than the "fix" framing above: "set/change/
+# update the link/url [to ...]" — deliberately excludes bare "link" alone
+# (would collide with unrelated link-styling commands like "make the
+# link blue", same reasoning _PLACEHOLDER_LINK_FIX_PATTERN's own comment
+# already gives).
+_SET_LINK_PATTERN = re.compile(
+    r'\b(?:set|change|update)\b.*\b(?:link|url)\b',
+    re.IGNORECASE,
+)
 _URL_IN_TEXT_PATTERN = re.compile(r'https?://\S+', re.IGNORECASE)
+# R4-B4 §1 — SET_IMAGE. "change/set/update/replace the image/picture/
+# photo [to ...]".
+_SET_IMAGE_PATTERN = re.compile(
+    r'\b(?:set|change|update|replace)\b.*\b(?:image|picture|photo)\b',
+    re.IGNORECASE,
+)
+# R4-B4 §1/§3 — CHANGE_SPACING. "give/add/increase/set/change ... padding/
+# spacing/space ... [to N]" — deliberately broad on the verb (natural-
+# command-variation coverage — §3's own "give this 20px padding" / "add
+# some space inside" / "increase internal spacing to 20" examples) but
+# always requires one of padding/spacing/space as the noun, so it can
+# never collide with an unrelated numeric command.
+_SPACING_PATTERN = re.compile(
+    r'\b(?:padding|spacing|space)\b',
+    re.IGNORECASE,
+)
+_SPACING_NUMBER_PATTERN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:px)?', re.IGNORECASE)
 
 # C-2 remediation — "fix this weak contrast" / "fix the text contrast".
 _WEAK_CONTRAST_FIX_PATTERN = re.compile(
@@ -1453,25 +1525,444 @@ def compute_contrast_fix_result(selected_type, props):
     )
 
 
-# R4-B3 §A — the canonical-intent execution entry point. Deliberately
-# tiny: only CanonicalIntent values in intent_normalization.EXECUTABLE_
-# INTENTS have a real executor here — everything else returns None, and
-# the caller (get_default_email_command_provider's chain — see
+# R4-B4 §1 — extracted, unchanged in behavior, from
+# RuleBasedEmailCommandProvider.resolve()'s own Outlook-VML-fallback
+# branch (Sub-phase 6 work package D) — see compute_contrast_fix_result's
+# own docstring for why this extraction pattern (never a second
+# implementation) is used throughout this module.
+def compute_outlook_fallback_result(selected_type):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+    # Background is checked first: hero-background-image is the one
+    # module type with BOTH capabilities (its own CTA button VML nests
+    # inside its background ghost-table VML — see heroCatalog.tsx), so
+    # APPLY_OUTLOOK_WRAPPER is the single correct action that covers
+    # both for that type.
+    if _is_vml_background_module(selected_type):
+        return CommandResult(
+            reply=f'I will enable the Classic Outlook VML background fallback for the selected {selected_type} module.',
+            action={'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': selected_type}, confidence=0.85,
+        )
+    if _is_vml_button_module(selected_type):
+        return CommandResult(
+            reply=f'I will enable the Classic Outlook VML fallback for the selected {selected_type} module.',
+            action={'type': ActionType.APPLY_VML_PATTERN, 'module_type': selected_type}, confidence=0.85,
+        )
+    return CommandResult(
+        reply=f'The selected {selected_type} module does not support a VML fallback.',
+        action={'type': ActionType.NONE}, confidence=0.3,
+    )
+
+
+# R4-B4 §1 — extracted from the (now broadened — see _SET_LINK_PATTERN's
+# own comment) placeholder-link-fix branch. `message_text` is the ORIGINAL
+# (not lowercased) message — URLs are case-sensitive.
+def compute_set_link_result(selected_type, message_text):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+    href_field = module_capabilities.get_editable_field(selected_type, 'href')
+    if href_field is None:
+        return CommandResult(
+            reply=f'The selected {selected_type} module does not have a link to set.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    url_match = _URL_IN_TEXT_PATTERN.search(message_text)
+    if not url_match:
+        return CommandResult(
+            reply=(
+                "I won't guess a destination for this link. What URL should it go to? "
+                '(e.g. "use https://example.com/shop")'
+            ),
+            action={'type': ActionType.NONE}, confidence=0.4,
+        )
+    url = _clean_url_value(url_match.group(0))
+    if not url:
+        return CommandResult(
+            reply="That URL doesn't look valid — please give a full https:// (or http://) link.",
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    return CommandResult(
+        reply=f"I will set the selected {selected_type} module's link to {url}. Please confirm.",
+        action={
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
+            'module_type': selected_type, 'patch': {'href': url},
+        },
+        confidence=0.85,
+    )
+
+
+# R4-B4 §1/§2 — SET_IMAGE. Same "never guess a source" posture as
+# compute_set_link_result — a bare {'url': ...} marker, resolved/
+# validated the SAME way any other image_asset-valued field already is
+# (see _validate_image_asset_value/resolve_asset_references) — never a
+# second image-resolution path.
+def compute_set_image_result(selected_type, message_text):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+    image_field = next(
+        (f for f in module_capabilities.get_editable_fields(selected_type) if f.get('valueType') == 'image_asset'),
+        None,
+    )
+    if image_field is None:
+        return CommandResult(
+            reply=f'The selected {selected_type} module does not have an image I can change.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    url_match = _URL_IN_TEXT_PATTERN.search(message_text)
+    if not url_match:
+        return CommandResult(
+            reply=(
+                "I won't invent an image source. What URL should the image use? "
+                '(e.g. "use https://example.com/photo.jpg")'
+            ),
+            action={'type': ActionType.NONE}, confidence=0.4,
+        )
+    url = _clean_url_value(url_match.group(0))
+    if not url:
+        return CommandResult(
+            reply="That image URL doesn't look valid — please give a full https:// (or http://) link.",
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    return CommandResult(
+        reply=f"I will set the selected {selected_type} module's image to {url}. Please confirm.",
+        action={
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
+            'module_type': selected_type, 'patch': {image_field['key']: {'url': url}},
+        },
+        confidence=0.85,
+    )
+
+
+# R4-B4 §1/§2/§3 — CHANGE_SPACING. Uniform desktop padding on all four
+# sides — matches every one of §3's own example phrasings ("20px
+# padding around this", "add some space inside", "increase internal
+# spacing to 20"), none of which name a single side. A per-side
+# ("more padding on top only") variant is intentionally not attempted
+# here — out of scope, would need new vocabulary this checkpoint's
+# examples never ask for; declines honestly (falls through to the
+# generic clarify reply) rather than guess a side.
+# R4-B4 §3 — "add some space inside" and "increase internal spacing to
+# 20" must both use this SAME capability; the former genuinely names no
+# amount at all. Rather than block on a clarifying question for the
+# no-amount case (which "give this 20px padding" never needs), apply
+# this one clearly-disclosed standard amount — the reply always states
+# the exact value used, so it is never a silent guess, and the proposal
+# still requires explicit Apply like every other change.
+_DEFAULT_SPACING_PX = 16
+
+
+def compute_spacing_result(selected_type, lowered_text):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+    numbers = _SPACING_NUMBER_PATTERN.findall(lowered_text)
+    px = float(numbers[0]) if numbers else float(_DEFAULT_SPACING_PX)
+    value = _validate_settings_patch({'desktop': {
+        'paddingTop': px, 'paddingRight': px, 'paddingBottom': px, 'paddingLeft': px,
+    }})
+    if not value:
+        return CommandResult(
+            reply='That padding value is out of the supported range (0-200px).',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    px_label = int(px) if px == int(px) else px
+    default_note = f' (no exact amount was given, so I used a standard {_DEFAULT_SPACING_PX}px)' if not numbers else ''
+    return CommandResult(
+        reply=(
+            f"I will set the selected {selected_type} module's padding to {px_label}px on all sides"
+            f'{default_note}. Please confirm.'
+        ),
+        action={
+            'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': selected_type, 'patch': value,
+        },
+        confidence=0.85 if numbers else 0.6,
+    )
+
+
+# R4-B4 §1 — extracted, unchanged in behavior for the English-widths
+# phrasing, from RuleBasedEmailCommandProvider.resolve()'s own layout-
+# column-widths branch (Sub-phase 6 work package D) — widened trigger
+# only (see the two call sites), never a second widths-validation path;
+# RESTRUCTURE_LAYOUT still goes through the exact same
+# MIN_COLUMN_WIDTH_PERCENT/COLUMN_WIDTH_TOTAL_TOLERANCE checks in
+# validate_action() every other caller of this action type already does.
+def compute_column_ratio_result(selected_type, lowered_text):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+    capability = module_capabilities.get_module_capability(selected_type)
+    if not capability or not capability.get('isLayout'):
+        return CommandResult(
+            reply=f'The selected {selected_type} module is not a layout, so it has no column widths to change.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    numbers = [float(n) for n in _WIDTH_NUMBERS_PATTERN.findall(lowered_text)]
+    column_count = capability.get('columnCount') or 0
+    if len(numbers) != column_count:
+        return CommandResult(
+            reply=f'Tell me {column_count} width percentages for this layout, e.g. "change the column widths to 70/30".',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    widths_label = '/'.join(str(int(n)) if n == int(n) else str(n) for n in numbers)
+    return CommandResult(
+        reply=f'This will change the column widths to {widths_label}%. Please confirm.',
+        action={'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': selected_type, 'widths': numbers},
+        confidence=0.85,
+    )
+
+
+# R4-B4 §1 — EXPLAIN_VALIDATION_ISSUE. Prefers the SPECIFIC selected
+# issue's own title/detail (already validated/whitelisted upstream —
+# see ai_command_openai.py/ai_command_local.py's own
+# selected_validation_issue bounding) over a keyword-topic lookup, since
+# "explain this issue"/explain-selected-issue is fundamentally about
+# WHICH issue the user is looking at, not a general glossary query —
+# the frontend's own local matchDocumentIntent()/resolveDocumentIntent()
+# already does this for English; this is the same behavior for the
+# canonical-intent (potentially non-English) path, and the same
+# fallback (_find_explain_rule) the English deterministic router
+# already uses when no issue is selected.
+def compute_explain_validation_issue_result(context):
+    context = context if isinstance(context, dict) else {}
+    issue = context.get('selected_validation_issue')
+    if isinstance(issue, dict) and issue.get('title') and issue.get('detail'):
+        return CommandResult(
+            reply=f"{issue['title']}. {issue['detail']}", action={'type': ActionType.NONE}, confidence=0.9,
+        )
+    message = context.get('_retrieval_message') if isinstance(context.get('_retrieval_message'), str) else ''
+    rule = _find_explain_rule(message.lower())
+    if rule is not None:
+        return CommandResult(reply=f'{rule.title}. {rule.description}', action={'type': ActionType.NONE}, confidence=0.8)
+    return CommandResult(reply=_EXPLAIN_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+
+
+# R4-B4 §1/§8 — COMPARE_IMPORT_RECONSTRUCTION as a canonical intent is
+# EXPLAIN-ONLY here — never mutates, never proposes a correction (R4-C's
+# job, explicitly out of scope for R4-B4 too — see this module's own
+# apply_canonical_intent docstring). Summarizes the ALREADY-COMPUTED,
+# already-bounded fidelity_categories this exact request carried —
+# never a second comparison/classification engine (that's
+# reconstructionReview.ts's job, frontend-side); this only narrates
+# what it was already told.
+def compute_reconstruction_explain_result(context):
+    context = context if isinstance(context, dict) else {}
+    reconstruction = context.get('import_reconstruction')
+    if not isinstance(reconstruction, dict):
+        return CommandResult(
+            reply='This conversation has no imported-email reconstruction to compare against.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    categories = reconstruction.get('fidelity_categories')
+    if not isinstance(categories, list) or not categories:
+        return CommandResult(
+            reply='I have reconstruction context, but no per-category fidelity summary to explain yet.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    non_preserved = [c for c in categories if isinstance(c, dict) and c.get('status') != 'preserved']
+    if not non_preserved:
+        return CommandResult(
+            reply='Everything I checked was preserved during reconstruction — no differences to explain.',
+            action={'type': ActionType.NONE}, confidence=0.8,
+        )
+    parts = [f"{c.get('id')} ({c.get('status')}): {c.get('summary')}" for c in non_preserved if c.get('summary')]
+    return CommandResult(reply=' '.join(parts), action={'type': ActionType.NONE}, confidence=0.8)
+
+
+# R4-B4 Closure §B/§C — builds a canonical mutation proposal from a
+# property value the FRONTEND has already read from a resolved source
+# module/column (see frontend/src/emailbuilder/referenceResolver.ts's
+# resolveCopySourceRequest) for a "same X as the previous section/column
+# N" request. This function never resolves "previous section" or
+# "column 1" itself, and never reads a second module's JSON on its own
+# — it receives exactly one already-whitelisted {property, value,
+# source_label} triple and does nothing but build + validate the SAME
+# existing action every other canonical intent already uses
+# (UPDATE_MODULE_SETTINGS for padding, UPDATE_MODULE_PROPS for
+# backgroundColor, RESTRUCTURE_LAYOUT for column ratio — see §C). Never
+# a second mutation system, never a second capability-check system:
+# validate_action() (padding's own _validate_settings_patch, and for
+# backgroundColor/columnRatio the real validate_action() call below) is
+# still the SOLE authority on whether the target module type actually
+# supports the property — "confirm target supports property" is this
+# existing gate, not a new one. An unsupported/incompatible target
+# yields an honest decline naming the property and target type — never
+# a silent guess, never a partial/best-effort mutation.
+_COPY_SOURCE_PROPERTIES = frozenset({'padding', 'backgroundColor', 'align', 'columnRatio'})
+_COPY_SOURCE_PROPERTY_LABELS = {'backgroundColor': 'background color', 'align': 'alignment'}
+
+
+def compute_copy_source_result(selected_type, copy_source):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+
+    copy_source = copy_source if isinstance(copy_source, dict) else {}
+    prop = copy_source.get('property')
+    value = copy_source.get('value')
+    source_label = copy_source.get('source_label') if isinstance(copy_source.get('source_label'), str) and copy_source.get('source_label').strip() else 'the referenced source'
+
+    if prop not in _COPY_SOURCE_PROPERTIES:
+        return CommandResult(
+            reply=f"I can't copy that property from {source_label} yet.",
+            action={'type': ActionType.NONE}, confidence=0.2,
+        )
+
+    if prop == 'padding':
+        if not isinstance(value, dict):
+            return CommandResult(
+                reply=f'I could not read a padding value from {source_label}.',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+        patch = _validate_settings_patch({'desktop': value})
+        # _validate_settings_patch drops each nested side INDEPENDENTLY
+        # (see its own per-field loop) — fine for compute_spacing_result,
+        # whose four sides are always identical by construction, but a
+        # copy-source padding value can legitimately have asymmetric
+        # sides. A partial result here (three of four sides applied)
+        # would be exactly the "silent guess" §B forbids, so any side
+        # that failed validation must decline the WHOLE copy, never
+        # apply an incomplete patch.
+        if not patch or set(patch.get('desktop', {})) != set(value):
+            return CommandResult(
+                reply='That padding value is out of the supported range (0-200px).',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+        return CommandResult(
+            reply=f"I will match the selected {selected_type} module's padding to {source_label}. Please confirm.",
+            action={'type': ActionType.UPDATE_MODULE_SETTINGS, 'module_type': selected_type, 'patch': patch},
+            confidence=0.85,
+        )
+
+    if prop in ('backgroundColor', 'align'):
+        label = _COPY_SOURCE_PROPERTY_LABELS[prop]
+        if not isinstance(value, str) or not value.strip():
+            return CommandResult(
+                reply=f'{source_label} has no {label} set, so there is nothing to copy.',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+        candidate = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
+            'module_type': selected_type, 'patch': {prop: value},
+        }
+        validated = validate_action(candidate)
+        if not validated or not validated.get('patch'):
+            return CommandResult(
+                reply=f"The selected {selected_type} module does not support {label}, so I can't copy {source_label}'s.",
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+        return CommandResult(
+            reply=f"I will match the selected {selected_type} module's {label} to {source_label}. Please confirm.",
+            action=validated, confidence=0.85,
+        )
+
+    # prop == 'columnRatio' (§C) — the SOURCE layout's own builder-level
+    # column widths (never rendered pixel widths — see referenceResolver.
+    # ts's own read of LayoutModuleProps.columnWidths), fed through the
+    # EXACT SAME RESTRUCTURE_LAYOUT action + validate_action() width-sum/
+    # min-width gate every other column-ratio change already uses —
+    # computeLayoutAvailableWidthPx/resolveColumnPixelWidths and outer
+    # spacing/gutter/internal padding remain fully authoritative on the
+    # frontend's own render side; this never bypasses or recomputes them.
+    if not isinstance(value, list) or not value:
+        return CommandResult(
+            reply=f'I could not read column widths from {source_label}.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    candidate = {'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': selected_type, 'widths': value}
+    validated = validate_action(candidate)
+    if not validated:
+        return CommandResult(
+            reply=(
+                f"{source_label}'s column ratio does not carry over to the selected layout "
+                '(different column count, or widths that do not fit here).'
+            ),
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    widths = validated['widths']
+    widths_label = '/'.join(str(int(w)) if w == int(w) else str(w) for w in widths)
+    return CommandResult(
+        reply=f'This will change the column widths to {widths_label}%, matching {source_label}. Please confirm.',
+        action=validated, confidence=0.85,
+    )
+
+
+# R4-B3 §A / R4-B4 §1 — the canonical-intent execution entry point.
+# `message` is the raw (not lowercased) user text — several executors
+# (SET_LINK/SET_IMAGE need the real URL casing; CHANGE_SPACING/
+# CHANGE_COLUMN_RATIO only need digits, which are language-neutral, so
+# lower-casing is harmless for them). Every CanonicalIntent value now has
+# a real executor here EXCEPT none are silently skipped — an intent this
+# function doesn't recognize returns None, and the caller (see
 # CanonicalIntentEmailCommandProvider below) falls through to the normal
 # English-pattern deterministic router or the LLM tier, exactly as if
-# canonical-intent detection had not run at all. Never a second, parallel
-# action-producing system: every branch here calls the SAME functions
-# (compute_contrast_fix_result) the English-triggered path already uses.
-def apply_canonical_intent(intent, context):
-    from .intent_normalization import CanonicalIntent
+# canonical-intent detection had not run at all. Never a second,
+# parallel action-producing system: every branch here calls the SAME
+# functions the English-triggered path already uses.
+def apply_canonical_intent(intent, context, message=''):
+    from .intent_normalization import CanonicalIntent, detect_language, find_alignment_value
 
     context = context if isinstance(context, dict) else {}
     selected = context.get('selected_module')
     selected_type = selected.get('type') if isinstance(selected, dict) else None
     props = selected.get('props') if isinstance(selected, dict) else None
+    text = message or ''
+    lowered = text.lower()
 
     if intent == CanonicalIntent.FIX_CONTRAST:
         return compute_contrast_fix_result(selected_type, props)
+    if intent == CanonicalIntent.SET_LINK:
+        return compute_set_link_result(selected_type, text)
+    if intent == CanonicalIntent.CHANGE_SPACING:
+        return compute_spacing_result(selected_type, lowered)
+    if intent == CanonicalIntent.CHANGE_ALIGNMENT:
+        if not selected_type:
+            return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+        current_props = props if isinstance(props, dict) else {}
+        patch = _extract_style_patch(lowered, selected_type, current_props)
+        # R4-B4 §4 — the English-only _ALIGN_PATTERN above finds nothing
+        # for a genuinely non-English alignment word (e.g. Hindi
+        # "बीच में") — find_alignment_value() is the same-language-
+        # independent supplement, tried only when the English regex
+        # found nothing, using the SAME 'align' field/allow-list check.
+        if (not patch or 'align' not in patch) and 'align' in {f['key'] for f in module_capabilities.get_editable_fields(selected_type)}:
+            alignment_value = find_alignment_value(text, detect_language(text))
+            if alignment_value:
+                patch = {**(patch or {}), 'align': alignment_value}
+        align_patch = {'align': patch['align']} if patch and 'align' in patch else None
+        if not align_patch:
+            return CommandResult(
+                reply=f'The selected {selected_type} module does not have an alignment I can change, or I could not tell which alignment you want (left/center/right).',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+        return CommandResult(
+            reply=f'I will update the selected {selected_type} module\'s alignment. Please confirm.',
+            action={'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': selected_type, 'patch': align_patch},
+            confidence=0.85,
+        )
+    if intent == CanonicalIntent.SET_BACKGROUND:
+        if not selected_type:
+            return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+        current_props = props if isinstance(props, dict) else {}
+        patch = _extract_style_patch(f'background {lowered}', selected_type, current_props)
+        bg_patch = {'backgroundColor': patch['backgroundColor']} if patch and 'backgroundColor' in patch else None
+        if not bg_patch:
+            return CommandResult(
+                reply=f'The selected {selected_type} module does not have a background color I can change, or I could not recognize the color.',
+                action={'type': ActionType.NONE}, confidence=0.3,
+            )
+        return CommandResult(
+            reply=f'I will update the selected {selected_type} module\'s background. Please confirm.',
+            action={'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': selected_type, 'patch': bg_patch},
+            confidence=0.85,
+        )
+    if intent == CanonicalIntent.ENABLE_OUTLOOK_FALLBACK:
+        return compute_outlook_fallback_result(selected_type)
+    if intent == CanonicalIntent.EXPLAIN_VALIDATION_ISSUE:
+        context_with_message = {**context, '_retrieval_message': text}
+        return compute_explain_validation_issue_result(context_with_message)
+    if intent == CanonicalIntent.COMPARE_IMPORT_RECONSTRUCTION:
+        return compute_reconstruction_explain_result(context)
+    if intent == CanonicalIntent.CHANGE_COLUMN_RATIO:
+        return compute_column_ratio_result(selected_type, lowered)
+    if intent == CanonicalIntent.SET_IMAGE:
+        return compute_set_image_result(selected_type, text)
     return None
 
 
@@ -1871,44 +2362,18 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
                 action={'type': ActionType.SET_FAVICON, 'url': url}, confidence=0.85,
             )
 
-        # C-3 remediation — never guess a destination for a placeholder
-        # link; ask for it unless the user already gave one in this same
-        # message, and only ever write it through the module's own
-        # manifest-allow-listed 'href' field (never a second, parallel
-        # link-mutation path — same UPDATE_MODULE_PROPS every other
-        # property change already goes through).
-        if _PLACEHOLDER_LINK_FIX_PATTERN.search(lowered):
-            if not selected_type:
-                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
-            href_field = module_capabilities.get_editable_field(selected_type, 'href')
-            if href_field is None:
-                return CommandResult(
-                    reply=f'The selected {selected_type} module does not have a link to fix.',
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            url_match = _URL_IN_TEXT_PATTERN.search(text)
-            if not url_match:
-                return CommandResult(
-                    reply=(
-                        "I won't guess a destination for this link. What URL should it go to? "
-                        '(e.g. "use https://example.com/shop")'
-                    ),
-                    action={'type': ActionType.NONE}, confidence=0.4,
-                )
-            url = _clean_url_value(url_match.group(0))
-            if not url:
-                return CommandResult(
-                    reply="That URL doesn't look valid — please give a full https:// (or http://) link.",
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            return CommandResult(
-                reply=f"I will set the selected {selected_type} module's link to {url}. Please confirm.",
-                action={
-                    'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
-                    'module_type': selected_type, 'patch': {'href': url},
-                },
-                confidence=0.85,
-            )
+        # C-3 remediation, extended R4-B4 §1 (SET_LINK) — never guess a
+        # destination link; ask for it unless the user already gave one
+        # in this same message, and only ever write it through the
+        # module's own manifest-allow-listed 'href' field (never a
+        # second, parallel link-mutation path — same UPDATE_MODULE_PROPS
+        # every other property change already goes through). Two
+        # trigger phrasings share the SAME executor: the original
+        # "fix ... link" (placeholder-repair framing) and the newer,
+        # broader "set/change/update ... link/url" (plain SET_LINK
+        # framing) — see _SET_LINK_PATTERN's own comment.
+        if _PLACEHOLDER_LINK_FIX_PATTERN.search(lowered) or _SET_LINK_PATTERN.search(lowered):
+            return compute_set_link_result(selected_type, text)
 
         # C-2 remediation — deterministic (no-LLM) weak-text-contrast fix.
         # Computes a real WCAG AA-compliant color via
@@ -1925,30 +2390,7 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
         # Sub-phase 6, work package D — VML fallback toggle ("enable
         # outlook vml for this button" / "add an outlook wrapper").
         if _VML_PATTERN.search(lowered):
-            if not selected_type:
-                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
-            # Background is checked first: hero-background-image is the one
-            # module type with BOTH capabilities (its own CTA button VML
-            # nests inside its background ghost-table VML — see
-            # heroCatalog.tsx), so APPLY_OUTLOOK_WRAPPER is the single
-            # correct action that covers both for that type.
-            if _is_vml_background_module(selected_type):
-                return CommandResult(
-                    reply=(
-                        f'I will enable the Classic Outlook VML background fallback for the selected '
-                        f'{selected_type} module.'
-                    ),
-                    action={'type': ActionType.APPLY_OUTLOOK_WRAPPER, 'module_type': selected_type}, confidence=0.85,
-                )
-            if _is_vml_button_module(selected_type):
-                return CommandResult(
-                    reply=f'I will enable the Classic Outlook VML fallback for the selected {selected_type} module.',
-                    action={'type': ActionType.APPLY_VML_PATTERN, 'module_type': selected_type}, confidence=0.85,
-                )
-            return CommandResult(
-                reply=f'The selected {selected_type} module does not support a VML fallback.',
-                action={'type': ActionType.NONE}, confidence=0.3,
-            )
+            return compute_outlook_fallback_result(selected_type)
 
         # Sub-phase 6, work package D — responsive visibility ("hide this
         # on mobile" / "hide on desktop" / "show it on both").
@@ -1972,32 +2414,33 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
             )
 
         # Sub-phase 6, work package D — layout column widths ("change the
-        # column widths to 70/30").
-        if _COLUMN_WIDTHS_PATTERN.search(lowered):
-            if not selected_type:
-                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
-            capability = module_capabilities.get_module_capability(selected_type)
-            if not capability or not capability.get('isLayout'):
-                return CommandResult(
-                    reply=f'The selected {selected_type} module is not a layout, so it has no column widths to change.',
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            numbers = [float(n) for n in _WIDTH_NUMBERS_PATTERN.findall(lowered)]
-            column_count = capability.get('columnCount') or 0
-            if len(numbers) != column_count:
-                return CommandResult(
-                    reply=(
-                        f'Tell me {column_count} width percentages for this layout, e.g. '
-                        '"change the column widths to 70/30".'
-                    ),
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            widths_label = '/'.join(str(int(n)) if n == int(n) else str(n) for n in numbers)
-            return CommandResult(
-                reply=f'This will change the column widths to {widths_label}%. Please confirm.',
-                action={'type': ActionType.RESTRUCTURE_LAYOUT, 'module_type': selected_type, 'widths': numbers},
-                confidence=0.85,
-            )
+        # column widths to 70/30"). R4-B4 §1/§2/§3 — widened, capability-
+        # aware: also matches the shorter "make these columns 70/30" /
+        # even bare "make this 70/30" (no "column"/"width" word at all)
+        # WHEN the currently selected module is itself a layout type —
+        # the selection itself is the disambiguating signal here, the
+        # same "capability-aware execution" posture §2 asks for
+        # elsewhere (never require MORE words just because the target is
+        # already unambiguous from context).
+        _selected_is_layout = bool(
+            selected_type and (module_capabilities.get_module_capability(selected_type) or {}).get('isLayout'),
+        )
+        if len(_WIDTH_NUMBERS_PATTERN.findall(lowered)) >= 2 and (
+            _COLUMN_WIDTHS_PATTERN.search(lowered) or 'column' in lowered or _selected_is_layout
+        ):
+            return compute_column_ratio_result(selected_type, lowered)
+
+        # R4-B4 §1/§3 — CHANGE_SPACING ("give this 20px padding" / "add
+        # some space inside" / "increase internal spacing to 20").
+        if _SPACING_PATTERN.search(lowered):
+            return compute_spacing_result(selected_type, lowered)
+
+        # R4-B4 §1/§2 — SET_IMAGE. Checked BEFORE the generic style-patch
+        # fallback below (which has no image_asset handling at all) —
+        # never guesses a source, same "ask, don't invent" posture as
+        # SET_LINK.
+        if _SET_IMAGE_PATTERN.search(lowered):
+            return compute_set_image_result(selected_type, text)
 
         # Insert — checked before delete/duplicate so "add a button" never
         # collides with "remove"/"duplicate" phrasing.
@@ -2141,10 +2584,12 @@ def _extract_style_patch(lowered, module_type, current_props):
             base = (current_props or {}).get('fontSize') or 16
             patch['fontSize'] = base - 4
 
-    if 'align' in allowed:
-        align_match = _ALIGN_PATTERN.search(lowered)
-        if align_match:
-            patch['align'] = align_match.group(1) or align_match.group(2)
+    if 'align' in allowed and _ALIGN_PATTERN.search(lowered):
+        from .intent_normalization import find_alignment_value
+
+        alignment_value = find_alignment_value(lowered, 'en')
+        if alignment_value:
+            patch['align'] = alignment_value
 
     return patch or None
 
@@ -2200,20 +2645,43 @@ class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
     message, or a non-English message with no executable canonical-
     intent match, always reaches `fallback` completely unchanged — this
     class changes behavior ONLY for the specific non-English + executable
-    -intent case."""
+    -intent case.
 
-    def __init__(self, fallback):
+    R4-B4 Closure §A — after apply_canonical_intent() has ALREADY built
+    the final `action` (English-language `reply` included), this wrapper
+    makes ONE best-effort attempt to REPHRASE just the reply text into
+    the detected language via localize_reply() — a separate, later,
+    read-only step that is structurally incapable of touching `action`
+    (see localize_reply()'s own docstring: it takes a string, returns a
+    string or None, nothing else). Only ever attempted when a local
+    endpoint is actually configured (EMAILBUILDER_LOCAL_AI_BASE_URL) —
+    never OpenAI, regardless of what EMAILBUILDER_AI_COMMAND_PROVIDER is
+    set to (§F: "no OpenAI call when Local AI is selected"). On any
+    failure (server down, timeout, malformed response), the ORIGINAL
+    English CommandResult is returned unchanged — never blocks, never
+    raises, the action still applies exactly as it would have."""
+
+    def __init__(self, fallback, localization_client_factory=None):
         self.fallback = fallback
+        self._localization_client_factory = localization_client_factory
 
     def resolve(self, message, context):
         from .intent_normalization import EXECUTABLE_INTENTS, normalize_intent
 
         intent, _confidence, language = normalize_intent(message)
         if intent in EXECUTABLE_INTENTS and language != 'en':
-            result = apply_canonical_intent(intent, context)
+            result = apply_canonical_intent(intent, context, message)
             if result is not None:
-                return result
+                return self._localize(result, language)
         return self.fallback.resolve(message, context)
+
+    def _localize(self, result, language):
+        from .ai_command_local import localize_reply
+
+        translated = localize_reply(result.reply, language, self._localization_client_factory)
+        if translated is None:
+            return result
+        return CommandResult(reply=translated, action=result.action, confidence=result.confidence, provider=result.provider)
 
 
 class FallbackEmailCommandProvider(EmailCommandProvider):

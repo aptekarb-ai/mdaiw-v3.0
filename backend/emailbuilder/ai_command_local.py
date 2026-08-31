@@ -563,3 +563,61 @@ class LocalEmailCommandProvider(EmailCommandProvider):
             confidence=float(raw.get('confidence') or 0.0),
             provider='local',
         )
+
+
+# R4-B4 Closure §A — the response-localization layer. Deliberately a
+# SEPARATE, LATER step from canonical-intent execution — apply_canonical_
+# intent() and every compute_*_result() function it calls are UNCHANGED
+# by this, always producing their action/reply in English first (see
+# ai_command.py's own architecture: natural language -> canonical intent
+# -> deterministic/capability-aware action -> validate_action() ->
+# proposal). This function only ever REPHRASES an already-final,
+# already-validated-shape `reply` string — it is never given the action,
+# never returns one, and structurally cannot influence it. Best-effort:
+# any failure (server down, malformed response, timeout) returns None,
+# and the caller keeps the original English text — never blocks, never
+# raises, matches "if local model unavailable ... deterministic execution
+# may fall back to English text" (R4-B4 Closure §A).
+_LANGUAGE_NAMES = {'hi': 'Hindi', 'es': 'Spanish', 'fr': 'French'}
+
+_LOCALIZATION_SYSTEM_PROMPT = (
+    'Translate the following email-builder assistant message into {language}. '
+    'Preserve EXACTLY, never translate: URLs, hex color codes, numbers and units (px, %), '
+    'HTML tag names, CSS property names, AMPScript syntax (%%...%%), and exact builder property '
+    'names (e.g. align, backgroundColor, paddingTop). Keep the same meaning and tone — this is a '
+    'short confirmation/explanation from an email-building assistant, not a document to summarize. '
+    'Return ONLY the translated message, no commentary, no quotation marks around it.'
+)
+
+
+def localize_reply(english_text, language, client_factory=None):
+    """Returns the translated text, or None on ANY failure/when
+    unavailable — see this module's own docstring above for why None
+    must always mean "caller keeps the English original," never an
+    error. `client_factory` is injectable for tests, same convention as
+    every other provider in this app; defaults to the SAME local-server
+    client LocalEmailCommandProvider itself uses (same base_url/model/
+    timeout config — never a second, independently-configured client)."""
+    if language not in _LANGUAGE_NAMES or not isinstance(english_text, str) or not english_text.strip():
+        return None
+    if not settings.EMAILBUILDER_LOCAL_AI_BASE_URL:
+        return None
+    factory = client_factory or LocalEmailCommandProvider._default_client_factory
+    try:
+        client = factory()
+        completion = client.chat.completions.create(
+            model=settings.EMAILBUILDER_LOCAL_AI_MODEL,
+            max_completion_tokens=300,
+            timeout=settings.EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS,
+            messages=[
+                {'role': 'system', 'content': _LOCALIZATION_SYSTEM_PROMPT.format(language=_LANGUAGE_NAMES[language])},
+                {'role': 'user', 'content': english_text},
+            ],
+        )
+        translated = completion.choices[0].message.content
+    except Exception as exc:  # noqa: BLE001 - best-effort only, never leak provider/network internals
+        logger.info('emailbuilder.ai_command_local.localization_failed error=%s', type(exc).__name__)
+        return None
+    if not isinstance(translated, str) or not translated.strip():
+        return None
+    return translated.strip()

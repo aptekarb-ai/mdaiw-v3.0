@@ -9,7 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .ai_command import (
-    ActionType, CommandResult, get_default_email_command_provider, requires_confirmation,
+    ActionType, CommandResult, compute_copy_source_result, get_default_email_command_provider, requires_confirmation,
     requires_strong_confirmation, resolve_asset_references, validate_action,
 )
 from . import learning
@@ -161,16 +161,45 @@ class EmailAICommandView(APIView):
             # conversation. See ai_command_openai.py's _build_safe_context
             # for how the optional AI provider actually uses this.
             'import_reconstruction': data.get('import_reconstruction'),
+            # R4-B4 Closure §B/§C — see the dedicated branch below; kept
+            # in safe_context (rather than read straight off `data`) for
+            # the same reason every other field here is: one single
+            # whitelist the view trusts, matching every other context key.
+            'copy_source': data.get('copy_source'),
             # Used only by the optional AI provider's own separate
             # throttle (ai_command_openai.py) — never logged or returned.
             '_rate_limit_identifier': str(request.user.pk),
         }
 
-        provider = get_default_email_command_provider()
-        try:
-            result = provider.resolve(data['message'], safe_context)
-        except Exception:  # noqa: BLE001 - never leak provider internals to the client
-            result = CommandResult(reply=_SAFE_FALLBACK_REPLY, action={'type': ActionType.NONE}, confidence=0.0)
+        copy_source = safe_context.get('copy_source')
+        if isinstance(copy_source, dict):
+            # R4-B4 Closure §B/§C — deterministic path ALWAYS wins for a
+            # copy-source request, regardless of EMAILBUILDER_AI_COMMAND_
+            # PROVIDER selection. The value has already been read from a
+            # resolved source module/column client-side (see
+            # referenceResolver.ts) — there is nothing left for an LLM
+            # tier to interpret, and routing it through one anyway would
+            # risk a hallucinated action for a request that must never
+            # guess. The SAME validate_action() gate every other path
+            # here uses still applies unconditionally below.
+            from .intent_normalization import detect_language
+
+            selected = safe_context.get('selected_module')
+            selected_type = selected.get('type') if isinstance(selected, dict) else None
+            result = compute_copy_source_result(selected_type, copy_source)
+            language = detect_language(data['message'])
+            if language != 'en':
+                from .ai_command_local import localize_reply
+
+                translated = localize_reply(result.reply, language)
+                if translated is not None:
+                    result = CommandResult(reply=translated, action=result.action, confidence=result.confidence, provider=result.provider)
+        else:
+            provider = get_default_email_command_provider()
+            try:
+                result = provider.resolve(data['message'], safe_context)
+            except Exception:  # noqa: BLE001 - never leak provider internals to the client
+                result = CommandResult(reply=_SAFE_FALLBACK_REPLY, action={'type': ActionType.NONE}, confidence=0.0)
 
         validated_action = validate_action(result.action)
         if validated_action is None:

@@ -1526,3 +1526,68 @@ describe('AIEngineerPanel — R4-B3 Referential Context Resolver integration', (
     expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({ selected_module: null }));
   });
 });
+
+describe('AIEngineerPanel — R4-B4 Closure §B/§C copy-source integration', () => {
+  it('a resolved copy-source request sends the ALREADY-READ value as copy_source, and the returned proposal applies normally', async () => {
+    mockSpeech();
+    const previous = createModule('text', 1);
+    previous.settings = { ...previous.settings, desktop: { paddingTop: 30, paddingRight: 30, paddingBottom: 30, paddingLeft: 30 } };
+    const target = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: "I will match the selected button module's padding to the previous section. Please confirm.",
+      action: {
+        type: 'UPDATE_MODULE_SETTINGS', target: 'selected', module_type: 'button',
+        patch: { desktop: { paddingTop: 30, paddingRight: 30, paddingBottom: 30, paddingLeft: 30 } },
+      },
+    }));
+    const { onApplyAction } = renderPanel({ selectedModule: target, content: { version: 1, modules: [previous, target] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'use the same padding as the previous section');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText("Update the selected button module's settings (desktop)");
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
+      copy_source: {
+        property: 'padding',
+        value: { paddingTop: 30, paddingRight: 30, paddingBottom: 30, paddingLeft: 30 },
+        source_label: expect.stringContaining('the previous section'),
+      },
+    }));
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyAction).toHaveBeenCalledWith(
+      { type: 'UPDATE_MODULE_SETTINGS', target: 'selected', module_type: 'button', patch: { desktop: { paddingTop: 30, paddingRight: 30, paddingBottom: 30, paddingLeft: 30 } } },
+      target.id,
+    );
+  });
+
+  it('an honestly-declined copy-source request (no column-level alignment capability) never calls the backend and never mutates', async () => {
+    mockSpeech();
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this column use the same alignment as column 1');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Columns don't have their own alignment setting/)).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled();
+    expect(onApplyAction).not.toHaveBeenCalled();
+    // No proposal card is shown for a locally-declined request — there is
+    // nothing to Apply or Cancel.
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull();
+  });
+
+  it('a copy-source request with no target selected is declined locally, not sent to the backend', async () => {
+    mockSpeech();
+    const previous = createModule('text', 1);
+    renderPanel({ selectedModule: null, content: { version: 1, modules: [previous] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'use the same padding as the previous section');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Select the module you want to update first/)).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+});

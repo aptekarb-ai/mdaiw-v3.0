@@ -94,12 +94,19 @@ class NormalizeIntentTests(SimpleTestCase):
             intent, _confidence, _lang = normalize_intent(question)
             self.assertEqual(intent, CanonicalIntent.COMPARE_IMPORT_RECONSTRUCTION, question)
 
-    def test_language_recognized_regardless_of_whether_the_intent_is_executable(self):
-        # SET_LINK is detected (a real canonical intent) but NOT in
-        # EXECUTABLE_INTENTS — normalize_intent must still recognize it.
+    def test_normalize_intent_recognition_is_independent_of_executability(self):
+        # R4-B4 §1 — WAS "SET_LINK is detected but NOT executable" (true
+        # under R4-B3, where only FIX_CONTRAST had a real executor).
+        # R4-B4 gives every CanonicalIntent a real executor (see
+        # EXECUTABLE_INTENTS' own updated docstring), so this now proves
+        # the underlying architectural point differently: normalize_intent
+        # itself has ZERO knowledge of EXECUTABLE_INTENTS — recognition
+        # and executability are two genuinely separate concerns, they
+        # just happen to fully overlap today.
         intent, _c, _lang = normalize_intent('change the link')
         self.assertEqual(intent, CanonicalIntent.SET_LINK)
-        self.assertNotIn(CanonicalIntent.SET_LINK, EXECUTABLE_INTENTS)
+        import inspect
+        self.assertNotIn('EXECUTABLE_INTENTS', inspect.getsource(normalize_intent))
 
 
 def _first_phrase(intent, language):
@@ -118,8 +125,13 @@ class ApplyCanonicalIntentTests(TestCase):
         result = apply_canonical_intent(CanonicalIntent.FIX_CONTRAST, {})
         self.assertEqual(result.action['type'], 'NONE')
 
-    def test_non_executable_intent_returns_none(self):
-        self.assertIsNone(apply_canonical_intent(CanonicalIntent.SET_LINK, {}))
+    def test_intent_not_in_the_canonical_vocabulary_returns_none(self):
+        # WAS "SET_LINK returns None (non-executable)" — SET_LINK has a
+        # real executor under R4-B4 (see the ApplyCanonicalIntentTests
+        # coverage in test_canonical_actions.py). This now tests the
+        # genuinely still-true case: a value that isn't even a real
+        # CanonicalIntent at all.
+        self.assertIsNone(apply_canonical_intent('NOT_A_CANONICAL_INTENT', {}))
 
     def test_malformed_context_never_raises(self):
         self.assertIsNotNone(apply_canonical_intent(CanonicalIntent.FIX_CONTRAST, None))
@@ -156,11 +168,20 @@ class CanonicalIntentEmailCommandProviderTests(TestCase):
         provider.resolve('fix the contrast', {'selected_module': {'type': 'text', 'props': {}}})
         self.assertEqual(fallback.calls, ['fix the contrast'])
 
-    def test_non_english_non_executable_intent_falls_through_to_fallback(self):
+    def test_non_english_executable_intent_with_no_usable_result_still_never_reaches_fallback(self):
+        # R4-B4 §1 — WAS "SET_LINK is non-executable, so it falls
+        # through" (true only under R4-B3). SET_LINK is executable now
+        # (see ai_command.compute_set_link_result), and even its OWN
+        # "I won't guess a URL, please provide one" decline is a real,
+        # non-None CommandResult — the fallback must still never be
+        # reached, proving apply_canonical_intent()'s return value (not
+        # just "the action mutates something") is what gates the
+        # fallback call.
         fallback = _FakeFallback()
         provider = CanonicalIntentEmailCommandProvider(fallback=fallback)
-        provider.resolve('cambia el enlace', {})
-        self.assertEqual(fallback.calls, ['cambia el enlace'])
+        result = provider.resolve('cambia el enlace', {'selected_module': {'type': 'button', 'props': {}}})
+        self.assertEqual(fallback.calls, [])
+        self.assertEqual(result.action['type'], 'NONE')
 
     def test_non_english_unmatched_message_falls_through_to_fallback(self):
         fallback = _FakeFallback()

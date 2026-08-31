@@ -606,7 +606,21 @@ export function EmailBuilderWorkspacePage() {
         if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
           return false;
         }
-        handleUpdateSettings(builder.selectedModuleId, action.patch);
+        // R4-B4 §1/§2 (CHANGE_SPACING) — handleUpdateSettings/
+        // updateModuleSettings does a SHALLOW merge into module.settings
+        // (see useEmailBuilderState.ts's own updateModuleSettings), so a
+        // nested key like `desktop` would be REPLACED wholesale, silently
+        // dropping every other desktop setting (fontSize, backgroundColor,
+        // ...) the module already had — never acceptable for an AI-
+        // proposed change. Pre-merge the proposed `desktop` patch into a
+        // COPY of the module's own current desktop settings first, the
+        // exact same pattern PropertiesPanel.tsx's own spacing controls
+        // already use for a partial nested update.
+        const patch = action.patch as { desktop?: Record<string, unknown> } & Record<string, unknown>;
+        const mergedPatch = patch.desktop
+          ? { ...patch, desktop: { ...builder.selectedModule.settings.desktop, ...patch.desktop } }
+          : patch;
+        handleUpdateSettings(builder.selectedModuleId, mergedPatch);
         return true;
       }
       case 'APPLY_VML_PATTERN':

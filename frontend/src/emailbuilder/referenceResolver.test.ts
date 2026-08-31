@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveReference, type ReferentialResolutionContext } from './referenceResolver';
+import { resolveCopySourceRequest, resolveReference, type ReferentialResolutionContext } from './referenceResolver';
 import type { EmailModule } from './edm';
 import { createModule } from './moduleFactory';
 
@@ -269,5 +269,149 @@ describe('resolveReference — section reference', () => {
   it('passes through "the previous section" with no selection or prior referent (zero candidates, not ambiguity)', () => {
     const result = resolveReference(baseContext({ message: 'match the previous section' }));
     expect(result.status).toBe('no-referring-expression');
+  });
+});
+
+describe('resolveCopySourceRequest — R4-B4 Closure §B/§C', () => {
+  it('not a copy-source request: passes through untouched', () => {
+    const result = resolveCopySourceRequest(baseContext({ message: 'add a divider and set the color to green' }));
+    expect(result.status).toBe('not-a-copy-request');
+  });
+
+  it('"use the same padding as the previous section" reads the previous top-level module\'s desktop padding', () => {
+    const previous = mod('text');
+    previous.settings = { ...previous.settings, desktop: { paddingTop: 24, paddingRight: 24, paddingBottom: 24, paddingLeft: 24 } };
+    const target = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'use the same padding as the previous section',
+      modules: [previous, target],
+      selectedModule: { id: target.id, type: 'button', label: 'the button' },
+    }));
+    expect(result).toMatchObject({
+      status: 'resolved', property: 'padding',
+      value: { paddingTop: 24, paddingRight: 24, paddingBottom: 24, paddingLeft: 24 },
+    });
+  });
+
+  it('"give this the same spacing as the section above" — "spacing" is a synonym for padding', () => {
+    const previous = mod('text');
+    previous.settings = { ...previous.settings, desktop: { paddingTop: 8, paddingRight: 8, paddingBottom: 8, paddingLeft: 8 } };
+    const target = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'give this the same spacing as the section above',
+      modules: [previous, target],
+      selectedModule: { id: target.id, type: 'button', label: 'the button' },
+    }));
+    expect(result).toMatchObject({ status: 'resolved', property: 'padding' });
+  });
+
+  it('"use the same background color as the previous module" reads the previous module\'s background color', () => {
+    const previous = mod('button');
+    previous.props = { ...previous.props, backgroundColor: '#112233' };
+    const target = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'use the same background color as the previous module',
+      modules: [previous, target],
+      selectedModule: { id: target.id, type: 'button', label: 'the button' },
+    }));
+    expect(result).toMatchObject({ status: 'resolved', property: 'backgroundColor', value: '#112233' });
+  });
+
+  it('declines when the source module has no background color to copy', () => {
+    const previous = mod('divider');
+    const target = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'use the same background color as the previous module',
+      modules: [previous, target],
+      selectedModule: { id: target.id, type: 'button', label: 'the button' },
+    }));
+    expect(result.status).toBe('declined');
+  });
+
+  it('"make this column use the same alignment as column 1" is an honest capability decline, never a guess', () => {
+    // §B's own worked example: columns have no horizontal-alignment
+    // setting in this builder's data model — there is no existing
+    // action this could route through.
+    const result = resolveCopySourceRequest(baseContext({ message: 'make this column use the same alignment as column 1' }));
+    expect(result.status).toBe('declined');
+    if (result.status === 'declined') {
+      expect(result.message).toMatch(/alignment/i);
+    }
+  });
+
+  it('module-level alignment copy ("make this the same alignment as the previous section") is supported', () => {
+    const previous = mod('button');
+    previous.props = { ...previous.props, align: 'right' };
+    const target = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'make this the same alignment as the previous section',
+      modules: [previous, target],
+      selectedModule: { id: target.id, type: 'button', label: 'the button' },
+    }));
+    expect(result).toMatchObject({ status: 'resolved', property: 'align', value: 'right' });
+  });
+
+  it('§C — "make these columns the same ratio as the previous layout" reads the previous layout\'s column widths', () => {
+    const previousLayout = mod('layout-2col-30-70');
+    previousLayout.props = { ...previousLayout.props, columnWidths: [55, 45] };
+    const targetLayout = mod('layout-2col-50-50');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'make these columns the same ratio as the previous layout',
+      modules: [previousLayout, targetLayout],
+      selectedModule: { id: targetLayout.id, type: 'layout-2col-50-50', label: 'the layout' },
+    }));
+    expect(result).toMatchObject({ status: 'resolved', property: 'columnRatio', value: [55, 45] });
+  });
+
+  it('§C — declines when the selected module is not itself a layout', () => {
+    const previousLayout = mod('layout-2col-30-70');
+    const target = mod('text');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'make these columns the same ratio as the previous layout',
+      modules: [previousLayout, target],
+      selectedModule: { id: target.id, type: 'text', label: 'the text' },
+    }));
+    expect(result.status).toBe('declined');
+  });
+
+  it('declines with no selection at all rather than guessing a target', () => {
+    const previous = mod('text');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'use the same padding as the previous section',
+      modules: [previous],
+      selectedModule: null,
+    }));
+    expect(result.status).toBe('declined');
+  });
+
+  it('declines when the selected module is already the first section (no previous to copy from)', () => {
+    const only = mod('text');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'use the same padding as the previous section',
+      modules: [only],
+      selectedModule: { id: only.id, type: 'text', label: 'the text' },
+    }));
+    expect(result.status).toBe('declined');
+  });
+
+  it('declines when the selected module is nested inside a column, not top-level', () => {
+    const previous = mod('text');
+    const nested = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'use the same padding as the previous section',
+      modules: [previous], // `nested` deliberately absent from the top-level list
+      selectedModule: { id: nested.id, type: 'button', label: 'the button' },
+    }));
+    expect(result.status).toBe('declined');
+  });
+
+  it('declines with a helpful message when the property/source phrasing is not recognized', () => {
+    const target = mod('button');
+    const result = resolveCopySourceRequest(baseContext({
+      message: 'give this the same padding as the sidebar widget',
+      modules: [target],
+      selectedModule: { id: target.id, type: 'button', label: 'the button' },
+    }));
+    expect(result.status).toBe('declined');
   });
 });
