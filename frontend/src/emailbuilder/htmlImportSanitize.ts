@@ -111,3 +111,98 @@ export function extractStyleDeclarations(styleAttr: string): Map<string, string>
   }
   return declarations;
 }
+
+// R3 correction — event-handler attributes (onclick, onerror, ...) are
+// never in ATTRIBUTE_ALLOWLIST, so the mapper never READS them, but
+// nothing previously REMOVED them from the DOM this function serializes.
+// Matches every "on*" attribute name regardless of case (HTML attribute
+// names are case-insensitive; the parsed DOM already lowercases them,
+// this is defensive).
+const EVENT_HANDLER_ATTRIBUTE_PATTERN = /^on/i;
+
+// R3 correction — the ONE place that turns the parsed-but-still-"live"
+// import Document into a genuinely safe DOM for preview purposes. Reuses
+// this file's own DANGEROUS_TAGS set and isSafeAnchorUrl/isSafeResourceUrl/
+// validateCustomCss — the EXACT SAME primitives htmlImportMapper.ts's own
+// attribute reading already relies on — never a second, independently-
+// defined notion of "safe". Mutates the CLONE in place (never the live
+// `document` the mapper/analyzer still need); called once, synchronously,
+// by renderSanitizedSourceHtml below.
+function stripUnsafePreviewContent(root: Document): void {
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    for (const attr of Array.from(el.attributes)) {
+      if (EVENT_HANDLER_ATTRIBUTE_PATTERN.test(attr.name)) el.removeAttribute(attr.name);
+    }
+  }
+
+  // Unsafe anchor destinations: the LABEL/element survives (this is a
+  // visual preview, not a re-import), only the dangerous target is
+  // removed — same "keep what's safe, drop only what's dangerous"
+  // policy the mapper's own describeAnchorLossIfAny already applies to
+  // the resulting EDM, just enforced here on the raw markup too.
+  // Fragment hrefs are left alone — harmless in-page navigation.
+  root.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (href && !isFragmentHref(href) && !isSafeAnchorUrl(href)) a.removeAttribute('href');
+  });
+
+  root.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (src && !isSafeResourceUrl(src)) img.removeAttribute('src');
+  });
+
+  root.querySelectorAll('[background]').forEach((el) => {
+    const background = el.getAttribute('background');
+    if (background && !isSafeResourceUrl(background)) el.removeAttribute('background');
+  });
+
+  // Whole style attribute dropped only if the SAME security pattern
+  // check extractStyleDeclarations already runs on it fails (script/
+  // expression()/behavior/-moz-binding/@import/data:/embedded-tag) —
+  // never touched otherwise, so ordinary safe declarations (color,
+  // background-color, padding, text-align, font-*, border, ...) survive
+  // completely untouched.
+  root.querySelectorAll('[style]').forEach((el) => {
+    const style = el.getAttribute('style');
+    if (style && !validateCustomCss(style).valid) el.removeAttribute('style');
+  });
+
+  // A <style> block's contents go through the identical check — dropped
+  // whole only if actively dangerous, never because it "originated in
+  // <head>" (querySelectorAll on the Document searches head AND body).
+  root.querySelectorAll('style').forEach((styleEl) => {
+    const css = styleEl.textContent ?? '';
+    if (css.trim() && !validateCustomCss(css).valid) styleEl.remove();
+  });
+}
+
+// R3 (Import HTML AI Reconstruction) — the "Original" preview pane needs
+// a real HTML string to hand an isolated, sandboxed iframe (see
+// ImportReviewWorkspace.tsx). This represents "the user's HTML after
+// mandatory security sanitization" — NOT a deliberately-degraded or
+// re-styled version of it: only DANGEROUS_TAGS elements and the unsafe
+// content stripUnsafePreviewContent targets are ever removed; every
+// other presentation fact (inline style, bgcolor/background, width/
+// height/align/valign, safe href/src, table/cell attributes, <style>
+// block CSS, ...) survives verbatim. Any visual difference from the
+// Reconstructed pane must come from the RECONSTRUCTION adding/changing
+// something, never from this function quietly discarding source
+// styling. Operates on a CLONE — never the live `document` the mapper/
+// analyzer still need to walk (their own dangerous-tag handling only
+// ever SKIPS those elements while building modules; it never mutates
+// the DOM, so a naive `outerHTML` would still contain live markup this
+// function is responsible for removing). The destination iframe is ALSO
+// rendered with sandbox="" (no scripting context at all, see
+// PreviewStudioPanel.tsx's identical convention) — defense in depth,
+// not the sole protection; MSO conditional comments are inert HTML
+// comments in every browser regardless (never executed, nothing to
+// strip), so they are left exactly as-is and simply render as nothing,
+// same as they would in any real inbox preview.
+export function renderSanitizedSourceHtml(document: Document): string {
+  const clone = document.cloneNode(true) as Document;
+  for (const tag of DANGEROUS_TAGS) {
+    clone.querySelectorAll(tag).forEach((el) => el.remove());
+  }
+  stripUnsafePreviewContent(clone);
+  return clone.documentElement?.outerHTML ?? clone.body?.outerHTML ?? '';
+}

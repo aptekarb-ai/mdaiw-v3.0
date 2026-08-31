@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router';
+import { MemoryRouter, Route, Routes, useParams, useSearchParams } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ImportHtmlPage } from './ImportHtmlPage';
 import * as client from '../api/client';
@@ -22,7 +22,9 @@ afterEach(() => {
 
 function BuilderProbe() {
   const { id } = useParams<{ id: string }>();
-  return <div>Builder for {id}</div>;
+  const [searchParams] = useSearchParams();
+  const tab = searchParams.get('tab');
+  return <div>Builder for {id}{tab ? ` (tab=${tab})` : ''}</div>;
 }
 
 function doc(overrides: Partial<EmailDocument> = {}): EmailDocument {
@@ -53,32 +55,75 @@ async function pasteAndReview(user: ReturnType<typeof userEvent.setup>, html: st
   await user.click(screen.getByRole('button', { name: 'Review Import →' }));
 }
 
-describe('ImportHtmlPage', () => {
-  it('parses pasted HTML and shows the Import Review with module count and no findings for clean input', async () => {
+function fidelityRow(label: string): HTMLElement {
+  const heading = screen.getByText(label, { selector: '.import-review-workspace__fidelity-label' });
+  return heading.closest('li')!;
+}
+
+describe('ImportHtmlPage — Import Review workspace (R3)', () => {
+  it('parses pasted HTML and shows the reconstruction summary derived from FidelityReport, not hard-coded', async () => {
     const user = userEvent.setup();
     renderPage();
     await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
-    expect(await screen.findByText(/1 module imported/)).toBeInTheDocument();
-    expect(screen.getByText('No issues found — everything imported cleanly.')).toBeInTheDocument();
+    expect(await screen.findByText(/1 module reconstructed/)).toBeInTheDocument();
+    // Clean import: every category should be preserved/normalized, never approximated/removed for this fixture.
+    expect(screen.getByText(/0 removed/)).toBeInTheDocument();
   });
 
-  it('shows a finding for content that could not be imported (e.g. a script tag)', async () => {
+  it('renders all 8 FidelityReport categories with statuses that exactly reflect the underlying data', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    for (const label of ['Structure', 'Content', 'Typography', 'Spacing', 'Images', 'Links', 'Responsive', 'Outlook']) {
+      expect(within(fidelityRow(label)).getByText(label)).toBeInTheDocument();
+    }
+    // Responsive must never show as Preserved — R2 hardening: the builder
+    // always introduces its own mobile behavior, so a clean import with no
+    // source stylesheet is Normalized, never Preserved.
+    expect(within(fidelityRow('Responsive')).getByText('Normalized')).toBeInTheDocument();
+    expect(within(fidelityRow('Responsive')).getByText(/No explicit source responsive behavior was detected/)).toBeInTheDocument();
+  });
+
+  it('a 38/62 source column ratio reports BOTH the detected ratio and the reconstructed 40/60 layout, never implying 40/60 was the source', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td width="380">A</td><td width="620">B</td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    const structureRow = fidelityRow('Structure');
+    expect(within(structureRow).getByText('Approximated')).toBeInTheDocument();
+    await user.click(within(structureRow).getByRole('button', { name: /Show \d+ detail/ }));
+    expect(within(structureRow).getByText(/38\/62/)).toBeInTheDocument();
+    expect(within(structureRow).getByText(/40\/60/)).toBeInTheDocument();
+  });
+
+  it('removed/unsupported content is visibly disclosed via the Content category, not hidden', async () => {
     const user = userEvent.setup();
     renderPage();
     await pasteAndReview(user, '<table><tr><td><script>alert(1)</script><p>Safe</p></td></tr></table>');
-    expect(await screen.findByText(/finding/)).toBeInTheDocument();
-    expect(screen.getAllByText(/Removed for security/).length).toBeGreaterThan(0);
+    await screen.findByText(/module reconstructed/);
+    const contentRow = fidelityRow('Content');
+    expect(within(contentRow).getByText('Removed')).toBeInTheDocument();
+    await user.click(within(contentRow).getByRole('button', { name: /Show \d+ detail/ }));
+    expect(within(contentRow).getByText(/<script>/)).toBeInTheDocument();
   });
 
-  it('a parse-blocking error (oversized input represented via a huge paste) is shown without creating anything', async () => {
+  it('a fully clean import still provides a useful, mostly/all-preserved review (not an empty or confusing state)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    for (const label of ['Structure', 'Content', 'Typography', 'Spacing', 'Images', 'Links', 'Outlook']) {
+      expect(within(fidelityRow(label)).getByText('Preserved')).toBeInTheDocument();
+    }
+  });
+
+  it('a parse-blocking error (oversized input) is shown without creating anything', async () => {
     const user = userEvent.setup();
     renderPage();
     const huge = `<p>${'x'.repeat(2 * 1024 * 1024 + 10)}</p>`;
     const textarea = screen.getByLabelText('Or paste HTML');
     fireEvent.change(textarea, { target: { value: huge } });
-    // maxLength on the textarea itself would also cap this in a real
-    // browser; fireEvent.change bypasses that, so this still exercises
-    // the parser's own guard directly.
     await user.click(screen.getByRole('button', { name: 'Review Import →' }));
     expect(await screen.findByText(/too large/i)).toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
@@ -91,12 +136,16 @@ describe('ImportHtmlPage', () => {
     expect(await screen.findByLabelText(/Email Name/)).toHaveValue('My Imported Email');
   });
 
-  it('creates the document via create+PATCH and navigates to the builder on success', async () => {
+  it('creates the document via create+PATCH and navigates to the builder on success (Create Email uses the already-reconstructed modules, no re-parse)', async () => {
     vi.mocked(client.createEmailDocument).mockResolvedValue(doc({ id: 77 }));
     vi.mocked(client.updateEmailDocument).mockResolvedValue(doc({ id: 77 }));
     const user = userEvent.setup();
     renderPage();
     await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    // Once reviewed, the paste textarea is gone entirely — structurally
+    // there is no way for the user to feed different HTML into Create,
+    // and no code path re-invokes the parser/mapper after this point.
+    expect(screen.queryByLabelText('Or paste HTML')).not.toBeInTheDocument();
     const nameInput = await screen.findByLabelText(/Email Name/);
     fireEvent.change(nameInput, { target: { value: 'My New Email' } });
     await user.click(screen.getByRole('button', { name: 'Create Email →' }));
@@ -141,13 +190,14 @@ describe('ImportHtmlPage', () => {
     expect(screen.queryByText(/Builder for/)).not.toBeInTheDocument();
   });
 
-  it('Start Over returns to the paste/upload step without creating anything', async () => {
+  it('Start Over safely clears the current review and returns to the paste/upload step without creating anything', async () => {
     const user = userEvent.setup();
     renderPage();
     await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
-    await screen.findByText(/module imported/);
+    await screen.findByText(/module reconstructed/);
     await user.click(screen.getByRole('button', { name: 'Start Over' }));
     expect(screen.getByRole('button', { name: 'Review Import →' })).toBeInTheDocument();
+    expect(screen.queryByText(/module reconstructed/)).not.toBeInTheDocument();
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
 
@@ -156,6 +206,103 @@ describe('ImportHtmlPage', () => {
     renderPage();
     await user.click(screen.getByRole('link', { name: 'Back to Email Dashboard' }));
     expect(await screen.findByText('Email Dashboard')).toBeInTheDocument();
+  });
+
+  it('"Review reconstruction with AI Engineer" creates the document via the SAME transaction and deep-links to the existing AI Engineer tab, without auto-sending anything', async () => {
+    vi.mocked(client.createEmailDocument).mockResolvedValue(doc({ id: 66 }));
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(doc({ id: 66 }));
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    const nameInput = await screen.findByLabelText(/Email Name/);
+    fireEvent.change(nameInput, { target: { value: 'AI Reviewed Email' } });
+    await user.click(screen.getByRole('button', { name: 'Review reconstruction with AI Engineer' }));
+
+    await waitFor(() => expect(client.createEmailDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'AI Reviewed Email', start_type: 'html' }),
+    ));
+    expect(await screen.findByText('Builder for 66 (tab=ai)')).toBeInTheDocument();
+  });
+});
+
+describe('ImportHtmlPage — Original / Reconstructed / Compare preview modes (R3)', () => {
+  it('review mode tabs are keyboard-accessible (role=tab within a role=tablist, aria-selected reflects the active mode)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    const tablist = screen.getByRole('tablist', { name: 'Import review mode' });
+    const tabs = within(tablist).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent)).toEqual(['Original', 'Reconstructed', 'Compare']);
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'true'); // Reconstructed is the default mode
+    tabs[0].focus();
+    await user.keyboard('{Enter}');
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true');
+    expect(tabs[1]).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('the Original iframe renders the sanitized source and never contains unsafe raw markup (script stripped even from the preview)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><script>alert(1)</script><p>Safe</p></td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    await user.click(screen.getByRole('tab', { name: 'Original' }));
+    const iframe = document.querySelector('iframe[title="Original source preview"]') as HTMLIFrameElement;
+    expect(iframe).toBeTruthy();
+    expect(iframe.getAttribute('srcdoc')).not.toContain('<script>');
+    expect(iframe.getAttribute('sandbox')).toBe('');
+  });
+
+  it('R3 correction — the Original iframe preserves safe source styling (color/background/padding/width), it is not deliberately re-styled/degraded', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const styledHtml = '<table width="600"><tr style="background-color:#002d38;"><td style="padding:20px 24px; color:#ffffff;">'
+      + '<h1 style="color:#76c043; font-size:28px;">Styled Heading</h1></td></tr></table>';
+    await pasteAndReview(user, styledHtml);
+    await screen.findByText(/module reconstructed/);
+    await user.click(screen.getByRole('tab', { name: 'Original' }));
+    const iframe = document.querySelector('iframe[title="Original source preview"]') as HTMLIFrameElement;
+    const srcdoc = iframe.getAttribute('srcdoc') ?? '';
+    expect(srcdoc).toContain('width="600"');
+    expect(srcdoc).toContain('background-color:#002d38');
+    expect(srcdoc).toContain('padding:20px 24px');
+    expect(srcdoc).toContain('color:#76c043; font-size:28px');
+  });
+
+  it('the Reconstructed pane renders the SAME htmlRenderer.ts output (via renderEmailDocument), sandboxed', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    const iframe = document.querySelector('iframe[title="Reconstructed builder preview"]') as HTMLIFrameElement;
+    expect(iframe).toBeTruthy();
+    expect(iframe.getAttribute('srcdoc')).toContain('Hello');
+    expect(iframe.getAttribute('srcdoc')).toContain('role="presentation"'); // htmlRenderer.ts's table-first output signature
+    expect(iframe.getAttribute('sandbox')).toBe('');
+  });
+
+  it('Compare shows Original and Reconstructed simultaneously, each with an explicit heading, at equivalent configured widths', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    await screen.findByText(/module reconstructed/);
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
+
+    expect(screen.getByText(/^Original imported HTML \(\d+px\)$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Builder reconstruction \(\d+px\)$/)).toBeInTheDocument();
+    // R3 correction — Compare must make the sanitization-vs-reconstruction
+    // distinction obvious, so a sanitization difference is never mistaken
+    // for a reconstruction error.
+    expect(screen.getByText('Sanitized for safe preview')).toBeInTheDocument();
+    expect(screen.getByText('Editable email-builder version')).toBeInTheDocument();
+
+    const originalIframe = document.querySelector('iframe[title="Original source preview"]') as HTMLIFrameElement;
+    const reconstructedIframe = document.querySelector('iframe[title="Reconstructed builder preview"]') as HTMLIFrameElement;
+    expect(originalIframe).toBeTruthy();
+    expect(reconstructedIframe).toBeTruthy();
+    expect(originalIframe.style.width).toBe(reconstructedIframe.style.width);
+    expect(originalIframe.getAttribute('sandbox')).toBe('');
+    expect(reconstructedIframe.getAttribute('sandbox')).toBe('');
   });
 });
 
@@ -170,7 +317,7 @@ describe('ImportHtmlPage', () => {
 describe('ImportHtmlPage — Environment card selection (fidelity/UX fix)', () => {
   async function reviewAndGetRadios(user: ReturnType<typeof userEvent.setup>) {
     await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
-    await screen.findByText(/module imported/);
+    await screen.findByText(/module reconstructed/);
     return screen.getAllByRole('radio') as HTMLInputElement[];
   }
 
@@ -267,19 +414,19 @@ describe('ImportHtmlPage — Environment card selection (fidelity/UX fix)', () =
     ));
   });
 
-  it('changing the environment selection does not alter the Import Review modules/findings, does not re-parse, and does not create a document', async () => {
+  it('changing the environment selection does not alter the Import Review summary/fidelity, does not re-parse, and does not create a document', async () => {
     const user = userEvent.setup();
     renderPage();
     await pasteAndReview(user, '<table><tr><td><script>alert(1)</script><p>Safe</p></td></tr></table>');
-    const summaryBefore = (await screen.findByText(/module imported/)).textContent;
-    const findingsBefore = screen.getByLabelText('Import findings').textContent;
+    const summaryBefore = (await screen.findByText(/module reconstructed/)).textContent;
+    const contentStatusBefore = within(fidelityRow('Content')).getByText('Removed').textContent;
     const radios = screen.getAllByRole('radio') as HTMLInputElement[];
 
     await user.click(radios[3]); // HubSpot
     await user.click(radios[5]); // Other
 
-    expect(screen.getByText(/module imported/).textContent).toBe(summaryBefore);
-    expect(screen.getByLabelText('Import findings').textContent).toBe(findingsBefore);
+    expect(screen.getByText(/module reconstructed/).textContent).toBe(summaryBefore);
+    expect(within(fidelityRow('Content')).getByText('Removed').textContent).toBe(contentStatusBefore);
     expect(client.createEmailDocument).not.toHaveBeenCalled();
   });
 
