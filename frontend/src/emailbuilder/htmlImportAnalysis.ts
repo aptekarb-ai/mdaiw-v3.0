@@ -188,7 +188,17 @@ function imageOf(img: Element): DetectedImage {
 // recursed into here (the deterministic mapper's own flattening already
 // handles that structurally); a nested table becomes a single low-
 // confidence 'unknown' region rather than silently vanishing.
-function analyzeElement(el: Element, location: string, parentWidthPx: number | null): DetectedRegion | null {
+// R4-B — `containerEl` (the immediate cell/wrapper `el` sits inside) is
+// optional and additive: only used as an alignment FALLBACK, exactly
+// mirroring htmlImportMapper.ts's own `elementAlignHint(el) ??
+// elementAlignHint(container)` fallback for images/buttons. Before this,
+// a CTA/image with no align on the anchor/img ITSELF but an `align`
+// attribute on its containing <td> was under-detected here (shown as
+// "no alignment fact") even though the mapper correctly resolved one via
+// that same container fallback — a real R1/mapper divergence that would
+// have produced false "repairable" alignment differences once R4-B
+// started comparing the two.
+function analyzeElement(el: Element, location: string, parentWidthPx: number | null, containerEl?: Element): DetectedRegion | null {
   const tag = el.tagName.toLowerCase();
 
   if (DANGEROUS_TAGS.has(tag)) return null; // the deterministic mapper is the one that strips + reports this; analysis does not duplicate that finding
@@ -200,7 +210,7 @@ function analyzeElement(el: Element, location: string, parentWidthPx: number | n
     region.parentWidthPx = parentWidthPx;
     region.detectedWidthPx = readImageWidthPx(el);
     region.images = [imageOf(el)];
-    const align = elementAlignHint(el);
+    const align = elementAlignHint(el) ?? (containerEl ? elementAlignHint(containerEl) : undefined);
     if (align) region.typography.align = align;
     return region;
   }
@@ -210,6 +220,14 @@ function analyzeElement(el: Element, location: string, parentWidthPx: number | n
       const region = emptyRegion('cta', location);
       region.links = [linkOf(el)];
       region.typography = typographyOf(el);
+      // typographyOf already reads the anchor's OWN align — only fall
+      // back to the container's when the anchor itself declared none,
+      // never overwrite a real anchor-level value with a redundant
+      // recomputation.
+      if (!region.typography.align && containerEl) {
+        const containerAlign = elementAlignHint(containerEl);
+        if (containerAlign) region.typography.align = containerAlign;
+      }
       region.spacing = spacingOf(el);
       return region;
     }
@@ -246,7 +264,7 @@ function analyzeCellContent(cell: Element, location: string, parentWidthPx: numb
   const children = resolveTransparent(directChildElements(cell));
   const regions: DetectedRegion[] = [];
   for (const el of children) {
-    const region = analyzeElement(el, location, parentWidthPx);
+    const region = analyzeElement(el, location, parentWidthPx, cell);
     if (region) regions.push(region);
   }
   return regions;

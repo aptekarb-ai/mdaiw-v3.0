@@ -13,6 +13,7 @@ import { validateEmail } from './emailValidation';
 import { matchDocumentIntent, resolveDocumentIntent } from './aiDocumentIntelligence';
 import { affectedClientLabel, signatureForIssueId, type RepairCandidate } from './repairEngine';
 import { createConsumedHandoffTracker, type AIEngineerHandoff } from './aiEngineerHandoff';
+import { formatReconstructionReviewMessage } from './reconstructionReview';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { findModuleById } from './layoutModel';
 import {
@@ -373,7 +374,20 @@ export function AIEngineerPanel({
       ?? ((id: string) => fallbackConsumedHandoffTrackerRef.current.tryConsume(id));
     if (!tryConsume(handoff.id)) return; // already consumed — StrictMode's second invoke, or a stale remount
     if (handoff.issueId) setLastDiscussedIssueId(handoff.issueId);
-    void handleSend(handoff.prompt);
+    // R4-B — import-reconstruction handoffs never call the backend for
+    // their first turn: the classification is already fully deterministic
+    // (§4 — "AI may interpret but must NOT contradict high-confidence
+    // deterministic detection"), so the assistant's opening reply is
+    // rendered straight from formatReconstructionReviewMessage() instead of
+    // handleSend()'s normal requestAICommand() round trip. This also keeps
+    // §2's "never a JSON/technical dump" guarantee — the message is the
+    // same professional-prose summary a human reviewer would get.
+    if (handoff.source === 'import-reconstruction' && handoff.reconstructionReview) {
+      appendMessage('user', handoff.prompt);
+      appendMessage('assistant', formatReconstructionReviewMessage(handoff.reconstructionReview));
+    } else {
+      void handleSend(handoff.prompt);
+    }
     onHandoffConsumed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per new handoff object only; the id-based tryConsume guard above (not this dependency array) is what makes re-invocation safe
   }, [aiEngineerHandoff]);

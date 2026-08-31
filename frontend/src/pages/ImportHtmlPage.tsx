@@ -12,6 +12,9 @@ import { renderSanitizedSourceHtml } from '../emailbuilder/htmlImportSanitize';
 import { renderEmailDocument } from '../emailbuilder/htmlRenderer';
 import { ImportReviewWorkspace } from '../emailbuilder/ImportReviewWorkspace';
 import { createEmailDocumentFromImportedHtml } from '../emailbuilder/duplicateEmailDocument';
+import { buildReconstructionReview, type ReconstructionReview } from '../emailbuilder/reconstructionReview';
+import { createImportReconstructionHandoff } from '../emailbuilder/aiEngineerHandoff';
+import { storePendingImportHandoff } from '../emailbuilder/importHandoffStorage';
 import type { EmailModule } from '../emailbuilder/edm';
 import type { EmailPlatform } from '../emailbuilder/types';
 import type { ApiError } from '../types/auth';
@@ -26,6 +29,10 @@ interface ReviewState {
   fidelity: FidelityReport;
   originalHtml: string;
   reconstructedHtml: string;
+  // R4-B — built ONCE here alongside fidelity, from the same structure/
+  // mapping pass (never re-parsed/re-mapped later) — see submitCreate's own
+  // docstring for why a second pass is never acceptable.
+  reconstructionReview: ReconstructionReview;
 }
 
 // Phase C (Import HTML) — the ONE import experience shared by Dashboard's
@@ -78,6 +85,7 @@ export function ImportHtmlPage() {
     const mapping = mapImportedHtml(guard.document);
     const structure = analyzeImportedHtml(guard.document, DEFAULT_EMAIL_WIDTH);
     const fidelity = buildFidelityReport(guard.document, structure, mapping);
+    const reconstructionReview = buildReconstructionReview(guard.document, structure, fidelity, mapping.modules);
     const originalHtml = renderSanitizedSourceHtml(guard.document);
     const reconstructedHtml = renderEmailDocument({
       width: DEFAULT_EMAIL_WIDTH,
@@ -86,6 +94,7 @@ export function ImportHtmlPage() {
     });
     setReviewed({
       modules: mapping.modules, emailTitle: mapping.emailTitle, fidelity, originalHtml, reconstructedHtml,
+      reconstructionReview,
     });
     setName(mapping.emailTitle || '');
   }
@@ -136,19 +145,27 @@ export function ImportHtmlPage() {
     if (documentId !== null) navigate(`/email-builder/builder/${documentId}`);
   }
 
-  // "Review reconstruction with AI Engineer" — creates the document via
-  // the IDENTICAL transaction above, then deep-links straight into the AI
+  // R4-B — "Review reconstruction with AI Engineer": creates the document
+  // via the IDENTICAL transaction above, then deep-links into the AI
   // Engineer tab using EmailBuilderWorkspacePage's EXISTING `?tab=ai` deep
-  // link (already used elsewhere in this app — no new cross-page wiring).
-  // Nothing is auto-sent to the AI Engineer here: the conversation opens
-  // empty, exactly as if the user had clicked the AI Engineer tab
-  // themselves — "must not silently modify anything yet" (R3 scope).
-  // Seeding the AI Engineer's first turn with the bounded structural
-  // analysis + FidelityReport is the next reconstruction-intelligence
-  // checkpoint's job, not this one's.
+  // link. A one-shot handoff (the SAME id-based idempotency mechanism
+  // built for Validation Center's "Ask AI Engineer") is stashed in
+  // sessionStorage, keyed by the NEW document's id, before navigating — an
+  // in-memory ref cannot survive this navigation (it's a full route change
+  // to a brand-new document, not a same-page state update), so sessionStorage
+  // is the only thing that can carry the handoff across it.
+  // EmailBuilderWorkspacePage reads and immediately clears this entry on
+  // mount, feeding it into the exact same aiEngineerHandoff consumption
+  // path Validation Center already uses — no second mechanism.
   async function handleReviewWithAiEngineer() {
+    if (!reviewed) return;
     const documentId = await submitCreate();
-    if (documentId !== null) navigate(`/email-builder/builder/${documentId}?tab=ai`);
+    if (documentId === null) return;
+    storePendingImportHandoff(
+      documentId,
+      createImportReconstructionHandoff(documentId, reviewed.reconstructionReview),
+    );
+    navigate(`/email-builder/builder/${documentId}?tab=ai`);
   }
 
   return (

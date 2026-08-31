@@ -16,6 +16,7 @@ import { ValidationCenterPanel } from '../emailbuilder/ValidationCenterPanel';
 import { AIEngineerPanel } from '../emailbuilder/AIEngineerPanel';
 import type { AICommandAction, RepairActionItem } from '../emailbuilder/aiCommand';
 import { createAIEngineerHandoff, createConsumedHandoffTracker, type AIEngineerHandoff } from '../emailbuilder/aiEngineerHandoff';
+import { takePendingImportHandoff } from '../emailbuilder/importHandoffStorage';
 import { PlatformEnvironmentDialog } from '../emailbuilder/PlatformEnvironmentDialog';
 import { DocumentSettingsDialog, type DocumentSettingsInput } from '../emailbuilder/DocumentSettingsDialog';
 import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
@@ -184,6 +185,26 @@ export function EmailBuilderWorkspacePage() {
     setSearchParams(next, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- builder/savedModulesState are stable-callback hook instances; searchParams/setSearchParams intentionally re-checked each render until applied
   }, [loadStatus, searchParams, savedModulesState.loading]);
+
+  // R4-B — pick up a pending import-reconstruction handoff (stashed in
+  // sessionStorage by ImportHtmlPage's "Review reconstruction with AI
+  // Engineer" button, BEFORE it navigated here) for THIS document, exactly
+  // once per document load. takePendingImportHandoff reads-and-clears in
+  // one call, so a reload or back/forward navigation back to this same
+  // document can never find (and thus never resend) the same entry — the
+  // sessionStorage equivalent of consumedHandoffTrackerRef's in-memory
+  // one-shot guarantee for the same-page Validation case. Once loaded into
+  // aiEngineerHandoff state, it flows through the EXACT SAME
+  // tryConsumeAiEngineerHandoff-gated consumption path AIEngineerPanel
+  // already uses for Validation handoffs — no second mechanism.
+  const importHandoffCheckedForIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loadStatus !== 'ready' || !document) return;
+    if (importHandoffCheckedForIdRef.current === id) return;
+    importHandoffCheckedForIdRef.current = id ?? null;
+    const pending = takePendingImportHandoff(document.id);
+    if (pending) setAiEngineerHandoff(pending);
+  }, [loadStatus, document, id]);
 
   // Module-4 Final Gap Closure, Correction 3 (Feature 03 autosave) —
   // revision/snapshot-safe save orchestration. Three refs, all scoped to

@@ -1,4 +1,5 @@
 import { generateId } from './idGenerator';
+import type { ReconstructionReview } from './reconstructionReview';
 
 // Validation Center -> AI Engineer handoff. A single explicit, one-shot
 // event ("here is one prompt to send, once") rather than "whenever these
@@ -17,11 +18,18 @@ import { generateId } from './idGenerator';
 // never message text (a user may legitimately send the same text twice).
 export interface AIEngineerHandoff {
   id: string;
-  source: 'validation';
+  source: 'validation' | 'import-reconstruction';
   documentId: number;
   prompt: string;
   issueId?: string;
   createdAt: number;
+  // R4-B — only set when source is 'import-reconstruction'. The bounded
+  // deterministic classification (never raw source HTML) that lets the
+  // handoff-consumption effect seed the first assistant turn directly from
+  // formatReconstructionReviewMessage() with NO backend AI call — see §2's
+  // "must never be a JSON/technical dump" and §4's "deterministic facts
+  // have priority over AI judgement" in the R4-B spec.
+  reconstructionReview?: ReconstructionReview;
 }
 
 export function createAIEngineerHandoff(
@@ -36,6 +44,27 @@ export function createAIEngineerHandoff(
     prompt,
     issueId,
     createdAt: Date.now(),
+  };
+}
+
+// R4-B — Import Review's "Review reconstruction with AI Engineer" CTA. The
+// prompt field still carries a plain-text user turn (so any code path that
+// only reads `.prompt` — history, logging — keeps working), but the
+// consuming effect must NOT hand this prompt to handleSend()/the backend:
+// the review is already fully classified deterministically, so the AI's
+// first turn is formatReconstructionReviewMessage(reconstructionReview),
+// injected directly.
+export function createImportReconstructionHandoff(
+  documentId: number,
+  review: ReconstructionReview,
+): AIEngineerHandoff {
+  return {
+    id: generateId(),
+    source: 'import-reconstruction',
+    documentId,
+    prompt: 'Review the imported email reconstruction.',
+    createdAt: Date.now(),
+    reconstructionReview: review,
   };
 }
 

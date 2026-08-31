@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EmailBuilderWorkspacePage } from './EmailBuilderWorkspacePage';
 import * as client from '../api/client';
 import { createResponsiveSettings } from '../emailbuilder/registryCore';
+import { storePendingImportHandoff, takePendingImportHandoff } from '../emailbuilder/importHandoffStorage';
+import { createImportReconstructionHandoff } from '../emailbuilder/aiEngineerHandoff';
+import { analyzeImportedHtml } from '../emailbuilder/htmlImportAnalysis';
+import { buildFidelityReport } from '../emailbuilder/htmlImportFidelity';
+import { mapImportedHtml } from '../emailbuilder/htmlImportMapper';
+import { buildReconstructionReview, formatReconstructionReviewMessage } from '../emailbuilder/reconstructionReview';
 import type { EmailDocument, SavedEmailModule } from '../emailbuilder/types';
 
 vi.mock('../api/client', async () => {
@@ -4007,5 +4013,86 @@ describe('EmailBuilderWorkspacePage — Module-4 Navigation Completion, Phase A 
     // the page not re-selecting Validate after a manual switch to Visual.
     await userEvent.setup().click(within(editorModeGroup).getByRole('button', { name: 'Visual' }));
     expect(within(editorModeGroup).getByRole('button', { name: 'Visual' })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+// R4-B — "Review reconstruction with AI Engineer" cannot hand its one-shot
+// handoff off via an in-memory ref (ImportHtmlPage creates a brand-new
+// document and does a full route navigation here, unmounting/remounting
+// this whole page) — see importHandoffStorage.ts. This page's own job is
+// just to read-and-clear the sessionStorage entry for ITS OWN document id
+// and feed it into the SAME aiEngineerHandoff state / consumption path
+// already used for the Validation Center handoff.
+describe('EmailBuilderWorkspacePage — R4-B import-reconstruction handoff pickup', () => {
+  function sampleReview() {
+    const html = '<table><tr><td><p style="font-weight:bold;">Bold via CSS</p></td></tr></table>';
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const structure = analyzeImportedHtml(doc, 700);
+    const mapping = mapImportedHtml(doc);
+    const fidelity = buildFidelityReport(doc, structure, mapping);
+    return buildReconstructionReview(doc, structure, fidelity, mapping.modules);
+  }
+
+  function findByMessageText(text: string) {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    return screen.findByText((_, node) => (node?.textContent ?? '').replace(/\s+/g, ' ').trim() === normalized);
+  }
+
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it('a pending handoff for this document is consumed on load, seeding the AI Engineer chat with no backend request', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
+    const review = sampleReview();
+    storePendingImportHandoff(1, createImportReconstructionHandoff(1, review));
+
+    renderPageAt('/email-builder/builder/1?tab=ai');
+
+    expect(await findByMessageText(formatReconstructionReviewMessage(review))).toBeInTheDocument();
+    expect(client.requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('the sessionStorage entry is cleared once consumed — a later reload of the same document does not resend it', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
+    const review = sampleReview();
+    storePendingImportHandoff(1, createImportReconstructionHandoff(1, review));
+
+    const first = renderPageAt('/email-builder/builder/1?tab=ai');
+    await findByMessageText(formatReconstructionReviewMessage(review));
+    first.unmount();
+
+    // Simulates a reload/back-forward navigation back to the same document
+    renderPageAt('/email-builder/builder/1?tab=ai');
+    await screen.findByRole('group', { name: 'Editor mode' });
+    expect(screen.queryByText(formatReconstructionReviewMessage(review))).not.toBeInTheDocument();
+    expect(client.requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('a document with no pending handoff opens the AI Engineer tab with an empty conversation', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
+    renderPageAt('/email-builder/builder/1?tab=ai');
+    const editorModeGroup = await screen.findByRole('group', { name: 'Editor mode' });
+    await waitFor(() => expect(
+      within(editorModeGroup).getByRole('button', { name: 'AI Engineer' }),
+    ).toHaveAttribute('aria-pressed', 'true'));
+    expect(screen.getByText(/Ask the AI Engineer to add a module/)).toBeInTheDocument();
+  });
+
+  it('two documents remain isolated — a handoff stashed for a different document id is never picked up here, and stays available for that document', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
+    const reviewForOtherDoc = sampleReview();
+    storePendingImportHandoff(2, createImportReconstructionHandoff(2, reviewForOtherDoc));
+
+    renderPageAt('/email-builder/builder/1?tab=ai');
+    const editorModeGroup = await screen.findByRole('group', { name: 'Editor mode' });
+    await waitFor(() => expect(
+      within(editorModeGroup).getByRole('button', { name: 'AI Engineer' }),
+    ).toHaveAttribute('aria-pressed', 'true'));
+    expect(screen.queryByText(formatReconstructionReviewMessage(reviewForOtherDoc))).not.toBeInTheDocument();
+
+    // still sitting there, untouched, for its own document
+    const stillPending = takePendingImportHandoff(2);
+    expect(stillPending?.id).toBeTruthy();
   });
 });

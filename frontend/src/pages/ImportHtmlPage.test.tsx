@@ -223,6 +223,30 @@ describe('ImportHtmlPage — Import Review workspace (R3)', () => {
     ));
     expect(await screen.findByText('Builder for 66 (tab=ai)')).toBeInTheDocument();
   });
+
+  // R4-B — the click stashes a one-shot handoff for AI Engineer to pick up
+  // once it mounts for the new document; nothing is sent to the backend
+  // /ai-command/ endpoint at click time, and no raw source HTML is ever
+  // part of the stashed payload (only the already-bounded classification).
+  it('R4-B — "Review reconstruction with AI Engineer" stashes exactly one import-reconstruction handoff, keyed to the new document, with no raw source HTML', async () => {
+    vi.mocked(client.createEmailDocument).mockResolvedValue(doc({ id: 77 }));
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(doc({ id: 77 }));
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><p style="font-weight:bold;">Bold via CSS</p></td></tr></table>');
+    const nameInput = await screen.findByLabelText(/Email Name/);
+    fireEvent.change(nameInput, { target: { value: 'AI Reviewed Email' } });
+    await user.click(screen.getByRole('button', { name: 'Review reconstruction with AI Engineer' }));
+    await screen.findByText('Builder for 77 (tab=ai)');
+
+    const raw = window.sessionStorage.getItem('mdaiw:ai-engineer-handoff:77');
+    expect(raw).not.toBeNull();
+    const stored = JSON.parse(raw!);
+    expect(stored.source).toBe('import-reconstruction');
+    expect(stored.documentId).toBe(77);
+    expect(stored.reconstructionReview).toBeTruthy();
+    expect(JSON.stringify(stored)).not.toMatch(/Bold via CSS/);
+  });
 });
 
 describe('ImportHtmlPage — Original / Reconstructed / Compare preview modes (R3)', () => {

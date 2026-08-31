@@ -7,7 +7,11 @@ import { requestAICommand } from '../api/client';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { createModule } from './moduleFactory';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
-import { createAIEngineerHandoff, createConsumedHandoffTracker } from './aiEngineerHandoff';
+import { createAIEngineerHandoff, createConsumedHandoffTracker, createImportReconstructionHandoff } from './aiEngineerHandoff';
+import { analyzeImportedHtml } from './htmlImportAnalysis';
+import { buildFidelityReport } from './htmlImportFidelity';
+import { mapImportedHtml } from './htmlImportMapper';
+import { buildReconstructionReview, formatReconstructionReviewMessage } from './reconstructionReview';
 import type { AICommandResponse } from './aiCommand';
 
 vi.mock('../api/client', () => ({ requestAICommand: vi.fn() }));
@@ -37,6 +41,17 @@ function mockSpeech(overrides: Partial<ReturnType<typeof useSpeechRecognition>> 
     reset: vi.fn(),
     ...overrides,
   });
+}
+
+// R4-B — formatReconstructionReviewMessage() output is multi-line
+// (message.text is rendered as one raw text node — see AIEngineerPanel.tsx's
+// `{message.text}`), but Testing Library's default text matcher collapses
+// all whitespace runs, including newlines, before comparing. A plain
+// getByText(theMultiLineString) would therefore never match its own
+// unmangled newlines. This normalizes both sides the same way instead.
+function findByMessageText(text: string) {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return screen.findByText((_, node) => (node?.textContent ?? '').replace(/\s+/g, ' ').trim() === normalized);
 }
 
 function response(overrides: Partial<AICommandResponse> = {}): AICommandResponse {
@@ -1092,6 +1107,182 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       expect(screen.queryByText(handoff.prompt)).not.toBeInTheDocument();
       expect(screen.queryByText('Handoff acknowledged.')).not.toBeInTheDocument();
       await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // R4-B — Import Review's "Review reconstruction with AI Engineer" handoff.
+  // Same one-shot id-based idempotency mechanism as the Validation describe
+  // block above, but the first turn is seeded DIRECTLY from
+  // formatReconstructionReviewMessage(reconstructionReview) with NO backend
+  // /ai-command/ call — see §2 ("never a JSON/technical dump") and §4
+  // ("deterministic facts have priority over AI judgement") of the R4-B spec.
+  describe('AI Engineer handoff (Import Reconstruction -> AI Engineer, no backend call for first turn)', () => {
+    function sampleReview(variant: 'repairable' | 'approximation' = 'repairable') {
+      const html = variant === 'repairable'
+        ? '<table><tr><td><p style="font-weight:bold;">Bold via CSS</p></td></tr></table>'
+        : '<table><tr><td width="380">A</td><td width="620">B</td></tr></table>';
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const structure = analyzeImportedHtml(doc, 700);
+      const mapping = mapImportedHtml(doc);
+      const fidelity = buildFidelityReport(doc, structure, mapping);
+      return buildReconstructionReview(doc, structure, fidelity, mapping.modules);
+    }
+
+    it('one click seeds exactly one deterministic user+assistant message pair, with no backend request', async () => {
+      mockSpeech();
+      const review = sampleReview();
+      const expectedMessage = formatReconstructionReviewMessage(review);
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(1, review);
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+
+      expect(await findByMessageText(expectedMessage)).toBeInTheDocument();
+      expect(screen.getAllByText(handoff.prompt)).toHaveLength(1);
+      expect(requestAICommand).not.toHaveBeenCalled();
+    });
+
+    it('React StrictMode double-invoking the mount effect still seeds exactly one message pair', async () => {
+      mockSpeech();
+      const review = sampleReview();
+      const expectedMessage = formatReconstructionReviewMessage(review);
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(1, review);
+      const onApplyAction = vi.fn().mockReturnValue(true);
+      const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
+      const onApplyRepairAction = vi.fn().mockReturnValue(true);
+
+      render(
+        <AIEngineerPanel
+          documentId={1}
+          editorMode="ai"
+          platform="generic"
+          width={700}
+          selectedModule={null}
+          selectedColumn={null}
+          content={{ version: 1, modules: [] }}
+          emailTitle="Test Email"
+          emailSubject="Test subject"
+          faviconUrl=""
+          resetCssEnabled
+          customCssEnabled={false}
+          customCss=""
+          onApplyAction={onApplyAction}
+          onApplyDocumentSettingAction={onApplyDocumentSettingAction}
+          onApplyRepairAction={onApplyRepairAction}
+          aiEngineerHandoff={handoff}
+          onConsumeAiEngineerHandoff={tracker.tryConsume}
+        />,
+        { wrapper: StrictMode },
+      );
+
+      expect(await findByMessageText(expectedMessage)).toBeInTheDocument();
+      expect(screen.getAllByText(handoff.prompt)).toHaveLength(1);
+      expect(requestAICommand).not.toHaveBeenCalled();
+    });
+
+    it('unmounting and remounting with the SAME still-pending handoff does not resend', async () => {
+      mockSpeech();
+      const review = sampleReview();
+      const expectedMessage = formatReconstructionReviewMessage(review);
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(1, review);
+
+      const first = renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await findByMessageText(expectedMessage);
+      first.unmount();
+
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.getAllByText(handoff.prompt)).toHaveLength(1);
+      expect(requestAICommand).not.toHaveBeenCalled();
+    });
+
+    it('clicking Review a second intentional time (a new handoff, new id) seeds a new message pair', async () => {
+      mockSpeech();
+      const reviewA = sampleReview('repairable');
+      const reviewB = sampleReview('approximation');
+      const tracker = createConsumedHandoffTracker();
+      const handoffA = createImportReconstructionHandoff(1, reviewA);
+      const handoffB = createImportReconstructionHandoff(1, reviewB);
+      expect(handoffA.id).not.toBe(handoffB.id);
+
+      const first = renderPanel({ aiEngineerHandoff: handoffA, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await findByMessageText(formatReconstructionReviewMessage(reviewA));
+      first.unmount();
+
+      renderPanel({ aiEngineerHandoff: handoffB, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      expect(await findByMessageText(formatReconstructionReviewMessage(reviewB))).toBeInTheDocument();
+      expect(requestAICommand).not.toHaveBeenCalled();
+    });
+
+    it('a handoff created for a DIFFERENT document is never consumed here', () => {
+      mockSpeech();
+      const review = sampleReview();
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(999, review);
+      renderPanel({ documentId: 1, aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+
+      expect(screen.queryByText(handoff.prompt)).not.toBeInTheDocument();
+      expect(requestAICommand).not.toHaveBeenCalled();
+    });
+
+    it('existing multi-turn history remains intact across an import-reconstruction handoff', async () => {
+      mockSpeech();
+      vi.mocked(requestAICommand).mockResolvedValue(response({ reply: 'Sure, added.' }));
+      const { unmount } = renderPanel();
+      const user = userEvent.setup();
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      // Waits for the proposal card's own title, not the reply text —
+      // INSERT_MODULE also echoes 'Sure, added.' into the proposal detail,
+      // so getByText('Sure, added.') here would ambiguously match twice.
+      await screen.findByText('Add a button module');
+      unmount();
+
+      const review = sampleReview();
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(1, review);
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+
+      expect(await findByMessageText(formatReconstructionReviewMessage(review))).toBeInTheDocument();
+      expect(screen.getByText('add a button')).toBeInTheDocument();
+      expect(screen.getByText('Sure, added.')).toBeInTheDocument();
+    });
+
+    // §4/§12 — "deterministic facts have priority over AI judgement": the
+    // classification embedded in the seeded first turn comes straight from
+    // buildReconstructionReview() (pure, non-AI code) and is never mutated
+    // by anything a later backend AI reply says. A follow-up turn appends
+    // new messages; it can never rewrite or contradict the already-shown
+    // classification text.
+    it('a follow-up AI reply can never rewrite the deterministic classification already shown', async () => {
+      mockSpeech();
+      const review = sampleReview();
+      const seededMessage = formatReconstructionReviewMessage(review);
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(1, review);
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      expect(await findByMessageText(seededMessage)).toBeInTheDocument();
+      expect(requestAICommand).not.toHaveBeenCalled();
+
+      // A follow-up question ("why was spacing normalized?") DOES call the
+      // backend — only the seeded first turn skips it — and the AI's free-
+      // text reply is deliberately worded as if it disagreed with the
+      // deterministic classification.
+      vi.mocked(requestAICommand).mockResolvedValue(response({
+        reply: 'Actually, nothing was normalized at all.',
+        action: { type: 'NONE' },
+      }));
+      const user = userEvent.setup();
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'why was spacing normalized?');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      await screen.findByText('Actually, nothing was normalized at all.');
+      // The original deterministic classification message is still present,
+      // verbatim — the follow-up only appended new turns, it never edited
+      // or replaced it.
+      expect(await findByMessageText(seededMessage)).toBeInTheDocument();
       expect(requestAICommand).toHaveBeenCalledTimes(1);
     });
   });
