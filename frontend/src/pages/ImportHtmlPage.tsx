@@ -1,6 +1,7 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { FormField } from '../forms/FormField';
+import { SelectionCard } from './CreateEmailPage';
 import { PLATFORM_OPTIONS, DEFAULT_PLATFORM } from '../emailbuilder/platformOptions';
 import { DEFAULT_EMAIL_WIDTH } from '../emailbuilder/widthOptions';
 import { parseAndGuardImportedHtml, MAX_HTML_BYTES } from '../emailbuilder/htmlImportParser';
@@ -222,18 +223,17 @@ export function ImportHtmlPage() {
               <legend>Choose Environment</legend>
               <div className="create-email-page__platform-grid">
                 {PLATFORM_OPTIONS.map((option) => (
-                  <label key={option.value} className="create-email-page__card">
-                    <input
-                      type="radio"
-                      name="platform"
-                      checked={platform === option.value}
-                      onChange={() => setPlatform(option.value)}
-                      className="create-email-page__radio-input"
-                    />
-                    <span className={`mdaiw-icon mdaiw-icon--${option.icon} create-email-page__card-icon`} aria-hidden="true" />
-                    <span className="create-email-page__card-title">{option.label}</span>
-                    <span className="create-email-page__card-description">{option.description}</span>
-                  </label>
+                  <SelectionCard
+                    key={option.value}
+                    name="platform"
+                    value={option.value}
+                    label={option.label}
+                    description={option.description}
+                    icon={option.icon}
+                    selected={platform === option.value}
+                    footnote={option.value === 'generic' ? 'Recommended' : undefined}
+                    onSelect={() => setPlatform(option.value)}
+                  />
                 ))}
               </div>
             </fieldset>

@@ -33,7 +33,7 @@ function cardClassName(...classes: Array<string | false | undefined>): string {
 // arrow-key semantics — only its own circle is visually hidden
 // (.create-email-page__radio-input, the same clip-rect technique this
 // app already uses for .visually-hidden elsewhere), never display:none.
-interface SelectionCardProps {
+export interface SelectionCardProps {
   name: string;
   value: string;
   label: string;
@@ -45,7 +45,11 @@ interface SelectionCardProps {
   onSelect: () => void;
 }
 
-function SelectionCard({
+// Exported so other "choose one of these cards" flows (Import HTML's own
+// environment selector) reuse this exact selected-state visual contract
+// (border/background/check icon, all keyed off the --selected class here)
+// instead of re-implementing a second, easily-divergent copy.
+export function SelectionCard({
   name, value, label, description, icon, selected, disabled, footnote, onSelect,
 }: SelectionCardProps) {
   return (

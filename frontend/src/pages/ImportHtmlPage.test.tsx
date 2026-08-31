@@ -158,3 +158,155 @@ describe('ImportHtmlPage', () => {
     expect(await screen.findByText('Email Dashboard')).toBeInTheDocument();
   });
 });
+
+// Environment card selection fix — the cards render via the SAME
+// SelectionCard component CreateEmailPage.tsx uses (exported from there,
+// not a second implementation), so a real <input type="radio"> backs
+// each card; PLATFORM_OPTIONS' own declared order (generic, sfmc,
+// marketo, hubspot, pardot, other — see platformOptions.ts, already
+// covered by platformOptions.test.ts) is what getAllByRole('radio')
+// returns, used here instead of fragile accessible-name text matching
+// since each card's label text is title+description concatenated.
+describe('ImportHtmlPage — Environment card selection (fidelity/UX fix)', () => {
+  async function reviewAndGetRadios(user: ReturnType<typeof userEvent.setup>) {
+    await pasteAndReview(user, '<table><tr><td><p>Hello</p></td></tr></table>');
+    await screen.findByText(/module imported/);
+    return screen.getAllByRole('radio') as HTMLInputElement[];
+  }
+
+  it('Generic is selected by default', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    expect(radios[0].checked).toBe(true);
+    expect(radios.slice(1).every((r) => !r.checked)).toBe(true);
+    expect(radios[0].closest('label')).toHaveClass('create-email-page__card--selected');
+  });
+
+  it('clicking Salesforce Marketing Cloud selects it and visually deselects Generic', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[1]);
+    expect(radios[1].checked).toBe(true);
+    expect(radios[0].checked).toBe(false);
+    expect(radios[1].closest('label')).toHaveClass('create-email-page__card--selected');
+    expect(radios[0].closest('label')).not.toHaveClass('create-email-page__card--selected');
+  });
+
+  it('clicking Marketo selects it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[2]);
+    expect(radios[2].checked).toBe(true);
+    expect(radios[2].closest('label')).toHaveClass('create-email-page__card--selected');
+  });
+
+  it('clicking HubSpot selects it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[3]);
+    expect(radios[3].checked).toBe(true);
+    expect(radios[3].closest('label')).toHaveClass('create-email-page__card--selected');
+  });
+
+  it('clicking Pardot / Account Engagement selects it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[4]);
+    expect(radios[4].checked).toBe(true);
+    expect(radios[4].closest('label')).toHaveClass('create-email-page__card--selected');
+  });
+
+  it('clicking Other selects it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[5]);
+    expect(radios[5].checked).toBe(true);
+    expect(radios[5].closest('label')).toHaveClass('create-email-page__card--selected');
+  });
+
+  it('exactly one card is ever selected, however many cards are clicked in sequence', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[3]);
+    await user.click(radios[1]);
+    await user.click(radios[4]);
+    expect(radios.filter((r) => r.checked)).toHaveLength(1);
+    expect(radios[4].checked).toBe(true);
+  });
+
+  it('keyboard-only interaction (focus + Space) selects a card, same as a click', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    radios[2].focus();
+    await user.keyboard(' ');
+    expect(radios[2].checked).toBe(true);
+    expect(radios[2].closest('label')).toHaveClass('create-email-page__card--selected');
+  });
+
+  it('the selected platform is passed into the create transaction', async () => {
+    vi.mocked(client.createEmailDocument).mockResolvedValue(doc({ id: 88, platform: 'marketo' }));
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(doc({ id: 88, platform: 'marketo' }));
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[2]); // Marketo
+    const nameInput = screen.getByLabelText(/Email Name/);
+    fireEvent.change(nameInput, { target: { value: 'Marketo Email' } });
+    await user.click(screen.getByRole('button', { name: 'Create Email →' }));
+
+    await waitFor(() => expect(client.createEmailDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Marketo Email', platform: 'marketo', start_type: 'html' }),
+    ));
+  });
+
+  it('changing the environment selection does not alter the Import Review modules/findings, does not re-parse, and does not create a document', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await pasteAndReview(user, '<table><tr><td><script>alert(1)</script><p>Safe</p></td></tr></table>');
+    const summaryBefore = (await screen.findByText(/module imported/)).textContent;
+    const findingsBefore = screen.getByLabelText('Import findings').textContent;
+    const radios = screen.getAllByRole('radio') as HTMLInputElement[];
+
+    await user.click(radios[3]); // HubSpot
+    await user.click(radios[5]); // Other
+
+    expect(screen.getByText(/module imported/).textContent).toBe(summaryBefore);
+    expect(screen.getByLabelText('Import findings').textContent).toBe(findingsBefore);
+    expect(client.createEmailDocument).not.toHaveBeenCalled();
+  });
+
+  it('creates exactly one document even after multiple environment selection changes before submitting', async () => {
+    vi.mocked(client.createEmailDocument).mockResolvedValue(doc({ id: 55 }));
+    vi.mocked(client.updateEmailDocument).mockResolvedValue(doc({ id: 55 }));
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[1]);
+    await user.click(radios[4]);
+    await user.click(radios[0]);
+    const nameInput = screen.getByLabelText(/Email Name/);
+    fireEvent.change(nameInput, { target: { value: 'One Doc Only' } });
+    await user.click(screen.getByRole('button', { name: 'Create Email →' }));
+
+    await waitFor(() => expect(client.createEmailDocument).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Builder for 55')).toBeInTheDocument();
+  });
+
+  it('Back / Start Over behavior is unchanged by the environment selector fix', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const radios = await reviewAndGetRadios(user);
+    await user.click(radios[2]);
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByRole('button', { name: 'Review Import →' })).toBeInTheDocument();
+    expect(client.createEmailDocument).not.toHaveBeenCalled();
+  });
+});
