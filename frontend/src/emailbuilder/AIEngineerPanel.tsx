@@ -16,6 +16,8 @@ import { createConsumedHandoffTracker, type AIEngineerHandoff } from './aiEngine
 import { formatReconstructionReviewMessage } from './reconstructionReview';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { findModuleById } from './layoutModel';
+import { resolveReference, type LastReferent } from './referenceResolver';
+import { FIDELITY_CATEGORY_ORDER } from './htmlImportFidelity';
 import {
   boundedHistoryForRequest, clearConversation, loadConversation, saveConversation,
   type StoredConversationMessage,
@@ -320,6 +322,25 @@ export function AIEngineerPanel({
     aiEngineerHandoff?.importReconstructionContext ?? null,
   );
 
+  // R4-B3 §B/§F — Referential Context Resolver's own memory: which
+  // reconstruction fidelity category was last discussed (feeds the
+  // resolver's priority chain for a bare "it"/"fix it" follow-up), and
+  // the generic "whatever we were just talking about" referent (the
+  // resolver's own lowest-priority fallback, one level more specific
+  // than "nothing at all"). Both refs, not state, for the same reason
+  // lastDiscussedIssueIdRef is a ref — read synchronously within the
+  // same handleSend tick that sets them.
+  const lastDiscussedReconstructionCategoryRef = useRef<string | null>(null);
+  const lastReferentRef = useRef<LastReferent | null>(null);
+  // R4-B3 §B — when the resolver identifies a referent that differs from
+  // the LIVE canvas selection (e.g. "that button" resolved to the
+  // document's only button module while nothing is actually selected),
+  // this carries the resolved module's {type, props} for exactly one
+  // outgoing request — read once building selectedContext below, then
+  // cleared. Never persisted longer than one turn: the live selection
+  // (or the next resolution) is always the source of truth after that.
+  const resolvedModuleOverrideRef = useRef<AICommandSelectedModuleContext | null>(null);
+
   // C-3 remediation — explicit pending-repair context for the placeholder-
   // link conversational flow: which real module (never "whatever's
   // currently selected") is awaiting a destination URL, so a later bare
@@ -356,6 +377,9 @@ export function AIEngineerPanel({
     setLastDiscussedIssueId(null);
     pendingPlaceholderLinkModuleIdRef.current = null;
     importReconstructionContextRef.current = null;
+    lastDiscussedReconstructionCategoryRef.current = null;
+    lastReferentRef.current = null;
+    resolvedModuleOverrideRef.current = null;
     setHistory([]);
     setLastProvider(null);
   }, [documentId]);
@@ -580,15 +604,83 @@ export function AIEngineerPanel({
       return;
     }
 
+    // R4-B3 §B — the Referential Context Resolver, run entirely locally
+    // BEFORE any backend call. A genuinely ambiguous reference (more
+    // than one real candidate, and none is the current selection) is
+    // answered with a concise clarifying question right here — no
+    // wasted round trip, no risk of the backend/LLM silently guessing
+    // wrong. An unambiguous reference is folded into the outgoing
+    // request's context below (resolvedModuleOverrideRef / setLast-
+    // DiscussedIssueId) so the provider answers with real grounding
+    // instead of generic language. A message with no referring
+    // expression at all (the common case) passes through unchanged.
+    const resolverLayoutModule = selectedColumn ? findModuleById(content.modules, selectedColumn.layoutId) : null;
+    const resolverColumnIndex = resolverLayoutModule?.columns?.findIndex((c) => c.id === selectedColumn?.columnId) ?? -1;
+    const referentialResolution = resolveReference({
+      message,
+      modules: content.modules,
+      selectedModule: selectedModule ? { id: selectedModule.id, type: selectedModule.type, label: `the selected ${selectedModule.type} module` } : null,
+      selectedColumn: resolverLayoutModule && resolverColumnIndex >= 0
+        ? { layoutModuleId: resolverLayoutModule.id, layoutModuleType: resolverLayoutModule.type, columnIndex: resolverColumnIndex }
+        : null,
+      lastDiscussedValidationIssue: lastDiscussedIssueIdRef.current
+        ? (() => {
+            const issue = validationReport?.issues.find((i) => i.id === lastDiscussedIssueIdRef.current);
+            return issue ? { id: issue.id, title: issue.title, category: issue.category } : null;
+          })()
+        : null,
+      openValidationIssues: (validationReport?.issues ?? []).map((i) => ({ id: i.id, title: i.title, category: i.category })),
+      importReconstructionContext: importReconstructionContextRef.current,
+      lastDiscussedReconstructionCategory: lastDiscussedReconstructionCategoryRef.current,
+      lastReferent: lastReferentRef.current,
+    });
+
+    if (referentialResolution.status === 'ambiguous') {
+      appendMessage('assistant', referentialResolution.clarifyingQuestion);
+      setHistory((current) => [...current, {
+        id: newId('hist'),
+        command: message,
+        interpretation: referentialResolution.clarifyingQuestion,
+        action: { type: 'NONE' },
+        status: 'clarification',
+        summary: referentialResolution.clarifyingQuestion,
+        provider: 'deterministic',
+        requiresConfirmation: false,
+      }]);
+      return;
+    }
+    if (referentialResolution.status === 'resolved') {
+      const { referent } = referentialResolution;
+      lastReferentRef.current = referent.id !== 'none' ? referent : lastReferentRef.current;
+      if (referent.kind === 'validationIssue' && referent.id !== 'none') {
+        setLastDiscussedIssueId(referent.id);
+      }
+      if (referent.kind === 'reconstructionCategory' && referent.id !== 'none' && referent.id !== 'overall') {
+        lastDiscussedReconstructionCategoryRef.current = referent.id;
+      }
+      if (referent.kind === 'module' && referent.id !== 'none' && referent.id !== selectedModule?.id) {
+        const resolvedModule = findModuleById(content.modules, referent.id);
+        resolvedModuleOverrideRef.current = resolvedModule
+          ? { type: resolvedModule.type, props: resolvedModule.props ?? {} }
+          : null;
+      } else {
+        resolvedModuleOverrideRef.current = null;
+      }
+    }
+
     setSending(true);
 
     // Feature 14 V2 — every registered module type is now a potential AI
     // target (the generated capability manifest, not this component,
     // decides which fields are actually editable on it), so context is
     // sent whenever anything is selected — no more type pre-filtering.
+    // R4-B3 §B — the live canvas selection always wins when present;
+    // resolvedModuleOverrideRef only ever fills in when NOTHING is
+    // currently selected but the resolver found an unambiguous referent
+    // elsewhere in the document (see the resolution block above).
     const selectedContext: AICommandSelectedModuleContext | null = selectedModule
       ? { type: selectedModule.type, props: selectedModule.props ?? {} }
-      : null;
+      : resolvedModuleOverrideRef.current;
 
     // E9 — informational-only column context (never drives a real
     // column-scoped edit action yet — see AIEngineerPanelProps'
@@ -631,6 +723,16 @@ export function AIEngineerPanel({
 
       appendMessage('assistant', response.reply);
       setLastProvider(response.provider);
+      // R4-B3 §B/§F — keeps the Referential Context Resolver's
+      // reconstruction-category memory fresh across turns: if this
+      // reply names one of the 8 fixed fidelity categories (the same
+      // set formatReconstructionReviewMessage() itself always uses), a
+      // later bare "why was that?" can resolve to it. Best-effort only —
+      // never blocks or alters the reply itself.
+      if (importReconstructionContextRef.current) {
+        const mentioned = FIDELITY_CATEGORY_ORDER.find((id) => new RegExp(`\\b${id}\\b`, 'i').test(response.reply));
+        if (mentioned) lastDiscussedReconstructionCategoryRef.current = mentioned;
+      }
 
       if (response.action.type === 'NONE') {
         // C-3 remediation — arm the pending-repair ref only when the

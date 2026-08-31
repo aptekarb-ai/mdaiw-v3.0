@@ -1394,6 +1394,147 @@ def _find_color(lowered):
     return None
 
 
+# R4-B3 §A — extracted, unchanged in behavior, from
+# RuleBasedEmailCommandProvider.resolve()'s own weak-contrast-fix branch
+# (C-2 remediation) so the SAME deterministic logic is callable from a
+# second entry point: canonical-intent dispatch for a non-English message
+# (see apply_canonical_intent() below and intent_normalization.py). This
+# is not a second contrast-fix implementation — the English-trigger
+# branch below calls this exact function too, so the two paths can never
+# diverge in behavior, only in how they were reached.
+def compute_contrast_fix_result(selected_type, props):
+    if not selected_type:
+        return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
+    props = props if isinstance(props, dict) else {}
+    # Different module types name their text-color field differently
+    # (e.g. Text uses 'color', Button uses 'textColor') — same fallback
+    # order emailValidation.ts's own contrast check already uses, never a
+    # hardcoded single key.
+    color_key = 'color' if module_capabilities.get_editable_field(selected_type, 'color') else (
+        'textColor' if module_capabilities.get_editable_field(selected_type, 'textColor') else None
+    )
+    if color_key is None:
+        return CommandResult(
+            reply=f'The selected {selected_type} module does not have a text color I can adjust.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    if props.get('backgroundImage'):
+        return CommandResult(
+            reply=(
+                "I can't reliably compute contrast here — this module has a background image, so its "
+                'true effective background is not just the flat background color. Please pick a color '
+                'manually with the contrast in mind.'
+            ),
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    foreground = props.get(color_key)
+    background = props.get('backgroundColor')
+    fix = minimal_readable_foreground(foreground, background) if foreground and background else None
+    if fix is None:
+        return CommandResult(
+            reply=(
+                "I can't compute a safe automatic fix here — either the current color isn't a plain "
+                'value I can reason about, or the contrast already can\'t be closed with a small change '
+                'to the text color alone. Please choose a color manually.'
+            ),
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    return CommandResult(
+        reply=(
+            f"The current text color {fix['old_color']} has a contrast ratio of {fix['old_ratio']}:1 "
+            f"against {background} — WCAG AA needs at least {WCAG_AA_NORMAL_TEXT_RATIO}:1. I will change "
+            f"the text color to {fix['new_color']} (ratio {fix['new_ratio']}:1). Please confirm."
+        ),
+        action={
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
+            'module_type': selected_type, 'patch': {color_key: fix['new_color']},
+        },
+        confidence=0.85,
+    )
+
+
+# R4-B3 §A — the canonical-intent execution entry point. Deliberately
+# tiny: only CanonicalIntent values in intent_normalization.EXECUTABLE_
+# INTENTS have a real executor here — everything else returns None, and
+# the caller (get_default_email_command_provider's chain — see
+# CanonicalIntentEmailCommandProvider below) falls through to the normal
+# English-pattern deterministic router or the LLM tier, exactly as if
+# canonical-intent detection had not run at all. Never a second, parallel
+# action-producing system: every branch here calls the SAME functions
+# (compute_contrast_fix_result) the English-triggered path already uses.
+def apply_canonical_intent(intent, context):
+    from .intent_normalization import CanonicalIntent
+
+    context = context if isinstance(context, dict) else {}
+    selected = context.get('selected_module')
+    selected_type = selected.get('type') if isinstance(selected, dict) else None
+    props = selected.get('props') if isinstance(selected, dict) else None
+
+    if intent == CanonicalIntent.FIX_CONTRAST:
+        return compute_contrast_fix_result(selected_type, props)
+    return None
+
+
+# R4-B3 §D — the bounded, Email-Builder-specific tool loop. This is
+# NOT a generic tool-executor: every name here is a fixed, whitelisted
+# READ over data that is ALREADY present in `safe_context` for this
+# exact request (selected_module, selected_column, selected_validation_
+# issue, import_reconstruction, knowledge, plan) — see
+# ai_command_local.py/ai_command_openai.py's own tool-loop docstrings.
+# No tool here ever fetches anything beyond what the request already
+# carried, executes code, or mutates a document. An unrecognized tool
+# name returns None rather than raising — the caller treats that as
+# "stop looping, answer with whatever the model has," never a crash.
+READ_TOOL_NAMES = frozenset({
+    'GET_SELECTED_MODULE', 'GET_SELECTED_COLUMN', 'GET_DOCUMENT_SUMMARY', 'GET_EMAIL_SETTINGS',
+    'GET_VALIDATION_REPORT', 'GET_IMPORT_RECONSTRUCTION', 'GET_MODULE_CAPABILITIES', 'COMPARE_RECONSTRUCTION',
+})
+
+# R4-B3 §D — hard iteration cap. Never configurable at runtime (a prompt
+# cannot raise its own budget) — see execute_tool_loop() below.
+MAX_TOOL_LOOP_ITERATIONS = 5
+
+
+def execute_tool_call(name, args, safe_context):
+    """Returns a small, bounded, JSON-serializable dict (never None for
+    a whitelisted name, even when the requested data is absent — an
+    absent value is itself useful information, e.g. "no module
+    selected"), or None for an unrecognized tool name."""
+    args = args if isinstance(args, dict) else {}
+    safe_context = safe_context if isinstance(safe_context, dict) else {}
+
+    if name == 'GET_SELECTED_MODULE':
+        return {'selected_module': safe_context.get('selected_module')}
+    if name == 'GET_SELECTED_COLUMN':
+        return {'selected_column': safe_context.get('selected_column')}
+    if name == 'GET_DOCUMENT_SUMMARY':
+        # Bounded on purpose — platform/width/editor_mode only, never
+        # the full module tree (which this app never sends to any AI
+        # provider at all — see resolve_asset_references()'s own
+        # posture on never sending raw document content).
+        return {
+            'platform': safe_context.get('platform'), 'width': safe_context.get('width'),
+            'editor_mode': safe_context.get('editor_mode'),
+        }
+    if name == 'GET_EMAIL_SETTINGS':
+        return {'platform': safe_context.get('platform'), 'width': safe_context.get('width')}
+    if name == 'GET_VALIDATION_REPORT':
+        return {'selected_validation_issue': safe_context.get('selected_validation_issue')}
+    if name == 'GET_IMPORT_RECONSTRUCTION':
+        return {'import_reconstruction': safe_context.get('import_reconstruction')}
+    if name == 'GET_MODULE_CAPABILITIES':
+        module_type = args.get('module_type')
+        if not isinstance(module_type, str) or module_type not in module_capabilities.get_all_module_types():
+            return {'module_type': module_type, 'editable_fields': []}
+        fields = module_capabilities.get_editable_fields(module_type)
+        return {'module_type': module_type, 'editable_fields': [f.get('key') for f in fields]}
+    if name == 'COMPARE_RECONSTRUCTION':
+        reconstruction = safe_context.get('import_reconstruction')
+        categories = reconstruction.get('fidelity_categories') if isinstance(reconstruction, dict) else None
+        return {'fidelity_categories': categories or []}
+    return None
+
+
 class RuleBasedEmailCommandProvider(EmailCommandProvider):
     """Zero-network, always-available. Understands a bounded, explicitly
     documented set of English command patterns — NOT arbitrary natural
@@ -1779,55 +1920,7 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
         # not the true effective background) or when no smaller-than-
         # extreme adjustment can reach the threshold.
         if _WEAK_CONTRAST_FIX_PATTERN.search(lowered):
-            if not selected_type:
-                return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
-            props = selected.get('props') if isinstance(selected, dict) else None
-            props = props if isinstance(props, dict) else {}
-            # Different module types name their text-color field
-            # differently (e.g. Text uses 'color', Button uses
-            # 'textColor') — same fallback order emailValidation.ts's own
-            # contrast check already uses, never a hardcoded single key.
-            color_key = 'color' if module_capabilities.get_editable_field(selected_type, 'color') else (
-                'textColor' if module_capabilities.get_editable_field(selected_type, 'textColor') else None
-            )
-            if color_key is None:
-                return CommandResult(
-                    reply=f'The selected {selected_type} module does not have a text color I can adjust.',
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            if props.get('backgroundImage'):
-                return CommandResult(
-                    reply=(
-                        "I can't reliably compute contrast here — this module has a background image, so its "
-                        'true effective background is not just the flat background color. Please pick a color '
-                        'manually with the contrast in mind.'
-                    ),
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            foreground = props.get(color_key)
-            background = props.get('backgroundColor')
-            fix = minimal_readable_foreground(foreground, background) if foreground and background else None
-            if fix is None:
-                return CommandResult(
-                    reply=(
-                        "I can't compute a safe automatic fix here — either the current color isn't a plain "
-                        'value I can reason about, or the contrast already can\'t be closed with a small change '
-                        'to the text color alone. Please choose a color manually.'
-                    ),
-                    action={'type': ActionType.NONE}, confidence=0.3,
-                )
-            return CommandResult(
-                reply=(
-                    f"The current text color {fix['old_color']} has a contrast ratio of {fix['old_ratio']}:1 "
-                    f"against {background} — WCAG AA needs at least {WCAG_AA_NORMAL_TEXT_RATIO}:1. I will change "
-                    f"the text color to {fix['new_color']} (ratio {fix['new_ratio']}:1). Please confirm."
-                ),
-                action={
-                    'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected',
-                    'module_type': selected_type, 'patch': {color_key: fix['new_color']},
-                },
-                confidence=0.85,
-            )
+            return compute_contrast_fix_result(selected_type, selected.get('props') if isinstance(selected, dict) else None)
 
         # Sub-phase 6, work package D — VML fallback toggle ("enable
         # outlook vml for this button" / "add an outlook wrapper").
@@ -2070,10 +2163,18 @@ def get_default_email_command_provider():
         deterministic.
       - Anything else (unset, misconfigured, or explicitly
         'deterministic') -> the deterministic router alone. No API key or
-        local server is ever required for normal operation."""
+        local server is ever required for normal operation.
+
+    R4-B3 §A — the deterministic `fallback` is always wrapped in
+    CanonicalIntentEmailCommandProvider, so a non-English message that
+    matches one of the small set of directly-executable canonical
+    intents (see intent_normalization.EXECUTABLE_INTENTS) is handled
+    without ever needing an LLM tier — same "deterministic is the
+    baseline, AI is optional" posture, now genuinely language-
+    independent for that bounded vocabulary."""
     from django.conf import settings
 
-    fallback = RuleBasedEmailCommandProvider()
+    fallback = CanonicalIntentEmailCommandProvider(fallback=RuleBasedEmailCommandProvider())
 
     if settings.EMAILBUILDER_AI_COMMAND_PROVIDER == 'openai' and settings.OPENAI_API_KEY:
         from .ai_command_openai import OpenAIEmailCommandProvider
@@ -2086,6 +2187,33 @@ def get_default_email_command_provider():
         return FallbackEmailCommandProvider(primary=LocalEmailCommandProvider(), fallback=fallback)
 
     return fallback
+
+
+class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
+    """R4-B3 §A — wraps `fallback` (always RuleBasedEmailCommandProvider
+    in practice) with ONE extra check: for a non-English message that
+    matches a canonical intent this app can execute directly today (see
+    intent_normalization.EXECUTABLE_INTENTS), execute it via
+    apply_canonical_intent() instead of ever reaching `fallback`'s
+    English-only regex matching (which would simply never match non-
+    English text and fall through to its own generic reply). An English
+    message, or a non-English message with no executable canonical-
+    intent match, always reaches `fallback` completely unchanged — this
+    class changes behavior ONLY for the specific non-English + executable
+    -intent case."""
+
+    def __init__(self, fallback):
+        self.fallback = fallback
+
+    def resolve(self, message, context):
+        from .intent_normalization import EXECUTABLE_INTENTS, normalize_intent
+
+        intent, _confidence, language = normalize_intent(message)
+        if intent in EXECUTABLE_INTENTS and language != 'en':
+            result = apply_canonical_intent(intent, context)
+            if result is not None:
+                return result
+        return self.fallback.resolve(message, context)
 
 
 class FallbackEmailCommandProvider(EmailCommandProvider):

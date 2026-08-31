@@ -1408,3 +1408,121 @@ describe('AIEngineerPanel — R4-B2 Local AI status badge', () => {
     expect(screen.queryByText('Local AI • Private')).not.toBeInTheDocument();
   });
 });
+
+// R4-B3 §B — Referential Context Resolver, wired into AIEngineerPanel's
+// handleSend as a pre-pass. Integration-level: proves the resolver
+// actually intercepts/grounds real messages sent through the panel, not
+// just the pure-function unit tests in referenceResolver.test.ts.
+describe('AIEngineerPanel — R4-B3 Referential Context Resolver integration', () => {
+  it('a genuinely ambiguous reference (2 buttons, nothing selected) is answered locally, with no backend call', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    renderPanel({ selectedModule: null, content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make that button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/There are 2 button modules/)).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('an unambiguous reference (the only button in the document, nothing selected) is resolved and sent as selected_module', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const onlyButton = createModule('button', 1);
+    const text = createModule('text', 2);
+    renderPanel({ selectedModule: null, content: { version: 1, modules: [text, onlyButton] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make that button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Add a button module');
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
+      selected_module: { type: 'button', props: onlyButton.props },
+    }));
+  });
+
+  it('the live canvas selection always wins over a resolved override', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const selected = createModule('button', 1);
+    const otherButton = createModule('button', 2);
+    renderPanel({ selectedModule: selected, content: { version: 1, modules: [selected, otherButton] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Add a button module');
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
+      selected_module: { type: 'button', props: selected.props },
+    }));
+  });
+
+  it('switching documents clears the resolver\'s stale referent memory (no leakage across documents)', async () => {
+    mockSpeech();
+    // action: NONE for the first turn — never leaves a pending
+    // proposal card behind (a separate, pre-existing, non-R4-B3 concern:
+    // `pending` is not itself cleared by the documentId-change effect)
+    // so this test stays focused on the resolver's own referent memory.
+    vi.mocked(requestAICommand).mockResolvedValue(response({ reply: 'noted', action: { type: 'NONE' } }));
+    const button = createModule('button', 1);
+    const { rerender } = render(
+      <AIEngineerPanel
+        documentId={1}
+        editorMode="ai"
+        platform="generic"
+        width={700}
+        selectedModule={button}
+        selectedColumn={null}
+        content={{ version: 1, modules: [button] }}
+        emailTitle="Test Email"
+        emailSubject="Test subject"
+        faviconUrl=""
+        resetCssEnabled
+        customCssEnabled={false}
+        customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('noted');
+    vi.mocked(requestAICommand).mockClear();
+
+    // Switch to a different document with NOTHING selected and no
+    // matching module — a stale "lastReferent"/override from document 1
+    // must never leak into document 2's requests.
+    rerender(
+      <AIEngineerPanel
+        documentId={2}
+        editorMode="ai"
+        platform="generic"
+        width={700}
+        selectedModule={null}
+        selectedColumn={null}
+        content={{ version: 1, modules: [] }}
+        emailTitle="Other Email"
+        emailSubject="Other subject"
+        faviconUrl=""
+        resetCssEnabled
+        customCssEnabled={false}
+        customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+      />,
+    );
+    vi.mocked(requestAICommand).mockResolvedValue(response({ reply: 'ok', action: { type: 'NONE' } }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'change it to blue');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('ok');
+    expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({ selected_module: null }));
+  });
+});

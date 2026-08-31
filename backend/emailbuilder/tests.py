@@ -1943,6 +1943,7 @@ from django.test import override_settings  # noqa: E402
 
 from .ai_command import (  # noqa: E402
     ActionType,
+    CanonicalIntentEmailCommandProvider,
     CommandResult,
     FallbackEmailCommandProvider,
     RuleBasedEmailCommandProvider,
@@ -4539,29 +4540,55 @@ class ProviderSelectionTests(TestCase):
     proves the deterministic router is ALWAYS the safe default, and that
     each optional provider is only ever wired in when BOTH selected AND
     configured, exactly mirroring V1's OpenAI-only posture extended to a
-    third option."""
+    third option.
+
+    R4-B3 §A -- the "deterministic" leaf is now ALWAYS
+    CanonicalIntentEmailCommandProvider wrapping RuleBasedEmailCommand-
+    Provider (see get_default_email_command_provider()'s own docstring)
+    -- for an English message this wrapper is fully transparent (see
+    CanonicalIntentEmailCommandProviderTests in test_intent_normalization.py
+    for the behavioral proof), so these tests were updated to check for
+    the wrapper type, never reverted to expect the bare inner provider."""
 
     def test_default_unset_provider_is_deterministic_only(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='', OPENAI_API_KEY='', EMAILBUILDER_LOCAL_AI_BASE_URL=''):
             provider = get_default_email_command_provider()
-        self.assertIsInstance(provider, RuleBasedEmailCommandProvider)
+        self.assertIsInstance(provider, CanonicalIntentEmailCommandProvider)
+        self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
 
     def test_local_selected_but_not_configured_is_deterministic_only(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='local', EMAILBUILDER_LOCAL_AI_BASE_URL=''):
             provider = get_default_email_command_provider()
-        self.assertIsInstance(provider, RuleBasedEmailCommandProvider)
+        self.assertIsInstance(provider, CanonicalIntentEmailCommandProvider)
+        self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
+
+    def test_local_selected_but_not_configured_never_falls_through_to_openai(self):
+        # R4-B3 §J -- explicit proof: selecting 'local' without a
+        # configured base_url must never silently reach OpenAI, even
+        # when an OPENAI_API_KEY happens to also be set in the
+        # environment for some other feature (Yukti/LP AI Review share
+        # the same key).
+        with override_settings(
+            EMAILBUILDER_AI_COMMAND_PROVIDER='local', EMAILBUILDER_LOCAL_AI_BASE_URL='', OPENAI_API_KEY='sk-test',
+        ):
+            provider = get_default_email_command_provider()
+        self.assertIsInstance(provider, CanonicalIntentEmailCommandProvider)
+        self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
+        self.assertNotIsInstance(provider, FallbackEmailCommandProvider)
 
     def test_local_selected_and_configured_wraps_with_fallback(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='local', EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
             provider = get_default_email_command_provider()
         self.assertIsInstance(provider, FallbackEmailCommandProvider)
         self.assertIsInstance(provider.primary, LocalEmailCommandProvider)
-        self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
+        self.assertIsInstance(provider.fallback, CanonicalIntentEmailCommandProvider)
+        self.assertIsInstance(provider.fallback.fallback, RuleBasedEmailCommandProvider)
 
     def test_openai_selected_but_not_configured_is_deterministic_only(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY=''):
             provider = get_default_email_command_provider()
-        self.assertIsInstance(provider, RuleBasedEmailCommandProvider)
+        self.assertIsInstance(provider, CanonicalIntentEmailCommandProvider)
+        self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
 
     def test_openai_selected_and_configured_wraps_with_fallback(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY='sk-test'):

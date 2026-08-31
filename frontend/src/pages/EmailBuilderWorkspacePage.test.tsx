@@ -3226,7 +3226,13 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     renderPage();
     const input = await openAiEngineer(user);
 
-    await user.type(input, 'convert this to two columns');
+    // R4-B3 §B — deliberately a message with no pronoun/typed-module/
+    // section/issue referring expression, so this test exercises the
+    // BACKEND's own "I don't understand" fallback specifically, not the
+    // (separately, thoroughly tested — see referenceResolver.test.ts and
+    // AIEngineerPanel.test.tsx's own "R4-B3 Referential Context Resolver
+    // integration" describe block) local referential-resolution pre-pass.
+    await user.type(input, 'reorganize everything completely');
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText(/I'm not sure how to do that yet/)).toBeInTheDocument();
