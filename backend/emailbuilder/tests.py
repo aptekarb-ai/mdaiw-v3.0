@@ -2574,17 +2574,23 @@ class KnowledgeRuleTests(TestCase):
     new find_rules_by_*() query helpers behave as the deterministic
     explain intent (below) depends on."""
 
-    def test_load_rules_returns_fifty_rules_across_the_original_categories(self):
+    def test_load_rules_returns_sixty_rules_across_the_original_categories(self):
+        # R4-B2 -- WAS 50 (this test's own count was already stale by one
+        # relative to load_rules()'s own docstring claim of 51 as of
+        # Sub-phase 5; not a R4-B2 regression either way). R4-B2 adds 10
+        # platform/ESP rules (category='platform') on top, for 60 total.
         rules = load_rules()
-        self.assertEqual(len(rules), 50)
+        self.assertEqual(len(rules), 60)
         for rule in rules:
             self.assertIsInstance(rule, KnowledgeRule)
         outlook_rules = [r for r in rules if r.category == 'outlook']
         document_rules = [r for r in rules if r.category == 'document']
+        platform_rules = [r for r in rules if r.category == 'platform']
         # Sub-phase 3/4's original counts must never shrink -- Sub-phase 5
-        # is additive only.
+        # and R4-B2 are additive only.
         self.assertGreaterEqual(len(outlook_rules), 9)
         self.assertEqual(len(document_rules), 5)
+        self.assertEqual(len(platform_rules), 10)
 
     def test_row_collapse_rule_is_kept_in_sync_with_the_repair_engines_actual_safe_fix(self):
         """Sub-phase 4, item 5/7 -- the Repair Engine's deterministic safe
@@ -3964,6 +3970,34 @@ class OpenAIEmailCommandProviderTests(TestCase):
             result = provider.resolve('add a hero', {})
         self.assertIsNone(validate_action(result.action))
 
+    # R4-B2 §23 — provider parity: the SAME knowledge-retrieval wiring
+    # added to the local provider must behave identically here.
+    def test_knowledge_retrieval_injects_relevant_snippets_for_outlook_question(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5, 'action': {'type': 'NONE'},
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            provider.resolve('Will this render correctly in Classic Outlook with VML?', {})
+        _args, kwargs = client.chat.completions.create.call_args
+        sent_context = json.loads(kwargs['messages'][1]['content'].split('trusted, not user input): ', 1)[1])
+        self.assertIn('knowledge', sent_context)
+        self.assertTrue(sent_context['knowledge'])
+
+    def test_knowledge_key_absent_for_a_pure_mutation_command(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.9,
+            'action': {'type': 'INSERT_MODULE', 'target': None, 'module_type': None, 'modules': [{'module_type': 'divider', 'patch': {}}], 'patch': None},
+        })
+        provider = OpenAIEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(OPENAI_API_KEY='sk-test'):
+            provider.resolve('add a divider', {})
+        _args, kwargs = client.chat.completions.create.call_args
+        sent_context = json.loads(kwargs['messages'][1]['content'].split('trusted, not user input): ', 1)[1])
+        self.assertNotIn('knowledge', sent_context)
+
 
 # ============================================================================
 # Feature 14 V2 — Phase A (Engine Foundation)
@@ -4330,6 +4364,174 @@ class LocalEmailCommandProviderTests(TestCase):
         with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
             result = provider.resolve('add a hero', {})
         self.assertIsNone(validate_action(result.action))
+
+    # --- R4-B2 — parity with OpenAIEmailCommandProviderTests's own context
+    # coverage. Before R4-B2, LocalEmailCommandProvider's own
+    # _build_safe_context only ever sent selected_module/platform/width —
+    # editor_mode, selected_column, selected_validation_issue,
+    # import_reconstruction, and conversation_history were silently
+    # dropped, so a local-provider conversation could never resolve a
+    # follow-up ("why was the ratio approximated") the way the OpenAI
+    # provider already could. These tests prove parity, not just "it still
+    # runs."
+
+    def _sent_context_and_messages(self, client):
+        _args, kwargs = client.chat.completions.create.call_args
+        messages = kwargs['messages']
+        context_json = json.loads(messages[1]['content'].split('trusted, not user input): ', 1)[1])
+        return context_json, messages
+
+    def test_context_parity_sends_editor_mode_column_issue_and_reconstruction(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5, 'action': {'type': 'NONE'},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        context = {
+            'editor_mode': 'ai',
+            'selected_column': {'layout_module_type': 'layout-2col-50-50', 'column_index': 1},
+            'selected_validation_issue': {
+                'id': 'outlook-classic:vml-fallback', 'title': 'VML fallback', 'detail': 'detail text',
+                'severity': 'warning', 'category': 'outlook',
+            },
+            'import_reconstruction': {
+                'document_width': 700, 'module_count': 3, 'region_count': 1,
+                'regions': [{'role': 'hero', 'confidence': 0.9, 'source_position': 'body>table:nth-of-type(1)'}],
+                'fidelity_categories': [
+                    {'id': 'structure', 'status': 'approximated', 'summary': '38/62 approximated to 40/60.', 'finding_count': 1, 'sample_findings': []},
+                ],
+                'has_mso_conditional_content': False,
+            },
+        }
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            provider.resolve('why was the ratio approximated?', context)
+        sent_context, _messages = self._sent_context_and_messages(client)
+        self.assertEqual(sent_context['editor_mode'], 'ai')
+        self.assertEqual(sent_context['selected_column'], {'layout_module_type': 'layout-2col-50-50', 'column_index': 1})
+        self.assertEqual(sent_context['selected_validation_issue']['category'], 'outlook')
+        self.assertIsNotNone(sent_context['import_reconstruction'])
+        self.assertEqual(sent_context['import_reconstruction']['fidelity_categories'][0]['id'], 'structure')
+
+    def test_context_parity_replays_conversation_history_as_real_turns(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5, 'action': {'type': 'NONE'},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        history = [
+            {'role': 'user', 'content': 'make the hero darker'},
+            {'role': 'assistant', 'content': 'I darkened the hero background.'},
+        ]
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            provider.resolve('can you fix it', {'conversation_history': history})
+        _sent_context, messages = self._sent_context_and_messages(client)
+        replayed = [m for m in messages if m['role'] in ('user', 'assistant') and m is not messages[-1]]
+        self.assertEqual(replayed, history)
+
+    def test_knowledge_retrieval_injects_relevant_snippets_for_outlook_question(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5, 'action': {'type': 'NONE'},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            provider.resolve('Will this render correctly in Classic Outlook with VML?', {})
+        sent_context, _messages = self._sent_context_and_messages(client)
+        self.assertIn('knowledge', sent_context)
+        self.assertTrue(sent_context['knowledge'])
+
+    def test_knowledge_key_absent_for_a_pure_mutation_command(self):
+        # Zero-result retrieval must cost nothing in the payload — no
+        # empty 'knowledge': [] clutter on the common case.
+        client = MagicMock()
+        client.chat.completions.return_value = None
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.9,
+            'action': {'type': 'INSERT_MODULE', 'target': None, 'module_type': None, 'modules': [{'module_type': 'divider', 'patch': {}}], 'patch': None},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
+            provider.resolve('add a divider', {})
+        sent_context, _messages = self._sent_context_and_messages(client)
+        self.assertNotIn('knowledge', sent_context)
+
+    def test_context_limit_trims_oldest_history_first(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5, 'action': {'type': 'NONE'},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        history = [
+            {'role': 'user', 'content': 'turn one ' + ('x' * 500)},
+            {'role': 'assistant', 'content': 'reply one ' + ('x' * 500)},
+            {'role': 'user', 'content': 'turn two, the most recent'},
+            {'role': 'assistant', 'content': 'reply two, the most recent'},
+        ]
+        with override_settings(
+            EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1',
+            EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS=400,
+        ):
+            provider.resolve('can you fix it', {'conversation_history': history})
+        _sent_context, messages = self._sent_context_and_messages(client)
+        replayed_contents = [m['content'] for m in messages if m['role'] in ('user', 'assistant')][:-1]
+        self.assertNotIn('turn one ' + ('x' * 500), replayed_contents)
+        # the most recent turn(s) must survive trimming, not the oldest
+        self.assertTrue(any('most recent' in c for c in replayed_contents) or replayed_contents == [])
+
+    def test_context_limit_disabled_when_non_positive_sends_full_history(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5, 'action': {'type': 'NONE'},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        history = [{'role': 'user', 'content': 'turn one'}, {'role': 'assistant', 'content': 'reply one'}]
+        with override_settings(
+            EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1',
+            EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS=0,
+        ):
+            provider.resolve('can you fix it', {'conversation_history': history})
+        _sent_context, messages = self._sent_context_and_messages(client)
+        replayed = [m for m in messages if m['role'] in ('user', 'assistant')][:-1]
+        self.assertEqual(replayed, history)
+
+    def test_no_openai_api_key_required_for_local_provider_to_succeed(self):
+        client = MagicMock()
+        client.chat.completions.create.return_value = self._fake_completion({
+            'reply': 'ok', 'confidence': 0.5,
+            'action': {'type': 'INSERT_MODULE', 'target': None, 'module_type': None, 'modules': [{'module_type': 'divider', 'patch': {}}], 'patch': None},
+        })
+        provider = LocalEmailCommandProvider(client_factory=lambda: client)
+        with override_settings(
+            OPENAI_API_KEY='', EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1',
+        ):
+            result = provider.resolve('add a divider', {})
+        self.assertEqual(result.provider, 'local')
+
+    def test_default_client_factory_never_points_at_a_hosted_openai_endpoint(self):
+        # Privacy/§19 — the local provider's client is constructed ONLY
+        # against the operator-configured base_url; it must never fall
+        # back to OpenAI's real API host, which would silently exfiltrate
+        # email content to a cloud service under a "local" configuration.
+        # The real `openai` package is not installed in this environment
+        # (every provider here is designed to defer-import it and work
+        # fully under injected client_factory instead — see this class's
+        # own docstring) — a fake module is injected into sys.modules so
+        # `_default_client_factory`'s own `from openai import OpenAI` line
+        # resolves without requiring the real package.
+        import sys
+        import types
+        fake_openai_module = types.ModuleType('openai')
+        mock_openai_cls = MagicMock()
+        fake_openai_module.OpenAI = mock_openai_cls
+        with override_settings(
+            EMAILBUILDER_LOCAL_AI_BASE_URL='http://127.0.0.1:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1',
+            EMAILBUILDER_LOCAL_AI_API_KEY='',
+        ):
+            with patch.dict(sys.modules, {'openai': fake_openai_module}):
+                LocalEmailCommandProvider._default_client_factory()
+        _args, kwargs = mock_openai_cls.call_args
+        self.assertEqual(kwargs['base_url'], 'http://127.0.0.1:11434/v1')
+        self.assertNotIn('api.openai.com', str(kwargs.get('base_url', '')))
 
 
 class ProviderSelectionTests(TestCase):
@@ -5500,8 +5702,19 @@ class LearningSignatureAndEventIdValidationTests(TestCase):
     def test_signature_with_uppercase_rejected(self):
         self.assertFalse(learning_module.is_valid_signature('Outlook-Classic:Button'))
 
-    def test_signature_with_extra_segments_rejected(self):
-        self.assertFalse(learning_module.is_valid_signature('outlook-classic:button:extra'))
+    # R4-B2 — WAS "extra segments rejected" (2-colon signatures were
+    # entirely disallowed). The R4-B2 spec's own reconstruction/skill
+    # signature examples (e.g. "import-reconstruction:button:alignment",
+    # "skill:fix-weak-contrast:applied") are exactly 3-segment/2-colon —
+    # see reconstructionReview.ts's own signature docstring, already
+    # emitting this shape before this pattern was widened to accept it.
+    # A 4th segment (3 colons) remains rejected — see the sibling test
+    # immediately below.
+    def test_signature_with_two_colons_accepted(self):
+        self.assertTrue(learning_module.is_valid_signature('import-reconstruction:button:alignment'))
+
+    def test_signature_with_three_colons_rejected(self):
+        self.assertFalse(learning_module.is_valid_signature('outlook-classic:button:extra:extra'))
 
     def test_signature_with_script_injection_rejected(self):
         self.assertFalse(learning_module.is_valid_signature('outlook-classic:<script>alert(1)</script>'))
@@ -5759,6 +5972,26 @@ class LearningSignalViewTests(TestCase):
         self.assertTrue(body['created'])
         self.assertEqual(LearnedRepairSignal.objects.count(), 1)
         self.assertEqual(LearnedRepairSignal.objects.first().user, self.user)
+
+    # R4-B2 §15 — the reconstruction-repair source choice and 3-segment
+    # reconstruction/skill signatures must actually be accepted end to
+    # end through the real endpoint, not just by the bare validator
+    # function (see LearningSignatureAndEventIdValidationTests above).
+    # R4-B2 itself never POSTS one of these (see reconstructionReview.ts's
+    # "no learning mutation yet" docstring) — this proves the plumbing is
+    # ready for R4-C to use, not that R4-B2 uses it.
+    def test_reconstruction_source_and_three_segment_signature_accepted(self):
+        self.client.force_login(self.user)
+        response = self._post_json(self._valid_payload(
+            event_id='evt-reconstruction-1',
+            signature='import-reconstruction:button:alignment',
+            source='ai_engineer_reconstruction',
+        ))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()['success'])
+        signal = LearnedRepairSignal.objects.get(event_id='evt-reconstruction-1')
+        self.assertEqual(signal.signature, 'import-reconstruction:button:alignment')
+        self.assertEqual(signal.source, 'ai_engineer_reconstruction')
 
     def test_duplicate_post_via_endpoint_does_not_create_a_second_row(self):
         self.client.force_login(self.user)

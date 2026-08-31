@@ -285,6 +285,25 @@ EMAILBUILDER_AI_COMMAND_REQUEST_WINDOW_SECONDS = int(
 EMAILBUILDER_LOCAL_AI_BASE_URL = os.environ.get('EMAILBUILDER_LOCAL_AI_BASE_URL', '')
 EMAILBUILDER_LOCAL_AI_MODEL = os.environ.get('EMAILBUILDER_LOCAL_AI_MODEL', '')
 EMAILBUILDER_LOCAL_AI_API_KEY = os.environ.get('EMAILBUILDER_LOCAL_AI_API_KEY', '')
+# R4-B2 — informational only, never read for control flow: which local
+# runtime family the operator has pointed EMAILBUILDER_LOCAL_AI_BASE_URL
+# at ('ollama' | 'llamacpp' | 'compatible-local-server' | ''), surfaced
+# only in admin/settings diagnostics (see §24 of the R4-B2 spec — never
+# shown in the normal AI Engineer conversation UI). The wire protocol is
+# identical OpenAI-compatible JSON regardless of this value, so nothing
+# in ai_command_local.py branches on it.
+EMAILBUILDER_LOCAL_AI_RUNTIME = os.environ.get('EMAILBUILDER_LOCAL_AI_RUNTIME', '')
+# R4-B2 — a local model's own context window is frequently much smaller
+# than a hosted model's (many popular local 7B-13B models ship with
+# 4k-8k token windows) — this caps the TOTAL serialized size (system
+# prompt + knowledge snippets + conversation history + context JSON) the
+# local provider will ever send, trimming the OLDEST conversation turns
+# first (see ai_command_local.py::_apply_context_limit) rather than
+# failing the request outright. Character-based, not token-based — a
+# simple, dependency-free, conservative proxy (roughly 3-4 chars/token
+# for English) that never requires a tokenizer library for a local
+# runtime whose exact tokenizer this app cannot know in advance.
+EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS = int(os.environ.get('EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS', '6000'))
 
 # Django upload-size ceiling — comfortably covers FACE_MAX_FRAMES frames at
 # FACE_FRAME_MAX_BYTES each, so an oversized multipart request is rejected by

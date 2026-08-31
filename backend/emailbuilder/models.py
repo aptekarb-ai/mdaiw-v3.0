@@ -251,6 +251,13 @@ class RepairSignalSource(models.TextChoices):
     VALIDATION_CENTER_SINGLE = 'validation_center_single', 'Validation Center — single Fix'
     VALIDATION_CENTER_BULK = 'validation_center_bulk', 'Validation Center — Fix All'
     AI_ENGINEER_REPAIR = 'ai_engineer_repair', 'AI Engineer — repair proposal'
+    # R4-B2 — accepted/rejected reconstruction-correction proposals (R4-C's
+    # future concern; this choice exists now so learning.record_signal can
+    # accept a reconstruction-sourced signal the moment R4-C starts
+    # emitting one, without a later migration). Never written by R4-B2
+    # itself — see reconstructionReview.ts's "no learning mutation yet"
+    # docstring.
+    AI_ENGINEER_RECONSTRUCTION = 'ai_engineer_reconstruction', 'AI Engineer — reconstruction repair'
 
 
 class LearnedRepairSignal(models.Model):

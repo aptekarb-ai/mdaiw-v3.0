@@ -11,6 +11,7 @@ import { analyzeImportedHtml } from '../emailbuilder/htmlImportAnalysis';
 import { buildFidelityReport } from '../emailbuilder/htmlImportFidelity';
 import { mapImportedHtml } from '../emailbuilder/htmlImportMapper';
 import { buildReconstructionReview, formatReconstructionReviewMessage } from '../emailbuilder/reconstructionReview';
+import { buildImportReconstructionContext } from '../emailbuilder/importReconstructionContext';
 import type { EmailDocument, SavedEmailModule } from '../emailbuilder/types';
 
 vi.mock('../api/client', async () => {
@@ -4033,6 +4034,15 @@ describe('EmailBuilderWorkspacePage — R4-B import-reconstruction handoff picku
     return buildReconstructionReview(doc, structure, fidelity, mapping.modules);
   }
 
+  function sampleImportContext() {
+    const html = '<table><tr><td><p>Hello</p></td></tr></table>';
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const structure = analyzeImportedHtml(doc, 700);
+    const mapping = mapImportedHtml(doc);
+    const fidelity = buildFidelityReport(doc, structure, mapping);
+    return buildImportReconstructionContext(structure, fidelity, mapping.modules.length);
+  }
+
   function findByMessageText(text: string) {
     const normalized = text.replace(/\s+/g, ' ').trim();
     return screen.findByText((_, node) => (node?.textContent ?? '').replace(/\s+/g, ' ').trim() === normalized);
@@ -4045,7 +4055,7 @@ describe('EmailBuilderWorkspacePage — R4-B import-reconstruction handoff picku
   it('a pending handoff for this document is consumed on load, seeding the AI Engineer chat with no backend request', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
     const review = sampleReview();
-    storePendingImportHandoff(1, createImportReconstructionHandoff(1, review));
+    storePendingImportHandoff(1, createImportReconstructionHandoff(1, review, sampleImportContext()));
 
     renderPageAt('/email-builder/builder/1?tab=ai');
 
@@ -4056,7 +4066,7 @@ describe('EmailBuilderWorkspacePage — R4-B import-reconstruction handoff picku
   it('the sessionStorage entry is cleared once consumed — a later reload of the same document does not resend it', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
     const review = sampleReview();
-    storePendingImportHandoff(1, createImportReconstructionHandoff(1, review));
+    storePendingImportHandoff(1, createImportReconstructionHandoff(1, review, sampleImportContext()));
 
     const first = renderPageAt('/email-builder/builder/1?tab=ai');
     await findByMessageText(formatReconstructionReviewMessage(review));
@@ -4082,7 +4092,7 @@ describe('EmailBuilderWorkspacePage — R4-B import-reconstruction handoff picku
   it('two documents remain isolated — a handoff stashed for a different document id is never picked up here, and stays available for that document', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ id: 1 }));
     const reviewForOtherDoc = sampleReview();
-    storePendingImportHandoff(2, createImportReconstructionHandoff(2, reviewForOtherDoc));
+    storePendingImportHandoff(2, createImportReconstructionHandoff(2, reviewForOtherDoc, sampleImportContext()));
 
     renderPageAt('/email-builder/builder/1?tab=ai');
     const editorModeGroup = await screen.findByRole('group', { name: 'Editor mode' });

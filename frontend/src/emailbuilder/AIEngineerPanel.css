@@ -59,6 +59,19 @@
   cursor: not-allowed;
 }
 
+/* R4-B2 §24 — subtle, non-intrusive: same pill shape as the other
+   toolbar controls, never a modal/banner. Only ever shown for the
+   'local' provider — see AIEngineerPanel.tsx's own comment. */
+.ai-engineer-panel__local-ai-badge {
+  border: 1px solid var(--color-accent-green);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+  background: var(--color-success-bg);
+}
+
 .ai-engineer-panel__tabs {
   display: flex;
   gap: var(--space-2);

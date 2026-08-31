@@ -97,6 +97,11 @@ CONCERN_VALUES = frozenset({
     'security', 'css-support', 'tables', 'line-height', 'background-images', 'buttons', 'lists',
     'dark-mode', 'preheader', 'client-failure-patterns', 'html-support', 'media-queries', 'responsive',
     'accessibility', 'width', 'links',
+    # R4-B2 — platform/ESP concerns (§5/§6 of the R4-B2 spec: "Platform
+    # awareness" + "Salesforce Marketing Cloud skills"). Orthogonal to the
+    # client-rendering concerns above — these are about the SENDING
+    # platform/templating layer, not how a client renders the resulting HTML.
+    'ampscript', 'personalization', 'esp-platform',
 })
 
 
@@ -1355,6 +1360,248 @@ _RULES = (
         confidence=0.8,
         source=_INFORMED_BY_CANIEMAIL,
     ),
+
+    # =====================================================================
+    # R4-B2 — Platform/ESP knowledge (§5 "Platform awareness" + §6
+    # "Salesforce Marketing Cloud skills"). These are facts about the
+    # SENDING platform/templating layer (Salesforce Marketing Cloud,
+    # Marketo, HubSpot, Pardot), never about how a browser/mail-client
+    # engine renders the resulting HTML — orthogonal to every rule above.
+    # Developer-authored: no external MIT/BSD dataset was adapted for
+    # this platform knowledge, so every rule here uses
+    # _DEVELOPER_AUTHORED provenance, never _INFORMED_BY_CANIEMAIL (Can I
+    # Email is a client-rendering-compatibility dataset, not an ESP-
+    # platform one — citing it here would misattribute the source).
+    #
+    # AMPScript posture (§6: "Do not evaluate arbitrary AMPScript.
+    # Validate and preserve it safely."): this application never parses
+    # or executes AMPScript — imported/pasted HTML containing AMPScript
+    # is plain text as far as the sanitizer/renderer are concerned (see
+    # htmlImportSanitize.ts's own text-node handling), so a %%...%% or
+    # <script runat="server"> block already survives verbatim through
+    # import/render exactly like any other literal text — there is no
+    # separate "AMPScript stripping" step to accidentally trigger. These
+    # rules document that behavior for the AI's own explanations; they do
+    # not change what the sanitizer/renderer do.
+    # =====================================================================
+    KnowledgeRule(
+        id='sfmc-ampscript-never-evaluated',
+        category='platform',
+        title='AMPScript is preserved as literal text — this builder never parses or executes it',
+        description=(
+            'Salesforce Marketing Cloud (SFMC) templates commonly embed AMPScript — %%=...=%% inline '
+            'expressions or <script runat="server">...</script> blocks — for personalization and conditional '
+            'content, evaluated by SFMC\'s own send-time engine, never by a browser. This builder treats any '
+            'AMPScript syntax found in imported or pasted HTML as ordinary literal text: it is never parsed, '
+            'never evaluated, and never stripped for being AMPScript specifically (only genuinely unsafe '
+            'constructs — <script> tags containing real JavaScript, javascript: URLs, and similar — are ever '
+            'removed, and that removal applies equally regardless of platform). A block containing AMPScript '
+            'syntax may still be classified Removed/Unsupported by Import Reconstruction if it also matches an '
+            'unrelated unsafe-content rule (e.g. a literal <script> tag) — the reason given always names the '
+            'actual unsafe construct, never "AMPScript" itself as the cause.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('ampscript', 'security', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=1.0,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='sfmc-personalization-subscriber-attributes',
+        category='platform',
+        title='SFMC personalization uses subscriber attributes and AMPScript, resolved only at send time',
+        description=(
+            'SFMC personalization (subscriber first name, account data, behavioral/data-extension fields) is '
+            'expressed either as an AttributeValue()/lookup AMPScript call or a %%FirstName%% personalization '
+            'string, both resolved by SFMC\'s send engine against the actual subscriber record at send time — '
+            'never resolvable inside this builder, which has no subscriber data and no SFMC send context. A '
+            'personalization token previewed here always shows its literal syntax, not a resolved value; this '
+            'is expected and is not a bug in either the source email or this builder\'s reconstruction.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('ampscript', 'personalization', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=1.0,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='sfmc-conditional-content-blocks',
+        category='platform',
+        title='SFMC conditional content (IF/ELSEIF/ENDIF) branches are evaluated only by SFMC at send time',
+        description=(
+            'SFMC conditional-content AMPScript (%%[IF ... THEN]%% ... %%[ELSEIF ...]%% ... %%[ENDIF]%%) '
+            'selects between alternate HTML branches per subscriber at send time. This builder has no send-time '
+            'evaluation context, so it cannot determine which branch a given subscriber would actually see — '
+            'all branches remain present as literal text if imported, and Import Reconstruction never silently '
+            'picks one branch to keep and discards the others (that would fabricate a specific recipient\'s '
+            'experience, which the reconstruction rules never do).'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('ampscript', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='sfmc-cloudpages-links',
+        category='platform',
+        title='SFMC CloudPages links are ordinary safe URLs to this builder — no special handling needed',
+        description=(
+            'A link to an SFMC CloudPage (a hosted landing page served from an *.cloudpages.com/*.marketingcloudapps.com '
+            'domain or a custom-mapped domain) is, from this builder\'s perspective, just another https:// URL — '
+            'it passes through the same safe-link validation every other destination does, with no CloudPages-'
+            'specific allow-list or rewriting. The link\'s own personalization query parameters (often appended '
+            'by SFMC at send time, e.g. a tracking or subscriber-key parameter) are preserved verbatim as part '
+            'of the URL text, never parsed or altered.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('links', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='sfmc-unsubscribe-preference-links',
+        category='platform',
+        title='SFMC unsubscribe/preference links use reserved AMPScript-style tokens, never a literal URL to fill in',
+        description=(
+            'SFMC email templates commonly use reserved personalization strings for compliance links — '
+            '%%unsub_center_url%% (or the equivalent AMPScript function call) for the unsubscribe link, and a '
+            'similar token for a preference center — which SFMC substitutes with a real, subscriber-specific '
+            'URL only at send time. These tokens are never a placeholder the AI Engineer should try to "fix" by '
+            'inventing a destination URL — the same "never guess a destination" rule this builder already '
+            'applies to href="#" placeholder links applies here too; the correct action is to preserve the '
+            'token exactly as written.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('links', 'ampscript', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='sfmc-send-context-variables',
+        category='platform',
+        title='SFMC send-context variables (_messagecontext, job/list/batch IDs) only exist at send time',
+        description=(
+            'SFMC exposes send-context system variables (e.g. _messagecontext, job ID, list ID, batch ID, '
+            'send-definition attributes) inside AMPScript for tracking and diagnostics — these have no meaning '
+            'or value outside an actual SFMC send, so this builder cannot resolve, preview, or validate them '
+            'against anything; they are preserved as literal text, the same posture as every other AMPScript '
+            'construct this builder does not evaluate.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('ampscript', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.85,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='sfmc-ampscript-html-coexistence',
+        category='platform',
+        title='AMPScript and this builder\'s HTML can safely coexist in the same document',
+        description=(
+            'Because AMPScript blocks are never parsed as markup (they are plain text to this application\'s '
+            'HTML parser, exactly like any other text node or attribute value), a document can contain both '
+            'AMPScript personalization/conditional-content blocks and this builder\'s normal table-based module '
+            'structure without conflict — reconstructing the surrounding HTML into builder modules never '
+            'requires understanding or rewriting the AMPScript it contains, only preserving it exactly as '
+            'found, in its original position in the text.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('ampscript', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='marketo-platform-overview',
+        category='platform',
+        title='Marketo Engage tokens ({{lead.FirstName}} etc.) are resolved only at send time, same posture as SFMC AMPScript',
+        description=(
+            'Marketo Engage uses its own token syntax (e.g. {{lead.FirstName:default=there}}) for '
+            'personalization, resolved by Marketo\'s send engine against lead/program data — this builder has '
+            'no Marketo send context, so these tokens are preserved as literal text on import, never resolved, '
+            'evaluated, or treated as a placeholder needing a real value.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('personalization', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.8,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='hubspot-platform-overview',
+        category='platform',
+        title='HubSpot personalization tokens and modules are resolved only at send time',
+        description=(
+            'HubSpot Marketing Hub emails use HubL personalization tokens (e.g. {{ contact.firstname }}) and '
+            'HubSpot-specific module/smart-content constructs, resolved by HubSpot\'s own send pipeline. As '
+            'with SFMC and Marketo, this builder preserves these tokens as literal text on import rather than '
+            'attempting to resolve or rewrite them.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('personalization', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.8,
+        source=_DEVELOPER_AUTHORED,
+    ),
+    KnowledgeRule(
+        id='pardot-platform-overview',
+        category='platform',
+        title='Pardot / Account Engagement variable tags are resolved only at send time',
+        description=(
+            'Salesforce Pardot (Account Engagement) uses its own variable-tag personalization syntax (e.g. '
+            '%%first_name%%-style or {{Variable_...}} field merges depending on template type), resolved '
+            'against prospect records at send time. Same posture as every other platform above: preserved as '
+            'literal text, never resolved or treated as an editable placeholder.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('personalization', 'esp-platform'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.75,
+        source=_DEVELOPER_AUTHORED,
+    ),
 )
 
 _RULES_BY_ID = {rule.id: rule for rule in _RULES}
@@ -1362,15 +1609,17 @@ _RULES_BY_ID = {rule.id: rule for rule in _RULES}
 
 def load_rules():
     """Sub-phase 3 (item 13) + Sub-phase 4 (item 6) + Sub-phase 5 (Phase B
-    — Professional Email Knowledge Engine): returns the full structured
-    knowledge base — 14 original Outlook/MSO + document-standards
-    explainer rules, plus Sub-phase 5's expansion covering Classic/New
-    Outlook depth, Gmail, Apple Mail, iOS Mail, Yahoo Mail, AOL Mail,
-    Outlook.com, and cross-client general practices (51 rules total as of
-    Sub-phase 5). Phase C (Sub-phase 6)'s VML-generation rules and Phase
-    D/E's composition/learning-related knowledge are separate, still-
-    unstarted future work — this function's growth is additive, never a
-    replacement of existing entries."""
+    — Professional Email Knowledge Engine) + R4-B2 (§5/§6 platform/SFMC
+    knowledge): returns the full structured knowledge base — 14 original
+    Outlook/MSO + document-standards explainer rules, Sub-phase 5's
+    expansion covering Classic/New Outlook depth, Gmail, Apple Mail, iOS
+    Mail, Yahoo Mail, AOL Mail, Outlook.com, and cross-client general
+    practices (51 rules), plus R4-B2's 10 platform/ESP rules (SFMC
+    AMPScript posture, Marketo/HubSpot/Pardot personalization — 60 rules
+    total as of R4-B2). Phase C (Sub-phase 6)'s VML-generation rules and
+    Phase D/E's composition/learning-related knowledge are separate,
+    still-unstarted future work — this function's growth is additive,
+    never a replacement of existing entries."""
     return list(_RULES)
 
 

@@ -13,6 +13,8 @@ import { renderEmailDocument } from '../emailbuilder/htmlRenderer';
 import { ImportReviewWorkspace } from '../emailbuilder/ImportReviewWorkspace';
 import { createEmailDocumentFromImportedHtml } from '../emailbuilder/duplicateEmailDocument';
 import { buildReconstructionReview, type ReconstructionReview } from '../emailbuilder/reconstructionReview';
+import { buildImportReconstructionContext } from '../emailbuilder/importReconstructionContext';
+import type { AICommandImportReconstructionContext } from '../emailbuilder/aiCommand';
 import { createImportReconstructionHandoff } from '../emailbuilder/aiEngineerHandoff';
 import { storePendingImportHandoff } from '../emailbuilder/importHandoffStorage';
 import type { EmailModule } from '../emailbuilder/edm';
@@ -33,6 +35,16 @@ interface ReviewState {
   // mapping pass (never re-parsed/re-mapped later) — see submitCreate's own
   // docstring for why a second pass is never acceptable.
   reconstructionReview: ReconstructionReview;
+  // R4-B2 — the SAME R4-A bounded context contract (§12: "Integrate R4-B
+  // deeply"), also built once here. Closes a real gap found during R4-B's
+  // own live QA: this payload existed in the wire type
+  // (AICommandRequest.import_reconstruction) since R4-A but was never
+  // actually populated by any caller, so a follow-up question like "why
+  // was the ratio approximated" could never be answered with real
+  // grounding by any AI provider — see AIEngineerPanel.tsx's own
+  // importReconstructionContextRef for where this now gets kept alive
+  // for the WHOLE conversation, not just the first turn.
+  importReconstructionContext: AICommandImportReconstructionContext;
 }
 
 // Phase C (Import HTML) — the ONE import experience shared by Dashboard's
@@ -86,6 +98,7 @@ export function ImportHtmlPage() {
     const structure = analyzeImportedHtml(guard.document, DEFAULT_EMAIL_WIDTH);
     const fidelity = buildFidelityReport(guard.document, structure, mapping);
     const reconstructionReview = buildReconstructionReview(guard.document, structure, fidelity, mapping.modules);
+    const importReconstructionContext = buildImportReconstructionContext(structure, fidelity, mapping.modules.length);
     const originalHtml = renderSanitizedSourceHtml(guard.document);
     const reconstructedHtml = renderEmailDocument({
       width: DEFAULT_EMAIL_WIDTH,
@@ -94,7 +107,7 @@ export function ImportHtmlPage() {
     });
     setReviewed({
       modules: mapping.modules, emailTitle: mapping.emailTitle, fidelity, originalHtml, reconstructedHtml,
-      reconstructionReview,
+      reconstructionReview, importReconstructionContext,
     });
     setName(mapping.emailTitle || '');
   }
@@ -163,7 +176,7 @@ export function ImportHtmlPage() {
     if (documentId === null) return;
     storePendingImportHandoff(
       documentId,
-      createImportReconstructionHandoff(documentId, reviewed.reconstructionReview),
+      createImportReconstructionHandoff(documentId, reviewed.reconstructionReview, reviewed.importReconstructionContext),
     );
     navigate(`/email-builder/builder/${documentId}?tab=ai`);
   }

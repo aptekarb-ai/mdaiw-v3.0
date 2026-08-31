@@ -4,8 +4,8 @@ import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/use
 import { isSpeechSynthesisSupported, useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import {
   describeAction, DOCUMENT_SCOPE_ACTION_TYPES,
-  type AIActionHistoryEntry, type AICommandAction, type AICommandProviderId, type AICommandSelectedModuleContext,
-  type RepairActionItem,
+  type AIActionHistoryEntry, type AICommandAction, type AICommandImportReconstructionContext,
+  type AICommandProviderId, type AICommandSelectedModuleContext, type RepairActionItem,
 } from './aiCommand';
 import { detectCustomCssWarnings } from './emailCss';
 import { renderEmailDocument } from './htmlRenderer';
@@ -251,6 +251,16 @@ export function AIEngineerPanel({
   const [history, setHistory] = useState<AIActionHistoryEntry[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  // R4-B2 §24 — "In AI Engineer, later expose a subtle status: Local AI
+  // when the local intelligence engine is active." Deliberately just the
+  // last-seen provider id from an actual backend response, not a
+  // separate "which provider is configured" query — matches what
+  // literally just answered, and stays accurate even if the deployment's
+  // provider config changes mid-session (falls back mid-conversation,
+  // for example). Never shown for 'deterministic' or 'openai' — only
+  // 'local' gets a badge, per spec; no model/runtime details here (those
+  // belong in admin/settings diagnostics, never this conversation view).
+  const [lastProvider, setLastProvider] = useState<AICommandProviderId | null>(null);
   const [pending, setPending] = useState<PendingProposal | null>(null);
   // Sub-phase 4, item 4 — a SEPARATE pending state from the backend-
   // routed `pending` above: a repair proposal is a LIST of items (each
@@ -298,6 +308,18 @@ export function AIEngineerPanel({
     lastDiscussedIssueIdRef.current = id;
   }
 
+  // R4-B2 §12 — the SAME reason lastDiscussedIssueIdRef is a ref, not
+  // state: kept alive for the WHOLE conversation (every requestAICommand
+  // call for this document), not just the one-shot handoff moment — the
+  // handoff itself is consumed and cleared after the first turn, but a
+  // follow-up two turns later ("why was the ratio approximated?") still
+  // needs this to answer with real grounding instead of a generic
+  // fallback. Initialized from the handoff synchronously (same StrictMode-
+  // safety reasoning as lastDiscussedIssueIdRef's own init).
+  const importReconstructionContextRef = useRef<AICommandImportReconstructionContext | null>(
+    aiEngineerHandoff?.importReconstructionContext ?? null,
+  );
+
   // C-3 remediation — explicit pending-repair context for the placeholder-
   // link conversational flow: which real module (never "whatever's
   // currently selected") is awaiting a destination URL, so a later bare
@@ -333,7 +355,9 @@ export function AIEngineerPanel({
     setMessages(stored.map((entry) => ({ id: newId('msg'), role: entry.role, text: entry.text })));
     setLastDiscussedIssueId(null);
     pendingPlaceholderLinkModuleIdRef.current = null;
+    importReconstructionContextRef.current = null;
     setHistory([]);
+    setLastProvider(null);
   }, [documentId]);
 
   function handleClearConversation() {
@@ -374,6 +398,7 @@ export function AIEngineerPanel({
       ?? ((id: string) => fallbackConsumedHandoffTrackerRef.current.tryConsume(id));
     if (!tryConsume(handoff.id)) return; // already consumed — StrictMode's second invoke, or a stale remount
     if (handoff.issueId) setLastDiscussedIssueId(handoff.issueId);
+    if (handoff.importReconstructionContext) importReconstructionContextRef.current = handoff.importReconstructionContext;
     // R4-B — import-reconstruction handoffs never call the backend for
     // their first turn: the classification is already fully deterministic
     // (§4 — "AI may interpret but must NOT contradict high-confidence
@@ -596,9 +621,16 @@ export function AIEngineerPanel({
         selected_column: selectedColumnContext,
         selected_validation_issue: selectedValidationIssueContext,
         conversation_history: boundedHistoryForRequest(messages).map((m) => ({ role: m.role, content: m.text })),
+        // R4-B2 §12 — present on every turn for an import-reconstruction
+        // conversation (not just the seeded first one), so a follow-up
+        // question can be answered with real grounding by whichever AI
+        // provider is active. null for every other conversation, same as
+        // every other optional context field.
+        import_reconstruction: importReconstructionContextRef.current,
       });
 
       appendMessage('assistant', response.reply);
+      setLastProvider(response.provider);
 
       if (response.action.type === 'NONE') {
         // C-3 remediation — arm the pending-repair ref only when the
@@ -817,6 +849,11 @@ export function AIEngineerPanel({
           </button>
         </div>
         <div className="ai-engineer-panel__toolbar-controls">
+          {lastProvider === 'local' && (
+            <span className="ai-engineer-panel__local-ai-badge" title="Answered by the local AI engine — nothing left this environment">
+              Local AI • Private
+            </span>
+          )}
           {voiceSupported && (
             <>
               <button

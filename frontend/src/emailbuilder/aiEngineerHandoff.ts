@@ -1,5 +1,6 @@
 import { generateId } from './idGenerator';
 import type { ReconstructionReview } from './reconstructionReview';
+import type { AICommandImportReconstructionContext } from './aiCommand';
 
 // Validation Center -> AI Engineer handoff. A single explicit, one-shot
 // event ("here is one prompt to send, once") rather than "whenever these
@@ -30,6 +31,12 @@ export interface AIEngineerHandoff {
   // "must never be a JSON/technical dump" and §4's "deterministic facts
   // have priority over AI judgement" in the R4-B spec.
   reconstructionReview?: ReconstructionReview;
+  // R4-B2 §12 — the SAME R4-A bounded context contract, kept alive for
+  // the WHOLE conversation (not just this one-shot first turn) by
+  // AIEngineerPanel — see its importReconstructionContextRef. Without
+  // this, a follow-up question about the reconstruction has no bounded
+  // context to answer from on any turn after the first.
+  importReconstructionContext?: AICommandImportReconstructionContext;
 }
 
 export function createAIEngineerHandoff(
@@ -57,6 +64,7 @@ export function createAIEngineerHandoff(
 export function createImportReconstructionHandoff(
   documentId: number,
   review: ReconstructionReview,
+  importReconstructionContext: AICommandImportReconstructionContext,
 ): AIEngineerHandoff {
   return {
     id: generateId(),
@@ -65,6 +73,7 @@ export function createImportReconstructionHandoff(
     prompt: 'Review the imported email reconstruction.',
     createdAt: Date.now(),
     reconstructionReview: review,
+    importReconstructionContext,
   };
 }
 

@@ -63,18 +63,24 @@ MIN_EVIDENCE_THRESHOLD = 3
 # docstring and the closure report for the same disclosure.
 RETENTION_DAYS = 365
 
-# Bounded format check only — "<category>:<rule-slug>", lowercase kebab
-# segments, matching the stable prefix every ValidationIssue.id in
-# emailValidation.ts already uses (see repairEngine.ts's
-# signatureForIssueId()). Deliberately NOT a hand-maintained allow-list
-# of every real frontend signature — the approved report's reasoning:
-# ranking is per-user, display-order-only, and restricted to already-
-# safe-fixable issues, so the blast radius of an out-of-band signature
-# string is "this one user's own suggestion order looks odd," never a
-# safety or cross-user concern. A stricter allow-list would need a
-# second manifest kept in lockstep with the frontend's issue ids for a
-# proportionally small safety gain.
-SIGNATURE_PATTERN = re.compile(r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$')
+# Bounded format check only — "<category>:<rule-slug>" (validation
+# issues, matching the stable prefix every ValidationIssue.id in
+# emailValidation.ts already uses — see repairEngine.ts's
+# signatureForIssueId()) OR "<category>:<subcategory>:<slug>" (R4-B2 —
+# import-reconstruction and skill-recipe signatures, e.g.
+# "import-reconstruction:button:alignment", "skill:fix-weak-contrast" —
+# see reconstructionReview.ts's own signature docstring and skills.py's
+# SKILL_SIGNATURE_PREFIX). 2 or 3 lowercase-kebab segments only, never
+# more. Deliberately NOT a hand-maintained allow-list of every real
+# frontend signature — the approved report's reasoning: ranking is
+# per-user, display-order-only, and restricted to already-safe-fixable
+# issues, so the blast radius of an out-of-band signature string is
+# "this one user's own suggestion order looks odd," never a safety or
+# cross-user concern. A stricter allow-list would need a second manifest
+# kept in lockstep with the frontend's issue ids for a proportionally
+# small safety gain.
+_SEGMENT = r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
+SIGNATURE_PATTERN = re.compile(rf'^{_SEGMENT}:{_SEGMENT}(?::{_SEGMENT})?$')
 MAX_SIGNATURE_LENGTH = 160
 MAX_EVENT_ID_LENGTH = 64
 

@@ -245,7 +245,12 @@ describe('ImportHtmlPage — Import Review workspace (R3)', () => {
     expect(stored.source).toBe('import-reconstruction');
     expect(stored.documentId).toBe(77);
     expect(stored.reconstructionReview).toBeTruthy();
-    expect(JSON.stringify(stored)).not.toMatch(/Bold via CSS/);
+    // R4-B2 — importReconstructionContext.ts's own bounded content_preview
+    // (<=120 chars, approved as part of R4-A's context contract) is
+    // expected here; what must NEVER appear is actual markup — the raw
+    // sanitized/imported HTML itself.
+    const serialized = JSON.stringify(stored);
+    expect(serialized).not.toMatch(/<table|<script|<style|<td|<tr\b/);
   });
 });
 

@@ -5,6 +5,7 @@ import { analyzeImportedHtml } from './htmlImportAnalysis';
 import { buildFidelityReport } from './htmlImportFidelity';
 import { mapImportedHtml } from './htmlImportMapper';
 import { buildReconstructionReview } from './reconstructionReview';
+import { buildImportReconstructionContext } from './importReconstructionContext';
 
 function sampleReview() {
   const html = '<table><tr><td><p style="font-weight:bold;">Bold via CSS</p></td></tr></table>';
@@ -15,13 +16,22 @@ function sampleReview() {
   return buildReconstructionReview(doc, structure, fidelity, mapping.modules);
 }
 
+function sampleImportContext() {
+  const html = '<table><tr><td><p>Hello</p></td></tr></table>';
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const structure = analyzeImportedHtml(doc, 700);
+  const mapping = mapImportedHtml(doc);
+  const fidelity = buildFidelityReport(doc, structure, mapping);
+  return buildImportReconstructionContext(structure, fidelity, mapping.modules.length);
+}
+
 afterEach(() => {
   window.sessionStorage.clear();
 });
 
 describe('importHandoffStorage', () => {
   it('stores a handoff and returns it exactly once (read-and-clear)', () => {
-    const handoff = createImportReconstructionHandoff(42, sampleReview());
+    const handoff = createImportReconstructionHandoff(42, sampleReview(), sampleImportContext());
     storePendingImportHandoff(42, handoff);
 
     const taken = takePendingImportHandoff(42);
@@ -34,8 +44,8 @@ describe('importHandoffStorage', () => {
   });
 
   it('two documents remain isolated — one document’s handoff never leaks into another’s read', () => {
-    const handoffA = createImportReconstructionHandoff(1, sampleReview());
-    const handoffB = createImportReconstructionHandoff(2, sampleReview());
+    const handoffA = createImportReconstructionHandoff(1, sampleReview(), sampleImportContext());
+    const handoffB = createImportReconstructionHandoff(2, sampleReview(), sampleImportContext());
     storePendingImportHandoff(1, handoffA);
     storePendingImportHandoff(2, handoffB);
 
@@ -51,7 +61,7 @@ describe('importHandoffStorage', () => {
   });
 
   it('a handoff stored under one document id is never returned for a different id', () => {
-    const handoff = createImportReconstructionHandoff(5, sampleReview());
+    const handoff = createImportReconstructionHandoff(5, sampleReview(), sampleImportContext());
     storePendingImportHandoff(5, handoff);
     expect(takePendingImportHandoff(6)).toBeNull();
     // still there for the correct id — the mismatched read must not have consumed it

@@ -12,6 +12,7 @@ import { analyzeImportedHtml } from './htmlImportAnalysis';
 import { buildFidelityReport } from './htmlImportFidelity';
 import { mapImportedHtml } from './htmlImportMapper';
 import { buildReconstructionReview, formatReconstructionReviewMessage } from './reconstructionReview';
+import { buildImportReconstructionContext } from './importReconstructionContext';
 import type { AICommandResponse } from './aiCommand';
 
 vi.mock('../api/client', () => ({ requestAICommand: vi.fn() }));
@@ -1129,12 +1130,21 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       return buildReconstructionReview(doc, structure, fidelity, mapping.modules);
     }
 
+    function sampleImportContext() {
+      const html = '<table><tr><td><p>Hello</p></td></tr></table>';
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const structure = analyzeImportedHtml(doc, 700);
+      const mapping = mapImportedHtml(doc);
+      const fidelity = buildFidelityReport(doc, structure, mapping);
+      return buildImportReconstructionContext(structure, fidelity, mapping.modules.length);
+    }
+
     it('one click seeds exactly one deterministic user+assistant message pair, with no backend request', async () => {
       mockSpeech();
       const review = sampleReview();
       const expectedMessage = formatReconstructionReviewMessage(review);
       const tracker = createConsumedHandoffTracker();
-      const handoff = createImportReconstructionHandoff(1, review);
+      const handoff = createImportReconstructionHandoff(1, review, sampleImportContext());
       renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
 
       expect(await findByMessageText(expectedMessage)).toBeInTheDocument();
@@ -1147,7 +1157,7 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       const review = sampleReview();
       const expectedMessage = formatReconstructionReviewMessage(review);
       const tracker = createConsumedHandoffTracker();
-      const handoff = createImportReconstructionHandoff(1, review);
+      const handoff = createImportReconstructionHandoff(1, review, sampleImportContext());
       const onApplyAction = vi.fn().mockReturnValue(true);
       const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
       const onApplyRepairAction = vi.fn().mockReturnValue(true);
@@ -1186,7 +1196,7 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       const review = sampleReview();
       const expectedMessage = formatReconstructionReviewMessage(review);
       const tracker = createConsumedHandoffTracker();
-      const handoff = createImportReconstructionHandoff(1, review);
+      const handoff = createImportReconstructionHandoff(1, review, sampleImportContext());
 
       const first = renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
       await findByMessageText(expectedMessage);
@@ -1203,8 +1213,8 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       const reviewA = sampleReview('repairable');
       const reviewB = sampleReview('approximation');
       const tracker = createConsumedHandoffTracker();
-      const handoffA = createImportReconstructionHandoff(1, reviewA);
-      const handoffB = createImportReconstructionHandoff(1, reviewB);
+      const handoffA = createImportReconstructionHandoff(1, reviewA, sampleImportContext());
+      const handoffB = createImportReconstructionHandoff(1, reviewB, sampleImportContext());
       expect(handoffA.id).not.toBe(handoffB.id);
 
       const first = renderPanel({ aiEngineerHandoff: handoffA, onConsumeAiEngineerHandoff: tracker.tryConsume });
@@ -1220,7 +1230,7 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       mockSpeech();
       const review = sampleReview();
       const tracker = createConsumedHandoffTracker();
-      const handoff = createImportReconstructionHandoff(999, review);
+      const handoff = createImportReconstructionHandoff(999, review, sampleImportContext());
       renderPanel({ documentId: 1, aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
 
       expect(screen.queryByText(handoff.prompt)).not.toBeInTheDocument();
@@ -1242,7 +1252,7 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
 
       const review = sampleReview();
       const tracker = createConsumedHandoffTracker();
-      const handoff = createImportReconstructionHandoff(1, review);
+      const handoff = createImportReconstructionHandoff(1, review, sampleImportContext());
       renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
 
       expect(await findByMessageText(formatReconstructionReviewMessage(review))).toBeInTheDocument();
@@ -1261,7 +1271,7 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       const review = sampleReview();
       const seededMessage = formatReconstructionReviewMessage(review);
       const tracker = createConsumedHandoffTracker();
-      const handoff = createImportReconstructionHandoff(1, review);
+      const handoff = createImportReconstructionHandoff(1, review, sampleImportContext());
       renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
       expect(await findByMessageText(seededMessage)).toBeInTheDocument();
       expect(requestAICommand).not.toHaveBeenCalled();
@@ -1285,5 +1295,116 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
       expect(await findByMessageText(seededMessage)).toBeInTheDocument();
       expect(requestAICommand).toHaveBeenCalledTimes(1);
     });
+
+    // R4-B2 §12 — closes the exact gap R4-B's own live QA found: a
+    // follow-up question after the seeded first turn must actually carry
+    // the bounded import-reconstruction context on the backend request,
+    // not just the first (never-sent-to-backend) turn.
+    it('a follow-up question sends the SAME import_reconstruction context on the request, not just the seeded first turn', async () => {
+      mockSpeech();
+      const review = sampleReview();
+      const importContext = sampleImportContext();
+      const tracker = createConsumedHandoffTracker();
+      const handoff = createImportReconstructionHandoff(1, review, importContext);
+      renderPanel({ aiEngineerHandoff: handoff, onConsumeAiEngineerHandoff: tracker.tryConsume });
+      await findByMessageText(formatReconstructionReviewMessage(review));
+      expect(requestAICommand).not.toHaveBeenCalled();
+
+      vi.mocked(requestAICommand).mockResolvedValue(response({
+        reply: 'The ratio was approximated because...', action: { type: 'NONE' },
+      }));
+      const user = userEvent.setup();
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'why was the ratio approximated?');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText('The ratio was approximated because...');
+
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+      const sentPayload = vi.mocked(requestAICommand).mock.calls[0][0];
+      expect(sentPayload.import_reconstruction).toEqual(importContext);
+    });
+  });
+});
+
+// R4-B2 §24 — "Local AI" status badge: subtle, shown only when the
+// provider that ACTUALLY answered was 'local', never for 'openai' or
+// 'deterministic', and never carrying model/runtime details (those
+// belong in admin/settings diagnostics per the spec, not this view).
+describe('AIEngineerPanel — R4-B2 Local AI status badge', () => {
+  it('is absent before any response has been received', () => {
+    mockSpeech();
+    renderPanel();
+    expect(screen.queryByText('Local AI • Private')).not.toBeInTheDocument();
+  });
+
+  it('appears after a response answered by the local provider', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({ provider: 'local' }));
+    renderPanel();
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Local AI • Private')).toBeInTheDocument();
+  });
+
+  it('does not appear after a response answered by the OpenAI or deterministic provider', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({ provider: 'openai' }));
+    renderPanel();
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    expect(screen.queryByText('Local AI • Private')).not.toBeInTheDocument();
+  });
+
+  it('clears when switching to a different document', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response({ provider: 'local' }));
+    const { rerender } = render(
+      <AIEngineerPanel
+        documentId={1}
+        editorMode="ai"
+        platform="generic"
+        width={700}
+        selectedModule={null}
+        selectedColumn={null}
+        content={{ version: 1, modules: [] }}
+        emailTitle="Test Email"
+        emailSubject="Test subject"
+        faviconUrl=""
+        resetCssEnabled
+        customCssEnabled={false}
+        customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Local AI • Private');
+
+    rerender(
+      <AIEngineerPanel
+        documentId={2}
+        editorMode="ai"
+        platform="generic"
+        width={700}
+        selectedModule={null}
+        selectedColumn={null}
+        content={{ version: 1, modules: [] }}
+        emailTitle="Test Email"
+        emailSubject="Test subject"
+        faviconUrl=""
+        resetCssEnabled
+        customCssEnabled={false}
+        customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+      />,
+    );
+    expect(screen.queryByText('Local AI • Private')).not.toBeInTheDocument();
   });
 });
