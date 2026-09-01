@@ -11,6 +11,7 @@ import type {
   SavedEmailModule, UpdateEmailAssetInput, UpdateEmailDocumentInput,
 } from '../emailbuilder/types';
 import type { AICommandRequest, AICommandResponse } from '../emailbuilder/aiCommand';
+import type { RequestEmailBriefInput, RequestEmailBriefResponse } from '../emailbuilder/emailBrief';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -275,5 +276,22 @@ export async function requestAICommand(input: AICommandRequest): Promise<AIComma
   return apiRequest<AICommandResponse>('/api/v1/email-builder/ai-command/', {
     method: 'POST',
     body: JSON.stringify(input),
+  });
+}
+
+// D4-C (Feature 14 V4) — read-only EmailBrief construction. Stateless,
+// like requestAICommand above: the server never mutates the referenced
+// EmailDocument and never persists the returned brief — see backend
+// EmailBriefView's docstring. Not yet called from any UI (D4-C's scope
+// is the understanding layer itself; a later checkpoint wires this into
+// a conversational "build my email" flow).
+export async function requestEmailBrief(input: RequestEmailBriefInput): Promise<RequestEmailBriefResponse> {
+  return apiRequest<RequestEmailBriefResponse>('/api/v1/email-builder/brief/', {
+    method: 'POST',
+    body: JSON.stringify({
+      document: input.document,
+      message: input.message ?? '',
+      attachment_ids: input.attachmentIds ?? [],
+    }),
   });
 }

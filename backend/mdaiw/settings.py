@@ -253,6 +253,14 @@ EMAIL_ASSET_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'i
 # the ceiling.
 EMAIL_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
 
+# Module-4 Feature 14 V4 / D4-C (EmailBrief construction). Own throttle,
+# independent of EMAILBUILDER_AI_COMMAND_REQUEST_MAX — a brief request
+# re-reads and re-extracts every referenced attachment (PDF/DOCX/XLSX
+# parsing), a heavier per-request cost than a plain AI command, so it
+# gets its own, tighter budget rather than sharing the ai-command one.
+EMAILBUILDER_BRIEF_REQUEST_MAX = int(os.environ.get('EMAILBUILDER_BRIEF_REQUEST_MAX', '15'))
+EMAILBUILDER_BRIEF_REQUEST_WINDOW_SECONDS = int(os.environ.get('EMAILBUILDER_BRIEF_REQUEST_WINDOW_SECONDS', '60'))
+
 # Module-4 Feature 14 (Email AI Engineer). 3-way provider selection via
 # EMAILBUILDER_AI_COMMAND_PROVIDER: 'openai' (the SAME OPENAI_API_KEY
 # value Yukti/LP AI Review already use — one secret, not a new one),

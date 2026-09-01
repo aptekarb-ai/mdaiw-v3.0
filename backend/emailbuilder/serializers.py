@@ -445,3 +445,19 @@ class LearningSignalRequestSerializer(serializers.Serializer):
         if not learning.is_valid_signature(value):
             raise serializers.ValidationError('Invalid signature format.')
         return value
+
+
+class EmailBriefRequestSerializer(serializers.Serializer):
+    """D4-C — POST body for EmailBriefView. `message` may be blank (an
+    attachment-only brief, e.g. "PDF brief" with no typed instruction, is
+    valid); `attachment_ids` may be empty (a text-only brief is equally
+    valid) — but the two together must not both be empty, which the view
+    checks after resolving `document` (an all-empty request is a client
+    error, not something worth a dedicated serializer-level check here,
+    since it depends on which attachment ids actually resolve)."""
+
+    document = serializers.IntegerField()
+    message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=True, default='')
+    attachment_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=False, default=list, max_length=50,
+    )

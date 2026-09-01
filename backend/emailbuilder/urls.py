@@ -11,6 +11,12 @@ router.register('attachments', views.EmailAttachmentViewSet, basename='email-att
 
 urlpatterns = [
     path('ai-command/', views.EmailAICommandView.as_view(), name='email-ai-command'),
+    # D4-C — read-only EmailBrief construction, deliberately its own
+    # endpoint rather than a branch on ai-command/: different request
+    # shape (document + attachment_ids, no selected-module/editor
+    # context), different cost profile (re-extracts every referenced
+    # attachment), different throttle (EMAILBUILDER_BRIEF_REQUEST_MAX).
+    path('brief/', views.EmailBriefView.as_view(), name='email-brief'),
     # Feature 14 V3 Sub-phase 8 — ranking must be its own GET path (not a
     # method branch on the signals collection) so it's cacheable/
     # bookmarkable independently and never collides with a future

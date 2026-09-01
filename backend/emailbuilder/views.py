@@ -17,10 +17,11 @@ from .ai_command import (
 from . import learning
 from .attachment_extraction import run_extraction
 from .attachment_validation import RejectedAttachmentType, classify_and_validate_upload
+from .email_brief import build_email_brief
 from .models import EmailAsset, EmailAttachment, EmailDocument, SavedEmailModule
 from .serializers import (
-    EmailAICommandRequestSerializer, EmailAssetSerializer, EmailAttachmentSerializer, EmailDocumentSerializer,
-    LearningSignalRequestSerializer, SavedEmailModuleSerializer,
+    EmailAICommandRequestSerializer, EmailAssetSerializer, EmailAttachmentSerializer, EmailBriefRequestSerializer,
+    EmailDocumentSerializer, LearningSignalRequestSerializer, SavedEmailModuleSerializer,
 )
 
 
@@ -438,3 +439,76 @@ class EmailAttachmentViewSet(
             'facts': [fact.to_dict() for fact in extraction.facts],
             'warnings': extraction.warnings,
         }, status=status.HTTP_201_CREATED)
+
+
+def _brief_rate_limited(user_id):
+    key = f'emailbuilder-brief-request:{user_id}'
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=settings.EMAILBUILDER_BRIEF_REQUEST_WINDOW_SECONDS)
+        count = 1
+    return count > settings.EMAILBUILDER_BRIEF_REQUEST_MAX
+
+
+class EmailBriefView(APIView):
+    """D4-C (Feature 14 V4) — POST /api/v1/email-builder/brief/. Builds
+    and returns one EmailBrief (see email_brief.py) from the caller's
+    instruction text plus zero or more of the caller's OWN, already-
+    uploaded attachments for the given document. Stateless and read-only
+    in exactly the same sense EmailAICommandView is: this view never
+    touches an EmailDocument's `content`, never calls validate_action(),
+    and never produces an ActionType — it returns a structured
+    understanding of what the user wants, for a LATER checkpoint to turn
+    into a construction plan. The brief itself is never persisted (see
+    email_brief.py's module docstring).
+
+    Ownership is checked twice, matching the EmailAttachmentViewSet
+    convention: the referenced `document` must belong to the caller
+    (404 otherwise, before anything else runs), and `attachment_ids` are
+    resolved through a queryset already filtered to
+    (user=request.user, document=document) — an id belonging to another
+    user or another document simply does not resolve; it is silently
+    excluded and counted in a single generic warning, never distinguished
+    from "does not exist" (same 404-not-403 non-revealing posture as the
+    rest of this app)."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if _brief_rate_limited(request.user.pk):
+            return Response(
+                {'success': False, 'code': 'RATE_LIMITED', 'message': 'Too many requests. Please wait a moment and try again.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        serializer = EmailBriefRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        document = get_object_or_404(EmailDocument.objects.filter(user=request.user), pk=data['document'])
+
+        requested_ids = data['attachment_ids']
+        attachments = list(EmailAttachment.objects.filter(
+            user=request.user, document=document, id__in=requested_ids,
+        )) if requested_ids else []
+        missing_count = len(set(requested_ids)) - len(attachments)
+
+        message = data['message'].strip()
+        # Checked against what the caller ASKED for, not what actually
+        # resolved — a request naming an attachment id that turns out to
+        # belong to someone else/another document is a real request that
+        # produced a warning, never "you asked for nothing."
+        if not message and not requested_ids:
+            return Response(
+                {'success': False, 'code': 'EMPTY_REQUEST', 'message': 'Provide an instruction, an attachment, or both.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        brief = build_email_brief(message, attachments, document.platform)
+        if missing_count:
+            brief.warnings.append(
+                f'{missing_count} attachment(s) could not be found for this document and were skipped.',
+            )
+
+        return Response({'success': True, 'brief': brief.to_dict()}, status=status.HTTP_200_OK)

@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getCurrentUser, initializeCsrf, loginWithPassword, logout, requestAICommand } from './client';
+import {
+  getCurrentUser, initializeCsrf, loginWithPassword, logout, requestAICommand, requestEmailBrief,
+} from './client';
 
 function mockFetchOnce(body: unknown, init: { ok?: boolean; status?: number } = {}) {
   const { ok = true, status = 200 } = init;
@@ -100,5 +102,45 @@ describe('api client', () => {
     expect(options.method).toBe('POST');
     expect(JSON.parse(options.body)).toEqual({ message: 'add a button', selected_module: null });
     expect(result.action).toEqual({ type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] });
+  });
+
+  // D4-C
+  it('requestEmailBrief posts document/message/attachment_ids to the brief endpoint', async () => {
+    const fetchMock = mockFetchOnce({
+      success: true,
+      brief: {
+        version: 1, platform: 'generic', purpose: null, audience: null,
+        subject_suggestions: [], preheader_suggestions: [], sections: [], ctas: [], images: [],
+        footer: null, personalization: [], conflicts: [], clarifications: [], warnings: [],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestEmailBrief({ document: 97, message: 'Create a promotional email.', attachmentIds: [1, 2] });
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/v1/email-builder/brief/');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toEqual({
+      document: 97, message: 'Create a promotional email.', attachment_ids: [1, 2],
+    });
+    expect(result.brief.platform).toBe('generic');
+  });
+
+  it('requestEmailBrief defaults message and attachmentIds when omitted', async () => {
+    const fetchMock = mockFetchOnce({
+      success: true,
+      brief: {
+        version: 1, platform: 'generic', purpose: null, audience: null,
+        subject_suggestions: [], preheader_suggestions: [], sections: [], ctas: [], images: [],
+        footer: null, personalization: [], conflicts: [], clarifications: [], warnings: [],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await requestEmailBrief({ document: 5 });
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual({ document: 5, message: '', attachment_ids: [] });
   });
 });
