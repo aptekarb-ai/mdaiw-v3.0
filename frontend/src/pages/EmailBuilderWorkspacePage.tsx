@@ -904,6 +904,8 @@ export function EmailBuilderWorkspacePage() {
             onApplyAction={handleApplyAiAction}
             onApplyDocumentSettingAction={handleApplyDocumentSettingAiAction}
             onApplyRepairAction={handleApplyRepairAction}
+            canUndo={builder.canUndo}
+            onUndo={builder.undo}
           />
         ) : (
         <>

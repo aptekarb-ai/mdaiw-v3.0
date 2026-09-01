@@ -19,6 +19,7 @@ import { formatReconstructionReviewMessage } from './reconstructionReview';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { toRepairCandidate } from './reconstructionRepairCandidate';
 import { matchReconstructionIntent } from './reconstructionIntentMatcher';
+import { matchUndoIntent } from './undoIntentMatcher';
 import { analyzeImportedHtml } from './htmlImportAnalysis';
 import { buildImportReconstructionContext } from './importReconstructionContext';
 import {
@@ -123,6 +124,15 @@ interface AIEngineerPanelProps {
   // commit cannot fail), kept synchronous/boolean for symmetry with
   // onApplyAction.
   onApplyRepairAction: (items: RepairActionItem[]) => boolean;
+  // R4-D Checkpoint D2 — Conversational Undo. Both come straight from
+  // useEmailBuilderState.ts (the SAME instance already wired to Ctrl+Z
+  // and the toolbar Undo button in EmailBuilderWorkspacePage.tsx) — this
+  // panel never gets its own history, snapshot, or reverse-patch logic;
+  // it only decides WHEN to call the one real undo() (see handleSend's
+  // own D2 block) and reports canUndo honestly rather than always
+  // attempting the call.
+  canUndo: boolean;
+  onUndo: () => void;
 }
 
 let nextId = 0;
@@ -248,6 +258,7 @@ export function AIEngineerPanel({
   resetCssEnabled, customCssEnabled, customCss, outlookVml,
   aiEngineerHandoff, onConsumeAiEngineerHandoff, onHandoffConsumed,
   onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction,
+  canUndo, onUndo,
 }: AIEngineerPanelProps) {
   const [subView, setSubView] = useState<'chat' | 'history'>('chat');
   // R4-C6 — collapsed by default so an ordinary (non-reconstruction)
@@ -587,10 +598,70 @@ export function AIEngineerPanel({
 
   async function handleSend(overrideMessage?: string) {
     const message = (overrideMessage ?? draft).trim();
-    if (!message || sending || pending || pendingRepair) return;
+    if (!message || sending) return;
+
+    // R4-D Checkpoint D2 — a proposal is still pending Apply. The composer
+    // stays enabled through this state (see the textarea/mic/Send
+    // `disabled` props below — the SAME "still open for exactly one kind
+    // of reply" shape the placeholder-link clarifying question above
+    // already established for this component), because an undo-family
+    // message here ("cancel that", "never mind, undo that", ...) means
+    // CANCEL that proposal, never history Undo — nothing has been
+    // applied yet for history to revert. Routed to the EXACT SAME
+    // handleCancel/handleCancelRepair functions the proposal card's own
+    // Cancel button already calls — never a second cancel path. Any
+    // OTHER message here is answered honestly rather than silently
+    // dropped now that the field no longer looks disabled.
+    if (pending || pendingRepair) {
+      appendMessage('user', message);
+      if (overrideMessage === undefined) setDraft('');
+      if (matchUndoIntent(message)) {
+        if (pendingRepair) handleCancelRepair(); else handleCancel();
+      } else {
+        appendMessage(
+          'assistant',
+          'There is a proposal waiting for Apply or Cancel — use the buttons below, or say "cancel that" to discard it.',
+        );
+      }
+      return;
+    }
 
     appendMessage('user', message);
     if (overrideMessage === undefined) setDraft('');
+
+    // R4-D Checkpoint D2 — Conversational Undo. Checked before every
+    // other local intent matcher and before the backend request path:
+    // this is a pure local builder-history operation (see onUndo's own
+    // prop docstring — the SAME undo() already wired to Ctrl+Z), never
+    // something an AI provider decides or a chat-text reconstruction
+    // could approximate. Checked this early so an undo-family phrase can
+    // never be shadowed by reconstruction-repair matching,
+    // matchDocumentIntent, or the Referential Context Resolver (which
+    // would otherwise try to resolve the bare "it" in "put it back" as a
+    // module reference). Document-history-scoped, not selection-scoped —
+    // reads no module/selection state at all, so it is unaffected by
+    // tab changes, selection changes, or a remount (canUndo/onUndo are
+    // just props, sourced fresh from the parent on every render).
+    if (matchUndoIntent(message)) {
+      if (canUndo) {
+        onUndo();
+        appendMessage('assistant', 'Done — I restored the previous email state.');
+        setHistory((current) => [...current, {
+          id: newId('hist'), command: message, interpretation: 'Undo the most recent applied change.',
+          action: { type: 'NONE' }, status: 'applied', summary: 'Restored the previous email state.',
+          provider: 'deterministic', requiresConfirmation: false,
+        }]);
+      } else {
+        const reply = "There isn't a previous applied change to undo.";
+        appendMessage('assistant', reply);
+        setHistory((current) => [...current, {
+          id: newId('hist'), command: message, interpretation: 'Undo requested with no undoable history.',
+          action: { type: 'NONE' }, status: 'reported', summary: reply,
+          provider: 'deterministic', requiresConfirmation: false,
+        }]);
+      }
+      return;
+    }
 
     // C-3 remediation — a placeholder-link repair is currently pending
     // (the AI already declined to invent a URL and asked for one): this
@@ -1469,7 +1540,13 @@ export function AIEngineerPanel({
                     void handleSend();
                   }
                 }}
-                disabled={sending || Boolean(pending) || Boolean(pendingRepair)}
+                // R4-D Checkpoint D2 — no longer disabled merely because a
+                // proposal is pending (see handleSend's own comment on
+                // this same state): the composer must stay open to accept
+                // a conversational "cancel that". `sending` is the only
+                // real disable condition left — the same one every other
+                // control here already used for an in-flight backend call.
+                disabled={sending}
                 rows={2}
               />
               <button
@@ -1480,7 +1557,7 @@ export function AIEngineerPanel({
                     : 'ai-engineer-panel__mic-button'
                 }
                 onClick={handleMicClick}
-                disabled={micUnsupported || sending || Boolean(pending) || Boolean(pendingRepair)}
+                disabled={micUnsupported || sending}
                 aria-label={speech.status === 'listening' ? 'Stop listening' : 'Talk to the AI Engineer'}
                 title={micUnsupported ? 'Voice input is not supported in this browser. You can continue using typed commands.' : undefined}
               >
@@ -1493,7 +1570,7 @@ export function AIEngineerPanel({
                 type="button"
                 className="button button--primary"
                 onClick={() => void handleSend()}
-                disabled={sending || Boolean(pending) || Boolean(pendingRepair) || !draft.trim()}
+                disabled={sending || !draft.trim()}
               >
                 <span className="mdaiw-icon mdaiw-icon--send" aria-hidden="true" />
                 {sending ? 'Sending…' : 'Send'}

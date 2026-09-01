@@ -74,6 +74,7 @@ function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> =
   const onApplyAction = vi.fn().mockReturnValue(true);
   const onApplyDocumentSettingAction = vi.fn().mockResolvedValue(true);
   const onApplyRepairAction = vi.fn().mockReturnValue(true);
+  const onUndo = vi.fn();
   const result = render(
     <AIEngineerPanel
       documentId={1}
@@ -92,10 +93,12 @@ function renderPanel(overrides: Partial<Parameters<typeof AIEngineerPanel>[0]> =
       onApplyAction={onApplyAction}
       onApplyDocumentSettingAction={onApplyDocumentSettingAction}
       onApplyRepairAction={onApplyRepairAction}
+      canUndo={false}
+      onUndo={onUndo}
       {...overrides}
     />,
   );
-  return { onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction, unmount: result.unmount };
+  return { onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction, onUndo, unmount: result.unmount };
 }
 
 afterEach(() => {
@@ -208,17 +211,36 @@ describe('AIEngineerPanel', () => {
     expect(screen.getByText('Cancelled')).toBeInTheDocument();
   });
 
-  it('the composer is disabled while a proposal is pending, until it is resolved', async () => {
+  // WAS: "the composer is disabled while a proposal is pending" — the
+  // textarea/Send/mic were grayed out for the whole pending window.
+  // NOW (R4-D Checkpoint D2): the composer stays enabled while a
+  // proposal is pending, because it must accept a conversational
+  // "cancel that" (see AIEngineerPanel.tsx's handleSend — the D2
+  // pending-proposal block, and its own comment on why disabling it
+  // again would make Undo's D2-required "cancel a pending proposal by
+  // saying so" scenario unreachable through the real composer). Sending
+  // anything OTHER than an undo-family message while pending is still a
+  // no-op on the document — it now gets an honest reply instead of
+  // silently doing nothing, which this test also covers.
+  it('the composer stays enabled while a proposal is pending (so a conversational cancel can reach it); an unrelated message while pending is a no-op with an honest reply', async () => {
     mockSpeech();
     vi.mocked(requestAICommand).mockResolvedValue(response());
-    renderPanel();
+    const { onApplyAction } = renderPanel();
     const user = userEvent.setup();
 
     await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await screen.findByText('Add a button module');
 
-    expect(screen.getByPlaceholderText(/Type your command/)).toBeDisabled();
+    expect(screen.getByPlaceholderText(/Type your command/)).not.toBeDisabled();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/There is a proposal waiting for Apply or Cancel/);
+    expect(onApplyAction).not.toHaveBeenCalled();
+    // The original proposal is still there, untouched by the unrelated message.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.getByPlaceholderText(/Type your command/)).not.toBeDisabled();
   });
@@ -685,7 +707,13 @@ describe('AIEngineerPanel — Sub-phase 4, item 2/4: document diagnose/repair in
     expect(screen.queryByRole('button', { name: 'Apply' })).not.toBeInTheDocument();
   });
 
-  it('the composer stays disabled while a repair proposal is pending', async () => {
+  // WAS: "the composer stays disabled while a repair proposal is
+  // pending". NOW (R4-D Checkpoint D2): stays enabled — see the
+  // sibling test in the earlier describe block ("the composer stays
+  // enabled while a proposal is pending...") for the full reasoning;
+  // this is the same contract for a REPAIR (batched) proposal, not just
+  // a single-action one.
+  it('the composer stays enabled while a repair proposal is pending', async () => {
     mockSpeech();
     renderPanel({ resetCssEnabled: false });
     const user = userEvent.setup();
@@ -694,7 +722,7 @@ describe('AIEngineerPanel — Sub-phase 4, item 2/4: document diagnose/repair in
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await screen.findByText('Repair 1 issue');
 
-    expect(screen.getByPlaceholderText(/Type your command/)).toBeDisabled();
+    expect(screen.getByPlaceholderText(/Type your command/)).not.toBeDisabled();
   });
 });
 
@@ -973,6 +1001,8 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
           onApplyAction={onApplyAction}
           onApplyDocumentSettingAction={onApplyDocumentSettingAction}
           onApplyRepairAction={onApplyRepairAction}
+          canUndo={false}
+          onUndo={vi.fn()}
           aiEngineerHandoff={handoff}
           onConsumeAiEngineerHandoff={tracker.tryConsume}
         />,
@@ -1031,6 +1061,8 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
           onApplyAction={onApplyAction}
           onApplyDocumentSettingAction={onApplyDocumentSettingAction}
           onApplyRepairAction={onApplyRepairAction}
+          canUndo={false}
+          onUndo={vi.fn()}
           aiEngineerHandoff={handoff}
           onConsumeAiEngineerHandoff={tracker.tryConsume}
         />
@@ -1182,6 +1214,8 @@ describe('AIEngineerPanel — E10 conversation persistence survives unmount/remo
           onApplyAction={onApplyAction}
           onApplyDocumentSettingAction={onApplyDocumentSettingAction}
           onApplyRepairAction={onApplyRepairAction}
+          canUndo={false}
+          onUndo={vi.fn()}
           aiEngineerHandoff={handoff}
           onConsumeAiEngineerHandoff={tracker.tryConsume}
         />,
@@ -1380,6 +1414,8 @@ describe('AIEngineerPanel — R4-B2 Local AI status badge', () => {
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     const user = userEvent.setup();
@@ -1405,6 +1441,8 @@ describe('AIEngineerPanel — R4-B2 Local AI status badge', () => {
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     expect(screen.queryByText('Local AI • Private')).not.toBeInTheDocument();
@@ -1490,6 +1528,8 @@ describe('AIEngineerPanel — R4-B3 Referential Context Resolver integration', (
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     const user = userEvent.setup();
@@ -1519,6 +1559,8 @@ describe('AIEngineerPanel — R4-B3 Referential Context Resolver integration', (
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     vi.mocked(requestAICommand).mockResolvedValue(response({ reply: 'ok', action: { type: 'NONE' } }));
@@ -1748,6 +1790,8 @@ describe('AIEngineerPanel — R4-C reconstruction repair integration', () => {
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     const user = userEvent.setup();
@@ -1779,6 +1823,8 @@ describe('AIEngineerPanel — R4-C reconstruction repair integration', () => {
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     await user.type(screen.getByPlaceholderText(/Type your command/), 'use the original spacing');
@@ -1999,6 +2045,8 @@ describe('AIEngineerPanel — R4-C6 Original/Reconstructed/Proposed comparison',
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={onApplyRepairAction}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     const user = userEvent.setup();
@@ -2023,6 +2071,8 @@ describe('AIEngineerPanel — R4-C6 Original/Reconstructed/Proposed comparison',
         onApplyAction={vi.fn().mockReturnValue(true)}
         onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
         onApplyRepairAction={onApplyRepairAction}
+        canUndo={false}
+        onUndo={vi.fn()}
       />,
     );
     const reconstructedIframe = screen.getByTitle('Reconstructed builder preview') as HTMLIFrameElement;
@@ -2053,6 +2103,8 @@ describe('AIEngineerPanel — R4-C6 Original/Reconstructed/Proposed comparison',
       onApplyAction: vi.fn().mockReturnValue(true),
       onApplyDocumentSettingAction: vi.fn().mockResolvedValue(true),
       onApplyRepairAction: vi.fn().mockReturnValue(true),
+      canUndo: false,
+      onUndo: vi.fn(),
     };
     const { rerender } = render(<AIEngineerPanel {...baseProps} content={{ version: 1, modules: [button] }} />);
     const user = userEvent.setup();
@@ -2100,5 +2152,319 @@ describe('AIEngineerPanel — R4-C6 Original/Reconstructed/Proposed comparison',
     expect(onApplyAction).not.toHaveBeenCalled();
     expect(onApplyRepairAction).not.toHaveBeenCalled();
     expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
+  });
+});
+
+// R4-D Checkpoint D2 — Conversational Undo. Deliberately does NOT
+// re-prove useEmailBuilderState.ts's own undo/redo history correctness
+// (exact prop/settings restore, structural/layout changes, redo-stack
+// validity after undo — see useEmailBuilderState.test.ts's own extensive
+// "undo reverts the last committed change and redo reapplies it" /
+// "a new action after undo discards the redo branch" / "undo/redo
+// covers nested insert, move, and delete for free" / "updateColumnWidths
+// ... is undoable" tests, all unmodified by D2). This panel never gets
+// its own history — canUndo/onUndo are the SAME instance passed straight
+// through from useEmailBuilderState(). What IS new and needs covering
+// here is the CONVERSATIONAL layer on top: recognizing the phrase,
+// picking Cancel vs Undo correctly, calling the real function exactly
+// once, and never being shadowed by another local matcher.
+describe('AIEngineerPanel — R4-D Checkpoint D2: Conversational Undo', () => {
+  // Same local cleanup convention as the reconstruction-focused describe
+  // blocks above (storeReconstructionSession writes to
+  // window.sessionStorage, which the file-level afterEach does not
+  // touch — only localStorage) — without this, a reconstruction session
+  // stored by one test here would leak into a later test in this same
+  // block that expects an ordinary (non-reconstruction) document.
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it('exact "undo" command calls onUndo exactly once and replies naturally', async () => {
+    mockSpeech();
+    const { onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    'undo that',
+    'undo this',
+    'undo the last change',
+    'undo the last correction',
+    'undo what you just did',
+    'revert that',
+    'revert the last change',
+    'revert your last fix',
+    'put it back',
+    'put it back the way it was',
+    'restore the previous version',
+    'restore the previous state',
+    'cancel the last change',
+    'reverse the last change',
+  ])('natural paraphrase %j calls onUndo exactly once', async (phrase) => {
+    mockSpeech();
+    const { onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), phrase);
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['Hindi', 'पूर्ववत करो'],
+    ['Spanish', 'deshaz eso'],
+    ['French', 'annule ça'],
+  ])('%s equivalent calls onUndo exactly once (reply text is the same local canned English — Undo never depends on OpenAI or a local LLM)', async (_lang, phrase) => {
+    mockSpeech();
+    const { onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), phrase);
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('no undoable history: graceful reply, onUndo never called, nothing mutated', async () => {
+    mockSpeech();
+    const { onUndo, onApplyAction, onApplyRepairAction, onApplyDocumentSettingAction } = renderPanel({ canUndo: false });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText("There isn't a previous applied change to undo.");
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(onApplyRepairAction).not.toHaveBeenCalled();
+    expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
+  });
+
+  it('undo after Apply: applying a single-action proposal, then "undo that", calls onUndo once and never calls onApplyAction a second time', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction, onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+    expect(onApplyAction).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo that');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(onApplyAction).toHaveBeenCalledTimes(1);
+  });
+
+  it('the exact D2 spec scenario: pending proposal + "cancel that" cancels the proposal and never calls onUndo or onApplyAction', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction, onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'Never mind, cancel that.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Cancelled.');
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Apply' })).toBeNull();
+  });
+
+  it('pending REPAIR (batched) proposal + conversational "cancel that" cancels the repair and never calls onUndo or onApplyRepairAction', async () => {
+    mockSpeech();
+    const { onApplyRepairAction, onUndo } = renderPanel({ resetCssEnabled: false, canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'cancel that');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Cancelled. Nothing was changed.');
+    expect(onApplyRepairAction).not.toHaveBeenCalled();
+    expect(onUndo).not.toHaveBeenCalled();
+  });
+
+  it('undo retains the conversation history — the undo exchange is appended, earlier messages remain visible', async () => {
+    mockSpeech();
+    renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(screen.getByText('undo')).toBeInTheDocument();
+  });
+
+  it('one conversational undo records exactly one History entry', async () => {
+    mockSpeech();
+    renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(screen.getByRole('tab', { name: 'History (1)' })).toBeInTheDocument();
+  });
+
+  it('React StrictMode double-invocation never causes a duplicate Undo call for one conversational command', async () => {
+    mockSpeech();
+    const onUndo = vi.fn();
+    render(
+      <AIEngineerPanel
+        documentId={1} editorMode="ai" platform="generic" width={700}
+        selectedModule={null} selectedColumn={null}
+        content={{ version: 1, modules: [] }}
+        emailTitle="Test Email" emailSubject="Test subject" faviconUrl=""
+        resetCssEnabled customCssEnabled={false} customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+        canUndo
+        onUndo={onUndo}
+      />,
+      { wrapper: StrictMode },
+    );
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('AI Engineer remount (tab navigation away and back) still routes conversational undo correctly, reading canUndo/onUndo fresh from props rather than stale internal state', async () => {
+    mockSpeech();
+    const first = renderPanel({ canUndo: false });
+    first.unmount();
+
+    const { onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('undo works while an import-reconstruction session is active — never shadowed by the reconstruction-repair local matcher', async () => {
+    mockSpeech();
+    storeReconstructionSession({
+      documentId: 1, sourceHtml: '<table><tr><td>Hi</td></tr></table>', documentWidthPx: 600,
+      passesUsed: 0, lastFidelityScore: null,
+    });
+    const { onUndo } = renderPanel({ documentId: 1, canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo that');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('undo after applying a reconstruction repair still calls onUndo (not shadowed by the reconstruction matcher\'s own pending/session bookkeeping)', async () => {
+    mockSpeech();
+    storeReconstructionSession({
+      documentId: 1, sourceHtml: '<table><tr><td align="right">Go</td></tr></table>', documentWidthPx: 600,
+      passesUsed: 0, lastFidelityScore: null,
+    });
+    const button = createModule('button', 0);
+    (button.props as Record<string, unknown>).align = 'left';
+    const { onApplyRepairAction, onUndo } = renderPanel({
+      documentId: 1, canUndo: true, content: { version: 1, modules: [button] },
+    });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair \d+ issues?/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Reconstruction fidelity is now|Could not apply/);
+    expect(onApplyRepairAction).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo that');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('undo after applying a validation repair still calls onUndo (not shadowed by matchDocumentIntent)', async () => {
+    mockSpeech();
+    const { onApplyRepairAction, onUndo } = renderPanel({ resetCssEnabled: false, canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'repair all safe issues');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Repair 1 issue');
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Repaired 1 issue/);
+    expect(onApplyRepairAction).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo that');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('cross-document isolation — an undo command sent in one document\'s panel never calls another document\'s onUndo', async () => {
+    mockSpeech();
+    const docAOnUndo = vi.fn();
+    const docBOnUndo = vi.fn();
+
+    const a = renderPanel({ documentId: 1, canUndo: true, onUndo: docAOnUndo });
+    a.unmount();
+    const { } = renderPanel({ documentId: 2, canUndo: true, onUndo: docBOnUndo });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(docBOnUndo).toHaveBeenCalledTimes(1);
+    expect(docAOnUndo).not.toHaveBeenCalled();
+  });
+
+  it('a conversational undo calls ONLY onUndo — never onApplyAction, onApplyDocumentSettingAction, or onApplyRepairAction (never fabricates a mutation, never a second undo/history system)', async () => {
+    mockSpeech();
+    const { onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction, onUndo } = renderPanel({ canUndo: true });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Done — I restored the previous email state.');
+    expect(onUndo).toHaveBeenCalledTimes(1);
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
+    expect(onApplyRepairAction).not.toHaveBeenCalled();
   });
 });
