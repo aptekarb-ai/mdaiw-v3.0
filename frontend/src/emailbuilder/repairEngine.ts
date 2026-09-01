@@ -154,9 +154,16 @@ export function toApplyRepairPatchArgs(candidates: RepairCandidate[]): {
   modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[];
   settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[];
   documentPatch: Partial<EmailDocumentSettingsSnapshot> | null;
+  // R4-C1 — additive: every existing caller that only reads the three
+  // fields above (there are none in production today — see this
+  // function's own callers) keeps compiling and behaving unchanged.
+  restructurePatches: { moduleId: string; widths: number[] }[];
+  columnSettingsPatches: { layoutId: string; columnId: string; settingsPatch: Record<string, unknown> }[];
 } {
   const modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[] = [];
   const settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[] = [];
+  const restructurePatches: { moduleId: string; widths: number[] }[] = [];
+  const columnSettingsPatches: { layoutId: string; columnId: string; settingsPatch: Record<string, unknown> }[] = [];
   let documentPatch: Record<string, unknown> | null = null;
 
   for (const candidate of candidates) {
@@ -164,10 +171,17 @@ export function toApplyRepairPatchArgs(candidates: RepairCandidate[]): {
       modulePatches.push({ moduleId: candidate.item.moduleId, propPatch: candidate.item.propPatch });
     } else if (candidate.item.kind === 'module-settings') {
       settingsPatches.push({ moduleId: candidate.item.moduleId, settingsPatch: candidate.item.settingsPatch });
+    } else if (candidate.item.kind === 'restructure') {
+      restructurePatches.push({ moduleId: candidate.item.moduleId, widths: candidate.item.widths });
+    } else if (candidate.item.kind === 'column-settings') {
+      columnSettingsPatches.push({ layoutId: candidate.item.layoutId, columnId: candidate.item.columnId, settingsPatch: candidate.item.settingsPatch });
     } else {
       documentPatch = { ...(documentPatch ?? {}), ...candidate.item.documentPatch };
     }
   }
 
-  return { modulePatches, settingsPatches, documentPatch: documentPatch as Partial<EmailDocumentSettingsSnapshot> | null };
+  return {
+    modulePatches, settingsPatches, restructurePatches, columnSettingsPatches,
+    documentPatch: documentPatch as Partial<EmailDocumentSettingsSnapshot> | null,
+  };
 }

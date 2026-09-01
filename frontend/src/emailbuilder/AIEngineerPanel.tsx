@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { requestAICommand } from '../api/client';
+import { ImportReviewWorkspace } from './ImportReviewWorkspace';
+import { renderSanitizedSourceHtml } from './htmlImportSanitize';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { isSpeechSynthesisSupported, useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import {
@@ -15,6 +17,14 @@ import { affectedClientLabel, signatureForIssueId, type RepairCandidate } from '
 import { createConsumedHandoffTracker, type AIEngineerHandoff } from './aiEngineerHandoff';
 import { formatReconstructionReviewMessage } from './reconstructionReview';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
+import { toRepairCandidate } from './reconstructionRepairCandidate';
+import { matchReconstructionIntent } from './reconstructionIntentMatcher';
+import {
+  MAX_RECONSTRUCTION_PASSES, projectModulesWithCandidates, runReconstructionPass, shouldStopCorrectionLoop,
+} from './reconstructionCorrectionLoop';
+import {
+  loadReconstructionSession, updateReconstructionSessionProgress, type ReconstructionSessionData,
+} from './reconstructionSessionStorage';
 import { findModuleById } from './layoutModel';
 import { resolveCopySourceRequest, resolveReference, type LastReferent } from './referenceResolver';
 import { FIDELITY_CATEGORY_ORDER } from './htmlImportFidelity';
@@ -238,6 +248,13 @@ export function AIEngineerPanel({
   onApplyAction, onApplyDocumentSettingAction, onApplyRepairAction,
 }: AIEngineerPanelProps) {
   const [subView, setSubView] = useState<'chat' | 'history'>('chat');
+  // R4-C6 — collapsed by default so an ordinary (non-reconstruction)
+  // conversation's chat area is never pushed down by a section that
+  // never renders for it anyway (see the gate on reconstructionSessionRef.
+  // current below); expanded by default the FIRST time a reconstruction
+  // session is present, matching "Original and Reconstructed remain
+  // available."
+  const [reconstructionPanelExpanded, setReconstructionPanelExpanded] = useState(true);
   // E10 — LAZY initial state, loaded synchronously from THIS document's
   // persisted conversation before the first render ever paints. This is
   // deliberate, not just an optimization: an effect-based load (setState
@@ -332,6 +349,73 @@ export function AIEngineerPanel({
   // same handleSend tick that sets them.
   const lastDiscussedReconstructionCategoryRef = useRef<string | null>(null);
   const lastReferentRef = useRef<LastReferent | null>(null);
+
+  // R4-C3/C4 — the persisted reconstruction session (source HTML + pass
+  // bookkeeping), loaded synchronously at mount for the SAME reason
+  // every other per-document ref above is (a follow-up "fix everything
+  // you can" two turns later still needs it, not just the first turn).
+  // null for every document that was never imported via "Review
+  // reconstruction with AI Engineer" — the reconstruction-repair local
+  // intent matcher below is gated on this being non-null, so it never
+  // fires for an ordinary (non-reconstruction) document.
+  const reconstructionSessionRef = useRef<ReconstructionSessionData | null>(loadReconstructionSession(documentId));
+  // Bookkeeping for the CURRENTLY PENDING reconstruction repair
+  // proposal only — set right before setPendingRepair when the pending
+  // batch came from the reconstruction matcher below, consumed (session
+  // updated) on a successful Apply, discarded (no session update) on
+  // Cancel — matches "Cancel leaves the document unchanged," which here
+  // extends to "and never advances the pass counter either."
+  const pendingReconstructionPassRef = useRef<{ passesUsed: number; score: number } | null>(null);
+  // R4-C6 — the Original/Reconstructed/Proposed comparison workspace's
+  // own state. `originalHtml`/`reconstructedHtml` are always available
+  // for an active reconstruction session (independent of any pending
+  // proposal); `projectedHtml` (and its FidelityReport/summary) exist
+  // ONLY while `pendingRepair` is a reconstruction batch — read directly
+  // off `pendingReconstructionPassRef`/`pendingRepair`, so this
+  // naturally disappears the instant either is cleared (Cancel, Apply,
+  // or a new command superseding the old proposal), exactly matching
+  // ImportReviewWorkspace's own "projectedHtml going away" contract. A
+  // PURE read: never touches `content`, never calls onApplyRepairAction,
+  // never persists anything — recomputed from scratch on every render
+  // that changes one of its own dependencies, so it can never leak a
+  // stale projection into what the user sees after a real Apply.
+  const reconstructionOriginalHtml = useMemo(() => {
+    const session = reconstructionSessionRef.current;
+    if (!session) return null;
+    const doc = new DOMParser().parseFromString(session.sourceHtml, 'text/html');
+    return renderSanitizedSourceHtml(doc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentId]);
+  const reconstructionReconstructedHtml = useMemo(() => {
+    if (!reconstructionSessionRef.current) return null;
+    return renderEmailDocument({
+      width, content: { version: 1, modules: content.modules }, title: emailTitle,
+      faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+    });
+  }, [content.modules, width, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+  const reconstructionProjection = useMemo(() => {
+    const session = reconstructionSessionRef.current;
+    if (!session || !pendingRepair || pendingReconstructionPassRef.current === null) return null;
+    const items = pendingRepair.candidates.map((candidate) => candidate.item);
+    const projected = projectModulesWithCandidates(content.modules, items);
+    const html = renderEmailDocument({
+      width, content: { version: 1, modules: projected }, title: emailTitle,
+      faviconUrl, resetCssEnabled, customCssEnabled, customCss,
+    });
+    const summary = `${pendingRepair.candidates.length} repair candidate${pendingRepair.candidates.length === 1 ? '' : 's'} applied in this preview — nothing is changed until you Apply.`;
+    return { html, summary };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [content.modules, pendingRepair, width, emailTitle, faviconUrl, resetCssEnabled, customCssEnabled, customCss]);
+  // The Fidelity panel below the comparison always reflects the CURRENT
+  // real reconstruction (never the projection) — the projected pane's
+  // own summary line communicates the candidate count/expected effect;
+  // adding a second toggled fidelity view was judged unnecessary UI for
+  // what the chat's own post-Apply score message already states plainly.
+  const reconstructionFidelity = useMemo(() => {
+    const session = reconstructionSessionRef.current;
+    if (!session) return null;
+    return runReconstructionPass(session.sourceHtml, session.documentWidthPx, content.modules).fidelity;
+  }, [content.modules]);
   // R4-B3 §B — when the resolver identifies a referent that differs from
   // the LIVE canvas selection (e.g. "that button" resolved to the
   // document's only button module while nothing is actually selected),
@@ -387,6 +471,8 @@ export function AIEngineerPanel({
     lastDiscussedReconstructionCategoryRef.current = null;
     lastReferentRef.current = null;
     resolvedModuleOverrideRef.current = null;
+    reconstructionSessionRef.current = loadReconstructionSession(documentId);
+    pendingReconstructionPassRef.current = null;
     setHistory([]);
     setLastProvider(null);
   }, [documentId]);
@@ -571,6 +657,67 @@ export function AIEngineerPanel({
       appendMessage('assistant', `Got it — I will set the link to ${candidateUrl}. Review the proposed change below.`);
       setPendingRepair({ messageId: newId('repair'), command: message, candidates: [candidate] });
       return;
+    }
+
+    // R4-C3/C4 — reconstruction repair commands ("fix everything you
+    // safely can", "use the original spacing", ...), recognized and
+    // answered ENTIRELY LOCALLY, exactly like the document-intent block
+    // below (zero network for the DETECTION step — R4-C8's "deterministic
+    // first"). Gated on an active reconstruction session existing at
+    // all, so this can never affect an ordinary (non-imported) document's
+    // conversation, and checked BEFORE matchDocumentIntent below: a
+    // reconstruction-active "fix everything" is about THIS email's
+    // fidelity gaps, the more specific and currently relevant reading,
+    // not the generic validation-issue repair matchDocumentIntent's own
+    // 'repair-all-safe' pattern would otherwise claim.
+    if (reconstructionSessionRef.current) {
+      const reconIntent = matchReconstructionIntent(message);
+      if (reconIntent) {
+        const session = reconstructionSessionRef.current;
+        if (session.passesUsed >= MAX_RECONSTRUCTION_PASSES) {
+          const reply = `I've already run ${MAX_RECONSTRUCTION_PASSES} reconstruction correction passes for this email, which is the limit for automatic repair passes — this keeps the process bounded rather than looping indefinitely. I can still explain any remaining differences, or you can make individual changes directly.`;
+          appendMessage('assistant', reply);
+          setHistory((current) => [...current, {
+            id: newId('hist'), command: message, interpretation: reply, action: { type: 'NONE' },
+            status: 'reported', summary: reply, provider: 'deterministic', requiresConfirmation: false,
+          }]);
+          return;
+        }
+        // R4-C3 — re-analyzes against the CURRENT live document
+        // (content.modules, which already reflects every earlier
+        // Applied repair this session), never the original import-time
+        // modules — see runReconstructionPass's own docstring.
+        const passResult = runReconstructionPass(session.sourceHtml, session.documentWidthPx, content.modules);
+        let selected = passResult.candidates.filter((candidate) => candidate.safeAutoFix);
+        if (reconIntent.kind === 'fix-category') selected = selected.filter((candidate) => candidate.categoryId === reconIntent.categoryId);
+
+        if (selected.length === 0) {
+          const stopReason = shouldStopCorrectionLoop(session.passesUsed, session.lastFidelityScore, passResult);
+          const reply = stopReason === 'no-repairable-differences'
+            ? 'Everything I can safely repair has already been applied — the remaining differences are intentional normalizations or things this builder cannot represent exactly. Ask me to explain any of them if you would like.'
+            : stopReason === 'only-architectural-limitations'
+              ? 'The remaining differences here are architectural limitations I cannot safely auto-repair without guessing (there is no safe, unambiguous way to match them to a specific module). I can explain any of them if you would like.'
+              : reconIntent.kind === 'fix-category'
+                ? "I didn't find any safely-repairable differences in that category right now."
+                : 'There is nothing safely repairable right now.';
+          appendMessage('assistant', reply);
+          setHistory((current) => [...current, {
+            id: newId('hist'), command: message, interpretation: reply, action: { type: 'NONE' },
+            status: 'reported', summary: reply, provider: 'deterministic', requiresConfirmation: false,
+          }]);
+          return;
+        }
+
+        const repairCandidates = selected.map(toRepairCandidate);
+        const reply = `I found ${selected.length} safely repairable difference${selected.length === 1 ? '' : 's'} I can fix now (current reconstruction fidelity: ${passResult.score}/100). Review the proposed changes below.`;
+        appendMessage('assistant', reply);
+        // Consumed by handleApplyRepair on a successful Apply; cleared
+        // without effect by handleCancelRepair — the pass counter and
+        // persisted session only ever advance on a REAL applied change.
+        pendingReconstructionPassRef.current = { passesUsed: session.passesUsed + 1, score: passResult.score };
+        setPendingRepair({ messageId: newId('repair'), command: message, candidates: repairCandidates });
+        return;
+      }
     }
 
     // Sub-phase 4, item 2/4 (extended E9/E10) — document-level diagnose/
@@ -903,6 +1050,12 @@ export function AIEngineerPanel({
   function handleApplyRepair() {
     if (!pendingRepair || resolving) return;
     setResolving(true);
+    // R4-C9 — a reconstruction batch is whatever produced a non-null
+    // pendingReconstructionPassRef (set by the reconstruction-repair
+    // local intent branch above, right before this same setPendingRepair
+    // call) — every OTHER repair batch (ordinary validation-issue
+    // repairs) leaves it null, so this changes nothing for them.
+    const reconstructionPass = pendingReconstructionPassRef.current;
     const items = pendingRepair.candidates.map((candidate) => candidate.item);
     const applied = onApplyRepairAction(items);
     const summary = applied
@@ -927,16 +1080,51 @@ export function AIEngineerPanel({
       for (const candidate of pendingRepair.candidates) {
         void recordRepairSignal({
           eventId: newLearningEventId(), signature: signatureForIssueId(candidate.issueId),
-          outcome: 'accepted', source: 'ai_engineer_repair',
+          outcome: 'accepted', source: reconstructionPass ? 'ai_engineer_reconstruction' : 'ai_engineer_repair',
         });
       }
+      if (reconstructionPass && applied && reconstructionSessionRef.current) {
+        // R4-C3/C6 — `content.modules` here is still the PRE-apply prop
+        // value: onApplyRepairAction's mutation flows through the parent
+        // (EmailBuilderWorkspacePage -> useEmailBuilderState) and only
+        // reaches this component's `content` prop on ITS next render,
+        // which has not happened yet within this same synchronous
+        // handler. Re-reading reconstructionPass.score here would
+        // therefore silently announce the PRE-apply number (a real bug
+        // caught during R4-C12 live QA — a single-candidate Outlook fix
+        // reported the exact unchanged pre-fix score). Instead, project
+        // what the document WILL look like using the SAME pure
+        // projectModulesWithCandidates function R4-C6's preview path
+        // uses (never a guess — it applies the EXACT same patches
+        // onApplyRepairAction's own mutators do) and re-run the pass
+        // against THAT, giving the true post-apply score synchronously,
+        // without waiting for or depending on the next render.
+        const projected = projectModulesWithCandidates(content.modules, items);
+        const postApplyPass = runReconstructionPass(reconstructionSessionRef.current.sourceHtml, reconstructionSessionRef.current.documentWidthPx, projected);
+        updateReconstructionSessionProgress(documentId, reconstructionPass.passesUsed, postApplyPass.score);
+        reconstructionSessionRef.current = {
+          ...reconstructionSessionRef.current, passesUsed: reconstructionPass.passesUsed, lastFidelityScore: postApplyPass.score,
+        };
+        const remainingPasses = MAX_RECONSTRUCTION_PASSES - reconstructionPass.passesUsed;
+        const followUp = remainingPasses > 0
+          ? `Reconstruction fidelity is now ${postApplyPass.score}/100. Ask me to "fix everything you can" again if you'd like me to check for more.`
+          : `Reconstruction fidelity is now ${postApplyPass.score}/100. That was the last automatic correction pass (limit: ${MAX_RECONSTRUCTION_PASSES}) — I can still explain any remaining differences.`;
+        appendMessage('assistant', followUp);
+      }
     }
+    pendingReconstructionPassRef.current = null;
     setPendingRepair(null);
     setResolving(false);
   }
 
   function handleCancelRepair() {
     if (!pendingRepair) return;
+    // R4-C3 — Cancel never advances the pass counter or touches the
+    // persisted session; only a real Apply does (see handleApplyRepair).
+    // Read BEFORE clearing so the learning-signal source below can still
+    // tell a reconstruction batch apart from an ordinary one.
+    const wasReconstructionBatch = pendingReconstructionPassRef.current !== null;
+    pendingReconstructionPassRef.current = null;
     appendMessage('assistant', 'Cancelled. Nothing was changed.');
     setHistory((current) => [...current, {
       id: newId('hist'),
@@ -951,7 +1139,7 @@ export function AIEngineerPanel({
     for (const candidate of pendingRepair.candidates) {
       void recordRepairSignal({
         eventId: newLearningEventId(), signature: signatureForIssueId(candidate.issueId),
-        outcome: 'rejected', source: 'ai_engineer_repair',
+        outcome: 'rejected', source: wasReconstructionBatch ? 'ai_engineer_reconstruction' : 'ai_engineer_repair',
       });
     }
     setPendingRepair(null);
@@ -1045,6 +1233,31 @@ export function AIEngineerPanel({
           </button>
         </div>
       </div>
+
+      {reconstructionSessionRef.current && reconstructionOriginalHtml && reconstructionReconstructedHtml && reconstructionFidelity && (
+        <div className="ai-engineer-panel__reconstruction-panel">
+          <button
+            type="button"
+            className="ai-engineer-panel__reconstruction-toggle"
+            aria-expanded={reconstructionPanelExpanded}
+            onClick={() => setReconstructionPanelExpanded((current) => !current)}
+          >
+            <span className="mdaiw-icon mdaiw-icon--layout" aria-hidden="true" />
+            {reconstructionPanelExpanded ? 'Hide' : 'Show'} Original / Reconstructed{reconstructionProjection ? ' / Proposed Improvement' : ''} comparison
+          </button>
+          {reconstructionPanelExpanded && (
+            <ImportReviewWorkspace
+              originalHtml={reconstructionOriginalHtml}
+              reconstructedHtml={reconstructionReconstructedHtml}
+              width={width}
+              moduleCount={content.modules.length}
+              fidelity={reconstructionFidelity}
+              projectedHtml={reconstructionProjection?.html ?? null}
+              projectedSummary={reconstructionProjection?.summary ?? null}
+            />
+          )}
+        </div>
+      )}
 
       {subView === 'chat' ? (
         <div className="ai-engineer-panel__chat">

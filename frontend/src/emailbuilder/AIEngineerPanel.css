@@ -72,6 +72,39 @@
   background: var(--color-success-bg);
 }
 
+/* R4-C6 — Original/Reconstructed/Proposed comparison, shown only for an
+   active reconstruction session. Collapsible so it never displaces the
+   chat for an ordinary document (it simply never renders at all there —
+   see AIEngineerPanel.tsx's own gate on reconstructionSessionRef). */
+.ai-engineer-panel__reconstruction-panel {
+  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-3) var(--space-4);
+}
+
+.ai-engineer-panel__reconstruction-toggle {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary-blue);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__reconstruction-toggle .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+}
+
+.ai-engineer-panel__reconstruction-panel .import-review-workspace {
+  margin-top: var(--space-3);
+}
+
 .ai-engineer-panel__tabs {
   display: flex;
   gap: var(--space-2);

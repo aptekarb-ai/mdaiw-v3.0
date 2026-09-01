@@ -138,6 +138,13 @@ export interface UseEmailBuilderState {
     modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
     documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
     settingsPatches?: { moduleId: string; settingsPatch: Record<string, unknown> }[],
+    // R4-C1 — reconstruction batches may also include a column-ratio
+    // restructure and/or a column's own settings patch, applied in the
+    // SAME one-history-commit batch as every other repair item. Optional
+    // and additive: every existing caller that omits these keeps
+    // compiling and behaving unchanged.
+    restructurePatches?: { moduleId: string; widths: number[] }[],
+    columnSettingsPatches?: { layoutId: string; columnId: string; settingsPatch: Record<string, unknown> }[],
   ) => void;
   addModule: (type: EmailModuleType) => void;
   insertModuleAt: (type: EmailModuleType, index: number) => void;
@@ -286,11 +293,28 @@ export function useEmailBuilderState(): UseEmailBuilderState {
     modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[],
     documentPatch: Partial<EmailDocumentSettingsSnapshot> | null,
     settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[] = [],
+    restructurePatches: { moduleId: string; widths: number[] }[] = [],
+    columnSettingsPatches: { layoutId: string; columnId: string; settingsPatch: Record<string, unknown> }[] = [],
   ) => {
     let nextModules = modulesRef.current;
     if (modulePatches.length > 0 || settingsPatches.length > 0) {
-      const propPatchByModuleId = new Map(modulePatches.map((entry) => [entry.moduleId, entry.propPatch]));
-      const settingsPatchByModuleId = new Map(settingsPatches.map((entry) => [entry.moduleId, entry.settingsPatch]));
+      // R4-C1 — MERGE every entry sharing a moduleId (never `new Map(...)`
+      // over the raw list, which keeps only the LAST entry per key and
+      // silently drops every earlier field for that module). A
+      // reconstruction batch routinely proposes several independent
+      // patches against the SAME module (e.g. a button's alignment AND
+      // padding, or a text module's color AND font size) — each entry
+      // here reduces onto any prior patch for that moduleId so every
+      // field from every selected candidate survives, not just the
+      // field from whichever entry happened to be last in the array.
+      const propPatchByModuleId = new Map<string, Record<string, unknown>>();
+      for (const entry of modulePatches) {
+        propPatchByModuleId.set(entry.moduleId, { ...propPatchByModuleId.get(entry.moduleId), ...entry.propPatch });
+      }
+      const settingsPatchByModuleId = new Map<string, Record<string, unknown>>();
+      for (const entry of settingsPatches) {
+        settingsPatchByModuleId.set(entry.moduleId, { ...settingsPatchByModuleId.get(entry.moduleId), ...entry.settingsPatch });
+      }
       const applyToList = (list: EmailModule[]): EmailModule[] => list.map((module) => {
         let updated = module;
         const propPatch = propPatchByModuleId.get(module.id);
@@ -310,6 +334,18 @@ export function useEmailBuilderState(): UseEmailBuilderState {
         return updated;
       });
       nextModules = applyToList(nextModules);
+    }
+    // R4-C1 — folded into the SAME nextModules pipeline, before the one
+    // commitEntry below, so a reconstruction batch that touches a column
+    // ratio and/or a column's own settings alongside ordinary module
+    // patches still lands as ONE history entry. Reuses layoutModel.ts's
+    // own pure updateColumnWidths/updateColumnSettings — never a second
+    // geometry or column-settings mutator.
+    for (const entry of restructurePatches) {
+      nextModules = updateColumnWidthsInTree(nextModules, entry.moduleId, entry.widths);
+    }
+    for (const entry of columnSettingsPatches) {
+      nextModules = updateColumnSettingsInTree(nextModules, entry.layoutId, entry.columnId, entry.settingsPatch);
     }
     const nextDocumentSettings = documentPatch
       ? { ...documentSettingsRef.current, ...documentPatch }

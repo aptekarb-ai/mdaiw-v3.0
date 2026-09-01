@@ -930,5 +930,160 @@ describe('useEmailBuilderState — unified document-settings undo/redo (Sub-phas
 
       expect(result.current.modules[0].columns![0].modules[0].settings.outlookVml).toBe(true);
     });
+
+    it('R4-C1 regression: two prop patches targeting the SAME module both survive (previously the second silently clobbered the first)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('button'));
+      const moduleId = result.current.modules[0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [
+          { moduleId, propPatch: { align: 'right' } },
+          { moduleId, propPatch: { text: 'Buy Now' } },
+        ],
+        null,
+      ));
+
+      const props = result.current.modules[0].props as unknown as { align: string; text: string };
+      expect(props.align).toBe('right');
+      expect(props.text).toBe('Buy Now');
+    });
+
+    it('R4-C1 regression: two settings patches targeting the SAME module both survive', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('button'));
+      const moduleId = result.current.modules[0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [], null,
+        [
+          { moduleId, settingsPatch: { outlookVml: true } },
+          { moduleId, settingsPatch: { desktop: { ...result.current.modules[0].settings.desktop, paddingTop: 5 } } },
+        ],
+      ));
+
+      expect(result.current.modules[0].settings.outlookVml).toBe(true);
+      expect(result.current.modules[0].settings.desktop.paddingTop).toBe(5);
+    });
+
+    it('R4-C1: a restructure patch (column ratio) applies in the SAME commit as an ordinary module patch', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      act(() => result.current.addModule('text'));
+      const textId = result.current.modules[1].id;
+
+      act(() => result.current.applyRepairPatch(
+        [{ moduleId: textId, propPatch: { color: '#123456' } }],
+        null, [], [{ moduleId: layoutId, widths: [70, 30] }],
+      ));
+
+      expect((result.current.modules[0].props as unknown as { columnWidths: number[] }).columnWidths).toEqual([70, 30]);
+      expect((result.current.modules[1].props as unknown as { color: string }).color).toBe('#123456');
+
+      act(() => result.current.undo());
+      // One undo reverts BOTH — proves single commit.
+      expect((result.current.modules[0].props as unknown as { columnWidths: number[] }).columnWidths).not.toEqual([70, 30]);
+      expect((result.current.modules[1].props as unknown as { color: string }).color).not.toBe('#123456');
+    });
+
+    it('R4-C1: a column-settings patch applies via updateColumnSettings, in the same commit', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      const columnId = result.current.modules[0].columns![0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [], null, [], [],
+        [{ layoutId, columnId, settingsPatch: { backgroundColor: '#abcdef' } }],
+      ));
+
+      expect(result.current.modules[0].columns![0].settings.backgroundColor).toBe('#abcdef');
+    });
+
+    // R4-C closure hardening — multiple candidates targeting the SAME
+    // module/property.
+    it('R4-C hardening: two prop patches for the SAME module (e.g. two separate repair candidates) merge, never drop one', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('button'));
+      const buttonId = result.current.modules[0].id;
+
+      // Simulates a reconstruction batch where "fix alignment" and "fix
+      // padding" both target the same button — two SEPARATE entries in
+      // modulePatches for the same moduleId, exactly what
+      // pendingRepair.candidates.map((c) => c.item) would produce.
+      act(() => result.current.applyRepairPatch(
+        [
+          { moduleId: buttonId, propPatch: { align: 'right' } },
+          { moduleId: buttonId, propPatch: { paddingHorizontal: 40 } },
+        ],
+        null,
+      ));
+
+      const props = result.current.modules[0].props as unknown as { align: string; paddingHorizontal: number };
+      expect(props.align).toBe('right');
+      expect(props.paddingHorizontal).toBe(40);
+    });
+
+    it('R4-C hardening: a later entry for the same module+property wins (last-applied-in-the-batch, never silently dropped or averaged)', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      const textId = result.current.modules[0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [
+          { moduleId: textId, propPatch: { color: '#111111' } },
+          { moduleId: textId, propPatch: { color: '#222222' } },
+        ],
+        null,
+      ));
+
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#222222');
+    });
+
+    // R4-C closure hardening — Apply after the document changed
+    // elsewhere (e.g. a module the proposal targeted was deleted by a
+    // manual edit, or an Undo, while the proposal was still pending).
+    it('R4-C hardening: a patch targeting a moduleId that no longer exists never crashes and never corrupts other modules', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('text'));
+      const survivingId = result.current.modules[0].id;
+
+      expect(() => act(() => result.current.applyRepairPatch(
+        [
+          { moduleId: 'this-module-id-does-not-exist-anymore', propPatch: { color: '#ff00ff' } },
+          { moduleId: survivingId, propPatch: { color: '#00ffff' } },
+        ],
+        null,
+      ))).not.toThrow();
+
+      // The stale entry is silently a no-op (nothing in the tree has
+      // that id to patch); the surviving module's own real patch still
+      // applies correctly — proves one bad id in a batch can never
+      // corrupt or block the rest of the batch.
+      expect(result.current.modules).toHaveLength(1);
+      expect((result.current.modules[0].props as unknown as TextModuleProps).color).toBe('#00ffff');
+    });
+
+    it('R4-C hardening: RESTRUCTURE_LAYOUT keeps every nested module\'s own id stable, so a separate patch for a module inside that layout still lands correctly in the SAME commit', () => {
+      const { result } = renderHook(() => useEmailBuilderState());
+      act(() => result.current.addModule('layout-2col-50-50'));
+      const layoutId = result.current.modules[0].id;
+      const columnId = result.current.modules[0].columns![0].id;
+      act(() => result.current.insertNestedModule(layoutId, columnId, 'text'));
+      const nestedId = result.current.modules[0].columns![0].modules[0].id;
+
+      act(() => result.current.applyRepairPatch(
+        [{ moduleId: nestedId, propPatch: { color: '#654321' } }],
+        null, [], [{ moduleId: layoutId, widths: [30, 70] }],
+      ));
+
+      // Same commit: the restructure changed widths, the nested id
+      // stayed the SAME id, and the correspondence-map-relevant patch
+      // still found and updated the right module.
+      expect((result.current.modules[0].props as unknown as { columnWidths: number[] }).columnWidths).toEqual([30, 70]);
+      expect(result.current.modules[0].columns![0].modules[0].id).toBe(nestedId);
+      expect((result.current.modules[0].columns![0].modules[0].props as unknown as TextModuleProps).color).toBe('#654321');
+    });
   });
 });

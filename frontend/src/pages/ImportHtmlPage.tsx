@@ -17,6 +17,7 @@ import { buildImportReconstructionContext } from '../emailbuilder/importReconstr
 import type { AICommandImportReconstructionContext } from '../emailbuilder/aiCommand';
 import { createImportReconstructionHandoff } from '../emailbuilder/aiEngineerHandoff';
 import { storePendingImportHandoff } from '../emailbuilder/importHandoffStorage';
+import { storeReconstructionSession } from '../emailbuilder/reconstructionSessionStorage';
 import type { EmailModule } from '../emailbuilder/edm';
 import type { EmailPlatform } from '../emailbuilder/types';
 import type { ApiError } from '../types/auth';
@@ -45,6 +46,15 @@ interface ReviewState {
   // importReconstructionContextRef for where this now gets kept alive
   // for the WHOLE conversation, not just the first turn.
   importReconstructionContext: AICommandImportReconstructionContext;
+  // R4-C3 — the exact source string the correction loop re-parses on
+  // every later pass (see reconstructionCorrectionLoop.ts). Captured
+  // ONCE here, at the same parse-time as everything else in this state
+  // — never re-derived from `reconstructedHtml` (that is the BUILDER's
+  // own render, a completely different document) or from `originalHtml`
+  // (that is a full standalone-preview HTML document, srcDoc-wrapped —
+  // not the same shape DOMParser needs to feed back into
+  // analyzeImportedHtml/mapImportedHtml).
+  sourceHtml: string;
 }
 
 // Phase C (Import HTML) — the ONE import experience shared by Dashboard's
@@ -107,7 +117,7 @@ export function ImportHtmlPage() {
     });
     setReviewed({
       modules: mapping.modules, emailTitle: mapping.emailTitle, fidelity, originalHtml, reconstructedHtml,
-      reconstructionReview, importReconstructionContext,
+      reconstructionReview, importReconstructionContext, sourceHtml: guard.document.documentElement.outerHTML,
     });
     setName(mapping.emailTitle || '');
   }
@@ -178,6 +188,14 @@ export function ImportHtmlPage() {
       documentId,
       createImportReconstructionHandoff(documentId, reviewed.reconstructionReview, reviewed.importReconstructionContext),
     );
+    // R4-C3 — persists what the iterative correction loop needs to run
+    // LATER passes on the builder page (see reconstructionSessionStorage.ts's
+    // own docstring for why this is a separate, read-many store from the
+    // one-shot handoff above).
+    storeReconstructionSession({
+      documentId, sourceHtml: reviewed.sourceHtml, documentWidthPx: DEFAULT_EMAIL_WIDTH,
+      passesUsed: 0, lastFidelityScore: null,
+    });
     navigate(`/email-builder/builder/${documentId}?tab=ai`);
   }
 

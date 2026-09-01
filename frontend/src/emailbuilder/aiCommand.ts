@@ -124,7 +124,20 @@ export type AICommandAction =
 export type RepairActionItem =
   | { kind: 'module'; issueId: string; moduleId: string; propPatch: Record<string, unknown> }
   | { kind: 'module-settings'; issueId: string; moduleId: string; settingsPatch: Record<string, unknown> }
-  | { kind: 'document'; issueId: string; documentPatch: Record<string, unknown> };
+  | { kind: 'document'; issueId: string; documentPatch: Record<string, unknown> }
+  // R4-C1 — column ratio repair, routed through the EXISTING
+  // updateColumnWidths mutator (layoutModel.ts's own width-sum/min-width
+  // clamping — the SAME authority RESTRUCTURE_LAYOUT already defers to,
+  // never a second geometry check).
+  | { kind: 'restructure'; issueId: string; moduleId: string; widths: number[] }
+  // R4-C1 — a column's OWN settings (background/padding), routed through
+  // the EXISTING updateColumnSettings mutator. Not a new EDM capability —
+  // ColumnContainerSettings already has these fields and the Properties
+  // panel already edits them one column at a time; this only wires the
+  // SAME existing per-column mutator into the batch repair-apply path so
+  // a reconstruction candidate touching a column can share one history
+  // commit with every other repair in the same batch.
+  | { kind: 'column-settings'; issueId: string; layoutId: string; columnId: string; settingsPatch: Record<string, unknown> };
 
 export const DOCUMENT_SCOPE_ACTION_TYPES = new Set<AICommandAction['type']>([
   'SET_RESET_CSS_ENABLED', 'SET_CUSTOM_CSS_ENABLED', 'SET_CUSTOM_CSS', 'CLEAR_CUSTOM_CSS',

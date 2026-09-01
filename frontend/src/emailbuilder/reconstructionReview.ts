@@ -1,8 +1,11 @@
-import type { ButtonModuleProps, EmailModule, ImageModuleProps } from './edm';
+import type { ButtonModuleProps, EmailModule, ImageModuleProps, TextModuleProps } from './edm';
+import { MAX_PADDING, MIN_PADDING } from './edm';
 import type { DetectedRegion, DetectedStructure } from './htmlImportAnalysis';
 import type { FidelityCategoryId, FidelityCategoryResult, FidelityReport, FidelityStatus } from './htmlImportFidelity';
 import type { ImportFinding } from './importFindings';
-import { extractStyleDeclarations, readAllowedAttribute } from './htmlImportSanitize';
+import { extractStyleDeclarations, isSafeAnchorUrl, isSafeResourceUrl, readAllowedAttribute } from './htmlImportSanitize';
+import { buildCandidateId, type ReconstructionRepairCandidate } from './reconstructionRepairCandidate';
+import { supportsVmlButtonPattern } from './vml';
 
 // R4-B (Import HTML AI Reconstruction) — deterministic classification of
 // every non-preserved FidelityReport category into exactly one of the
@@ -37,6 +40,16 @@ export interface ReconstructionDifference {
   summary: string;
   detail: string;
   sourcePosition?: string;
+  // R4-C1 — present only when a source region and a reconstructed
+  // module/column were paired UNAMBIGUOUSLY (see each detect*Repairable
+  // function's own ordered/count-matched pairing) and the gap maps to a
+  // real, already-typed builder field. class 'repairable' does not
+  // guarantee this is set (see detectFontWeightRepairable's own
+  // docstring for the one case that stays classification-only because
+  // safe per-instance pairing isn't possible); every OTHER class never
+  // sets it — normalized/approximation/removed-unsupported differences
+  // are never "fixed" by construction, only explained.
+  repairCandidate?: ReconstructionRepairCandidate;
 }
 
 export interface ReconstructionCategoryReview {
@@ -232,13 +245,25 @@ function detectButtonRepairable(structure: DetectedStructure, modules: EmailModu
 
   const differences: ReconstructionDifference[] = [];
   ctaRegions.forEach((region, index) => {
-    const props = buttonModules[index].props as unknown as ButtonModuleProps;
+    const module = buttonModules[index];
+    const props = module.props as unknown as ButtonModuleProps;
     if (region.typography.align && region.typography.align !== props.align) {
+      const signature = 'import-reconstruction:button:alignment';
       differences.push({
-        categoryId: 'spacing', class: 'repairable', signature: 'import-reconstruction:button:alignment',
+        categoryId: 'spacing', class: 'repairable', signature,
         summary: `Button alignment: source "${region.typography.align}", reconstructed "${props.align}".`,
         detail: `The source button at ${region.sourcePosition} was aligned "${region.typography.align}", but the reconstructed Button module is aligned "${props.align}". The Button module already supports alignment (props.align) — this can be corrected.`,
         sourcePosition: region.sourcePosition,
+        repairCandidate: {
+          id: buildCandidateId(signature, module.id), categoryId: 'spacing', signature,
+          sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+          problem: 'Button alignment does not match the source.',
+          sourceEvidence: `Source button align: "${region.typography.align}".`,
+          currentValue: String(props.align), proposedValue: String(region.typography.align),
+          expectedImprovement: 'Button alignment will match the imported email.',
+          confidence: 1.0, risk: 'low', safeAutoFix: true,
+          item: { kind: 'module', issueId: signature, moduleId: module.id, propPatch: { align: region.typography.align } },
+        },
       });
     }
     const sourceH = region.spacing.paddingHorizontal;
@@ -246,11 +271,24 @@ function detectButtonRepairable(structure: DetectedStructure, modules: EmailModu
     const paddingMismatch = (sourceH !== undefined && sourceH !== props.paddingHorizontal)
       || (sourceV !== undefined && sourceV !== props.paddingVertical);
     if (paddingMismatch) {
+      const signature = 'import-reconstruction:button:padding';
+      const proposedH = sourceH ?? props.paddingHorizontal;
+      const proposedV = sourceV ?? props.paddingVertical;
       differences.push({
-        categoryId: 'spacing', class: 'repairable', signature: 'import-reconstruction:button:padding',
+        categoryId: 'spacing', class: 'repairable', signature,
         summary: `Button padding: source ${sourceH ?? '—'}px/${sourceV ?? '—'}px (H/V), reconstructed ${props.paddingHorizontal}px/${props.paddingVertical}px.`,
         detail: `The source button at ${region.sourcePosition} had ${sourceH ?? 'unset'}px horizontal / ${sourceV ?? 'unset'}px vertical padding, but the reconstructed Button module has ${props.paddingHorizontal}px/${props.paddingVertical}px. The Button module already supports padding (props.paddingHorizontal/paddingVertical) — this can be corrected.`,
         sourcePosition: region.sourcePosition,
+        repairCandidate: {
+          id: buildCandidateId(signature, module.id), categoryId: 'spacing', signature,
+          sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+          problem: 'Button padding does not match the source.',
+          sourceEvidence: `Source button padding: ${sourceH ?? 'unset'}px horizontal / ${sourceV ?? 'unset'}px vertical.`,
+          currentValue: `${props.paddingHorizontal}px/${props.paddingVertical}px`, proposedValue: `${proposedH}px/${proposedV}px`,
+          expectedImprovement: 'Button padding will match the imported email.',
+          confidence: 1.0, risk: 'low', safeAutoFix: true,
+          item: { kind: 'module', issueId: signature, moduleId: module.id, propPatch: { paddingHorizontal: proposedH, paddingVertical: proposedV } },
+        },
       });
     }
   });
@@ -264,17 +302,79 @@ function detectImageWidthRepairable(structure: DetectedStructure, modules: Email
 
   const differences: ReconstructionDifference[] = [];
   imageRegions.forEach((region, index) => {
-    const props = imageModules[index].props as unknown as ImageModuleProps;
+    const module = imageModules[index];
+    const props = module.props as unknown as ImageModuleProps;
     if (region.detectedWidthPx === null) return;
     const reconstructedWidthPx = props.width?.desktop?.unit === 'px' ? props.width.desktop.value : null;
     if (reconstructedWidthPx !== region.detectedWidthPx) {
+      const signature = 'import-reconstruction:image:width';
+      // Preserve any existing mobile override — width is a
+      // ResponsiveDimension, and a propPatch replaces the WHOLE field
+      // (shallow merge at the props level), so dropping `.mobile` here
+      // would silently discard a real per-viewport override.
+      const proposedWidth = { desktop: { unit: 'px' as const, value: region.detectedWidthPx }, ...(props.width?.mobile ? { mobile: props.width.mobile } : {}) };
       differences.push({
-        categoryId: 'images', class: 'repairable', signature: 'import-reconstruction:image:width',
+        categoryId: 'images', class: 'repairable', signature,
         summary: `Image width: source ${region.detectedWidthPx}px, reconstructed ${reconstructedWidthPx ?? 'fluid'}.`,
         detail: `The source image at ${region.sourcePosition} was ${region.detectedWidthPx}px wide, but the reconstructed Image module resolves to ${reconstructedWidthPx ?? 'a fluid (100%) width'}. The Image module already supports a fixed pixel width — this can be corrected.`,
         sourcePosition: region.sourcePosition,
+        repairCandidate: {
+          id: buildCandidateId(signature, module.id), categoryId: 'images', signature,
+          sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+          problem: 'Image width does not match the source.',
+          sourceEvidence: `Source image width: ${region.detectedWidthPx}px.`,
+          currentValue: reconstructedWidthPx !== null ? `${reconstructedWidthPx}px` : 'fluid (100%)',
+          proposedValue: `${region.detectedWidthPx}px`,
+          expectedImprovement: 'Image width will match the imported email.',
+          confidence: 1.0, risk: 'low', safeAutoFix: true,
+          item: { kind: 'module', issueId: signature, moduleId: module.id, propPatch: { width: proposedWidth } },
+        },
       });
     }
+  });
+  return differences;
+}
+
+// R4-C3 — image SOURCE (not just width): only ever proposed when the
+// source URL was already marked safe by htmlImportAnalysis.ts's own
+// imageOf() (isSafeResourceUrl + never data:/cid:) — an unsafe source
+// image never reaches this function with a usable `.src` at all (see
+// DetectedImage.safe), so there is no path from an unsanitized/unsafe
+// URL into a repair candidate. Same for alt text (always safe — plain
+// text, never markup).
+function detectImageSrcRepairable(structure: DetectedStructure, modules: EmailModule[]): ReconstructionDifference[] {
+  const imageRegions = flattenRegions(structure.regions).filter((r) => r.role === 'image' || r.role === 'hero');
+  const imageModules = flattenModules(modules).filter((m) => m.type === 'image');
+  if (imageRegions.length === 0 || imageRegions.length !== imageModules.length) return [];
+
+  const differences: ReconstructionDifference[] = [];
+  imageRegions.forEach((region, index) => {
+    const module = imageModules[index];
+    const props = module.props as unknown as ImageModuleProps;
+    const source = region.images[0];
+    if (!source || !source.safe || !source.src || !isSafeResourceUrl(source.src)) return;
+    const patch: Record<string, unknown> = {};
+    if (source.src !== props.src) patch.src = source.src;
+    if (source.alt && source.alt !== props.alt) patch.alt = source.alt;
+    if (Object.keys(patch).length === 0) return;
+    const signature = 'import-reconstruction:image:source';
+    differences.push({
+      categoryId: 'images', class: 'repairable', signature,
+      summary: 'Image source/alt text does not match the source.',
+      detail: `The source image at ${region.sourcePosition} has a different ${patch.src ? 'source URL' : 'alt text'} than the reconstructed Image module. Both fields are already supported — this can be corrected.`,
+      sourcePosition: region.sourcePosition,
+      repairCandidate: {
+        id: buildCandidateId(signature, module.id), categoryId: 'images', signature,
+        sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+        problem: 'Reconstructed image source/alt does not match the source.',
+        sourceEvidence: `Source image: src="${source.src}"${source.alt ? `, alt="${source.alt}"` : ''}.`,
+        currentValue: `src="${props.src}", alt="${props.alt}"`,
+        proposedValue: `src="${(patch.src as string | undefined) ?? props.src}", alt="${(patch.alt as string | undefined) ?? props.alt}"`,
+        expectedImprovement: 'Image will show the exact source image and alt text.',
+        confidence: 1.0, risk: 'low', safeAutoFix: true,
+        item: { kind: 'module', issueId: signature, moduleId: module.id, propPatch: patch },
+      },
+    });
   });
   return differences;
 }
@@ -291,11 +391,22 @@ function detectBackgroundRepairable(structure: DetectedStructure, modules: Email
     region.children.forEach((child, columnIndex) => {
       const column = layoutModule.columns![columnIndex];
       if (child.background.color && child.background.color !== column.settings.backgroundColor) {
+        const signature = 'import-reconstruction:background:color';
         differences.push({
-          categoryId: 'content', class: 'repairable', signature: 'import-reconstruction:background:color',
+          categoryId: 'content', class: 'repairable', signature,
           summary: `Column background: source ${child.background.color}, reconstructed ${column.settings.backgroundColor || 'none'}.`,
           detail: `Column ${columnIndex + 1} at ${region.sourcePosition} had background ${child.background.color} in the source, but the reconstructed column's background is ${column.settings.backgroundColor || 'unset'}. Per-column background is already supported — this can be corrected.`,
           sourcePosition: region.sourcePosition,
+          repairCandidate: {
+            id: buildCandidateId(signature, `${layoutModule.id}:${column.id}`), categoryId: 'content', signature,
+            sourcePosition: region.sourcePosition, moduleId: layoutModule.id, moduleType: layoutModule.type, columnId: column.id,
+            problem: `Column ${columnIndex + 1} background does not match the source.`,
+            sourceEvidence: `Source column ${columnIndex + 1} background: ${child.background.color}.`,
+            currentValue: column.settings.backgroundColor || '(none)', proposedValue: child.background.color,
+            expectedImprovement: `Column ${columnIndex + 1} background will match the imported email.`,
+            confidence: 1.0, risk: 'low', safeAutoFix: true,
+            item: { kind: 'column-settings', issueId: signature, layoutId: layoutModule.id, columnId: column.id, settingsPatch: { backgroundColor: child.background.color } },
+          },
         });
       }
     });
@@ -337,6 +448,203 @@ function detectFontWeightRepairable(document: Document): ReconstructionDifferenc
   }];
 }
 
+// R4-C3 — text typography (heading + paragraph regions both become a
+// 'text' module — see edm.ts's EmailModuleType, there is no separate
+// heading module type). Same ordered/count-matched pairing discipline
+// as every other detector here: header/footer/hero/cta/columns regions
+// are excluded (they become distinct module types, never 'text'), so a
+// heading/paragraph region only ever pairs against a genuine Text
+// module, never a coincidentally-same-index unrelated module.
+//
+// Bundles every mismatched field into ONE propPatch per module rather
+// than one candidate per field — applyRepairPatch's own merge-by-
+// moduleId (useEmailBuilderState.ts) means multiple simultaneous
+// candidates for the same module would still apply safely, but a
+// single "fix this text block's typography" candidate is both simpler
+// for the user to review and avoids proposing 3 separate confirmations
+// for what is really one visual fact (the block's typography).
+function detectTextTypographyRepairable(structure: DetectedStructure, modules: EmailModule[]): ReconstructionDifference[] {
+  const textRegions = flattenRegions(structure.regions).filter((r) => r.role === 'heading' || r.role === 'paragraph' || r.role === 'preheader');
+  const textModules = flattenModules(modules).filter((m) => m.type === 'text');
+  if (textRegions.length === 0 || textRegions.length !== textModules.length) return [];
+
+  const differences: ReconstructionDifference[] = [];
+  textRegions.forEach((region, index) => {
+    const module = textModules[index];
+    const props = module.props as unknown as TextModuleProps;
+    const patch: Record<string, unknown> = {};
+    const mismatches: string[] = [];
+    if (region.typography.color && region.typography.color !== props.color) {
+      patch.color = region.typography.color;
+      mismatches.push(`color (source ${region.typography.color}, reconstructed ${props.color})`);
+    }
+    if (region.typography.fontSize && region.typography.fontSize !== props.fontSize) {
+      patch.fontSize = region.typography.fontSize;
+      mismatches.push(`font size (source ${region.typography.fontSize}px, reconstructed ${props.fontSize}px)`);
+    }
+    if (region.typography.align && region.typography.align !== props.align) {
+      patch.align = region.typography.align;
+      mismatches.push(`alignment (source "${region.typography.align}", reconstructed "${props.align}")`);
+    }
+    if (mismatches.length === 0) return;
+    const signature = 'import-reconstruction:typography:text';
+    differences.push({
+      categoryId: 'typography', class: 'repairable', signature,
+      summary: `Text typography: ${mismatches.join('; ')}.`,
+      detail: `The source text at ${region.sourcePosition} differs from the reconstructed Text module in ${mismatches.length} way${mismatches.length === 1 ? '' : 's'}: ${mismatches.join('; ')}. Every one of these fields is already supported — this can be corrected.`,
+      sourcePosition: region.sourcePosition,
+      repairCandidate: {
+        id: buildCandidateId(signature, module.id), categoryId: 'typography', signature,
+        sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+        problem: 'Text typography does not match the source.',
+        sourceEvidence: mismatches.join('; '),
+        currentValue: `color=${props.color}, fontSize=${props.fontSize}px, align=${props.align}`,
+        proposedValue: `color=${patch.color ?? props.color}, fontSize=${patch.fontSize ?? props.fontSize}px, align=${patch.align ?? props.align}`,
+        expectedImprovement: 'Text typography will match the imported email.',
+        confidence: 1.0, risk: 'low', safeAutoFix: true,
+        item: { kind: 'module', issueId: signature, moduleId: module.id, propPatch: patch },
+      },
+    });
+  });
+  return differences;
+}
+
+// R4-C3 — text module padding. Same "already-typed field, no capability
+// check needed" posture as every other candidate here — settings.desktop
+// exists on EVERY module type (edm.ts's EmailModuleSettings), so this
+// never needs a manifest lookup the way the AI-command path does. Clamps
+// to the SAME MIN_PADDING/MAX_PADDING bound the Properties panel and
+// ai_command.py's own _validate_settings_patch already enforce, so a
+// source value outside that range degrades to the nearest in-range value
+// rather than proposing a patch that would be out of bounds.
+function detectTextPaddingRepairable(structure: DetectedStructure, modules: EmailModule[]): ReconstructionDifference[] {
+  const textRegions = flattenRegions(structure.regions).filter((r) => r.role === 'heading' || r.role === 'paragraph' || r.role === 'preheader');
+  const textModules = flattenModules(modules).filter((m) => m.type === 'text');
+  if (textRegions.length === 0 || textRegions.length !== textModules.length) return [];
+
+  const clamp = (n: number) => Math.min(MAX_PADDING, Math.max(MIN_PADDING, n));
+
+  const differences: ReconstructionDifference[] = [];
+  textRegions.forEach((region, index) => {
+    const module = textModules[index];
+    const sourceH = region.spacing.paddingHorizontal;
+    const sourceV = region.spacing.paddingVertical;
+    if (sourceH === undefined && sourceV === undefined) return;
+    const current = module.settings.desktop;
+    const proposedTop = sourceV !== undefined ? clamp(sourceV) : current.paddingTop;
+    const proposedBottom = sourceV !== undefined ? clamp(sourceV) : current.paddingBottom;
+    const proposedLeft = sourceH !== undefined ? clamp(sourceH) : current.paddingLeft;
+    const proposedRight = sourceH !== undefined ? clamp(sourceH) : current.paddingRight;
+    const changed = proposedTop !== current.paddingTop || proposedBottom !== current.paddingBottom
+      || proposedLeft !== current.paddingLeft || proposedRight !== current.paddingRight;
+    if (!changed) return;
+    const signature = 'import-reconstruction:spacing:text-padding';
+    differences.push({
+      categoryId: 'spacing', class: 'repairable', signature,
+      summary: `Text padding: source ${sourceH ?? '—'}px/${sourceV ?? '—'}px (H/V), reconstructed ${current.paddingLeft}px/${current.paddingTop}px.`,
+      detail: `The source text at ${region.sourcePosition} had ${sourceH ?? 'unset'}px horizontal / ${sourceV ?? 'unset'}px vertical padding. The Text module already supports padding on every side (settings.desktop) — this can be corrected.`,
+      sourcePosition: region.sourcePosition,
+      repairCandidate: {
+        id: buildCandidateId(signature, module.id), categoryId: 'spacing', signature,
+        sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+        problem: 'Text padding does not match the source.',
+        sourceEvidence: `Source text padding: ${sourceH ?? 'unset'}px horizontal / ${sourceV ?? 'unset'}px vertical.`,
+        currentValue: `${current.paddingLeft}/${current.paddingRight}/${current.paddingTop}/${current.paddingBottom}px`,
+        proposedValue: `${proposedLeft}/${proposedRight}/${proposedTop}/${proposedBottom}px`,
+        expectedImprovement: 'Text padding will match the imported email.',
+        confidence: 1.0, risk: 'low', safeAutoFix: true,
+        // Full desktop object, not a partial one — settings-patch merge
+        // is shallow at the TOP level only (useEmailBuilderState.ts's
+        // applyRepairPatch), so a nested `desktop` key here REPLACES the
+        // whole object; every side must be present or a sibling field
+        // (e.g. a side this detector didn't change) would be silently
+        // dropped. Mirrors the exact fix R4-B4 made for the AI-command
+        // path's own UPDATE_MODULE_SETTINGS handling.
+        item: {
+          kind: 'module-settings', issueId: signature, moduleId: module.id,
+          settingsPatch: { desktop: { ...current, paddingTop: proposedTop, paddingBottom: proposedBottom, paddingLeft: proposedLeft, paddingRight: proposedRight } },
+        },
+      },
+    });
+  });
+  return differences;
+}
+
+// R4-C3 — link/href transfer. ONLY ever proposed when the source href
+// was already marked safe (isSafeAnchorUrl, the SAME check
+// htmlImportAnalysis.ts's own linkOf() already applies) — an unsafe
+// source href never reaches this function with a non-empty `.href` at
+// all (see DetectedLink.safe), so there is no path from
+// javascript:/data: or any other unsafe scheme into a repair candidate.
+// Re-checks isSafeAnchorUrl here too, defense-in-depth, never trusting
+// a boolean alone to gate a URL that ends up in an href attribute.
+function detectLinkRepairable(structure: DetectedStructure, modules: EmailModule[]): ReconstructionDifference[] {
+  const ctaRegions = flattenRegions(structure.regions).filter((r) => r.role === 'cta');
+  const buttonModules = flattenModules(modules).filter((m) => m.type === 'button');
+  if (ctaRegions.length === 0 || ctaRegions.length !== buttonModules.length) return [];
+
+  const differences: ReconstructionDifference[] = [];
+  ctaRegions.forEach((region, index) => {
+    const module = buttonModules[index];
+    const props = module.props as unknown as ButtonModuleProps;
+    const link = region.links[0];
+    if (!link || !link.safe || !link.href || !isSafeAnchorUrl(link.href)) return;
+    if (link.href === props.href) return;
+    const signature = 'import-reconstruction:links:href';
+    differences.push({
+      categoryId: 'links', class: 'repairable', signature,
+      summary: `Button link: source "${link.href}", reconstructed "${props.href}".`,
+      detail: `The source button at ${region.sourcePosition} links to "${link.href}", but the reconstructed Button module links to "${props.href}". This can be corrected.`,
+      sourcePosition: region.sourcePosition,
+      repairCandidate: {
+        id: buildCandidateId(signature, module.id), categoryId: 'links', signature,
+        sourcePosition: region.sourcePosition, moduleId: module.id, moduleType: module.type,
+        problem: 'Button destination link does not match the source.',
+        sourceEvidence: `Source button href: "${link.href}".`,
+        currentValue: props.href, proposedValue: link.href,
+        expectedImprovement: 'Button will link to the same destination as the imported email.',
+        confidence: 1.0, risk: 'low', safeAutoFix: true,
+        item: { kind: 'module', issueId: signature, moduleId: module.id, propPatch: { href: link.href } },
+      },
+    });
+  });
+  return differences;
+}
+
+// R4-C3 — Outlook/VML fallback opportunity. Not a source-vs-reconstructed
+// comparison (the source has no "outlookVml" concept) — this is the
+// builder PROACTIVELY offering its own already-built Classic Outlook
+// compatibility feature (vml.ts) for a rounded button that doesn't have
+// it enabled yet, exactly like the existing Validation Center rule
+// (emailValidation.ts) already flags this — reusing supportsVmlButtonPattern,
+// never a second capability check.
+function detectOutlookFallbackRepairable(modules: EmailModule[]): ReconstructionDifference[] {
+  const buttonModules = flattenModules(modules).filter((m) => m.type === 'button' && supportsVmlButtonPattern(m.type));
+  const differences: ReconstructionDifference[] = [];
+  for (const module of buttonModules) {
+    const props = module.props as unknown as ButtonModuleProps;
+    if (!props.borderRadius || props.borderRadius <= 0) continue;
+    if (module.settings.outlookVml === true) continue;
+    const signature = 'import-reconstruction:outlook:vml-button';
+    differences.push({
+      categoryId: 'outlook', class: 'repairable', signature,
+      summary: 'Rounded button has no Classic Outlook fallback enabled.',
+      detail: 'This button has rounded corners but no VML fallback — Classic Outlook (Word rendering engine) ignores CSS border-radius, so the button would render as a square. Enabling the fallback is already supported.',
+      repairCandidate: {
+        id: buildCandidateId(signature, module.id), categoryId: 'outlook', signature,
+        moduleId: module.id, moduleType: module.type,
+        problem: 'Rounded button has no Classic Outlook fallback.',
+        sourceEvidence: `Button has borderRadius=${props.borderRadius}px with no VML fallback enabled.`,
+        currentValue: 'VML fallback disabled', proposedValue: 'VML fallback enabled',
+        expectedImprovement: 'Button will render correctly (rounded) in Classic Outlook.',
+        confidence: 1.0, risk: 'low', safeAutoFix: true,
+        item: { kind: 'module-settings', issueId: signature, moduleId: module.id, settingsPatch: { outlookVml: true } },
+      },
+    });
+  }
+  return differences;
+}
+
 function worstClass(differences: ReconstructionDifference[]): ReconstructionDifferenceClass | 'preserved' {
   if (differences.length === 0) return 'preserved';
   return differences.reduce<ReconstructionDifferenceClass>(
@@ -371,8 +679,13 @@ export function buildReconstructionReview(
   };
   addIndependent(detectButtonRepairable(structure, modules));
   addIndependent(detectImageWidthRepairable(structure, modules));
+  addIndependent(detectImageSrcRepairable(structure, modules));
   addIndependent(detectBackgroundRepairable(structure, modules));
   addIndependent(detectFontWeightRepairable(document));
+  addIndependent(detectTextTypographyRepairable(structure, modules));
+  addIndependent(detectTextPaddingRepairable(structure, modules));
+  addIndependent(detectLinkRepairable(structure, modules));
+  addIndependent(detectOutlookFallbackRepairable(modules));
 
   const flattened = categories.flatMap((c) => c.differences);
   const counts: Record<ReconstructionDifferenceClass, number> = {

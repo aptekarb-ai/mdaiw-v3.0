@@ -16,7 +16,11 @@ export type RepairSignalOutcome = 'accepted' | 'rejected';
 export type RepairSignalSource =
   | 'validation_center_single'
   | 'validation_center_bulk'
-  | 'ai_engineer_repair';
+  | 'ai_engineer_repair'
+  // R4-C9 — matches backend/emailbuilder/models.py's own
+  // RepairSignalSource.AI_ENGINEER_RECONSTRUCTION exactly (already
+  // added, unused until now, in an earlier phase's migration).
+  | 'ai_engineer_reconstruction';
 
 export interface RecordRepairSignalInput {
   eventId: string;

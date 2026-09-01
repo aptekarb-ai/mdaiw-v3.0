@@ -406,7 +406,16 @@ export function EmailBuilderWorkspacePage() {
     const documentPatch = documentItems.length > 0
       ? documentItems.reduce((acc, item) => ({ ...acc, ...item.documentPatch }), {} as Record<string, unknown>)
       : null;
-    builder.applyRepairPatch(modulePatches, documentPatch, settingsPatches);
+    // R4-C1 — reconstruction-only item kinds; empty for every existing
+    // (non-reconstruction) repair batch, so this never changes behavior
+    // for Sub-phase 4's original validation-issue repairs.
+    const restructurePatches = items
+      .filter((item): item is Extract<RepairActionItem, { kind: 'restructure' }> => item.kind === 'restructure')
+      .map((item) => ({ moduleId: item.moduleId, widths: item.widths }));
+    const columnSettingsPatches = items
+      .filter((item): item is Extract<RepairActionItem, { kind: 'column-settings' }> => item.kind === 'column-settings')
+      .map((item) => ({ layoutId: item.layoutId, columnId: item.columnId, settingsPatch: item.settingsPatch }));
+    builder.applyRepairPatch(modulePatches, documentPatch, settingsPatches, restructurePatches, columnSettingsPatches);
     return true;
     // eslint-disable-next-line react-hooks/exhaustive-deps -- builder is a stable-callback hook instance
   }, []);

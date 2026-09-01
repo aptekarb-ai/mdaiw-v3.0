@@ -13,7 +13,9 @@ import { buildFidelityReport } from './htmlImportFidelity';
 import { mapImportedHtml } from './htmlImportMapper';
 import { buildReconstructionReview, formatReconstructionReviewMessage } from './reconstructionReview';
 import { buildImportReconstructionContext } from './importReconstructionContext';
-import type { AICommandResponse } from './aiCommand';
+import { loadReconstructionSession, storeReconstructionSession } from './reconstructionSessionStorage';
+import { MAX_RECONSTRUCTION_PASSES } from './reconstructionCorrectionLoop';
+import type { AICommandResponse, RepairActionItem } from './aiCommand';
 
 vi.mock('../api/client', () => ({ requestAICommand: vi.fn() }));
 vi.mock('../hooks/useSpeechRecognition', () => ({
@@ -1589,5 +1591,514 @@ describe('AIEngineerPanel — R4-B4 Closure §B/§C copy-source integration', ()
 
     expect(await screen.findByText(/Select the module you want to update first/)).toBeInTheDocument();
     expect(requestAICommand).not.toHaveBeenCalled();
+  });
+});
+
+describe('AIEngineerPanel — R4-C reconstruction repair integration', () => {
+  // A single button whose source alignment/padding is known (align:
+  // right, 40px horizontal / 20px vertical) — matches
+  // reconstructionReview.test.ts's own established fixture shape.
+  const RECON_HTML = '<table><tr><td align="right"><a href="https://example.com/go" style="background-color:#76c043;color:#fff;padding:20px 40px 20px 40px;">Go</a></td></tr></table>';
+
+  function driftedButton() {
+    const button = createModule('button', 0);
+    Object.assign(button.props as Record<string, unknown>, { align: 'left', paddingHorizontal: 8, href: 'https://example.com/go', text: 'Go' });
+    return button;
+  }
+
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it('"fix everything you safely can" proposes the drifted button\'s alignment+padding, plus the always-present Outlook-fallback candidate, as ONE reconstruction repair batch', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = driftedButton();
+    renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/safely repairable difference/)).toBeInTheDocument();
+    expect(requestAICommand).not.toHaveBeenCalled(); // detection is entirely local/deterministic
+    expect(screen.getByText(/Repair 3 issues/)).toBeInTheDocument();
+  });
+
+  it('Apply commits the reconstruction batch in one history step and updates the persisted pass counter', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = driftedButton();
+    const { onApplyRepairAction } = renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    expect(onApplyRepairAction).toHaveBeenCalledTimes(1);
+    const items = onApplyRepairAction.mock.calls[0][0];
+    expect(items).toHaveLength(3);
+    // R4-C12 live-QA regression guard: the announced score must be the
+    // TRUE post-apply value (98 — fixing all 3 candidates here improves
+    // the score from 83, but the button's own text/content was never
+    // part of these 3 candidates, so one category honestly stays short
+    // of fully preserved), never the STALE pre-apply score (83 — what
+    // the bug this guards against would have announced). Caught live:
+    // onApplyRepairAction here is a mock that never actually re-renders
+    // `content` with the applied changes, so this also proves the fix
+    // works via the pure projection function
+    // (projectModulesWithCandidates) rather than depending on a
+    // re-render that — in this test, and in the one real tick right
+    // after a real Apply — has not happened yet.
+    expect(await screen.findByText('Reconstruction fidelity is now 98/100. Ask me to "fix everything you can" again if you\'d like me to check for more.')).toBeInTheDocument();
+
+    const session = loadReconstructionSession(1);
+    expect(session?.passesUsed).toBe(1);
+    expect(session?.lastFidelityScore).toBe(98);
+  });
+
+  it('Cancel never advances the persisted pass counter', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = driftedButton();
+    renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(await screen.findByText('Cancelled. Nothing was changed.')).toBeInTheDocument();
+    expect(loadReconstructionSession(1)?.passesUsed).toBe(0);
+  });
+
+  it('a category-scoped command ("fix the images") only proposes candidates from that category', async () => {
+    mockSpeech();
+    const imageHtml = '<table><tr><td><img src="https://example.com/hero.png" alt="Hero" width="500"></td></tr></table>';
+    storeReconstructionSession({ documentId: 1, sourceHtml: imageHtml, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const image = createModule('image', 0);
+    // src and alt already match the source — only width should differ,
+    // keeping this test to exactly one candidate (image:width).
+    Object.assign(image.props as Record<string, unknown>, { src: 'https://example.com/hero.png', alt: 'Hero' });
+    renderPanel({ documentId: 1, content: { version: 1, modules: [image] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix the images');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Repair 1 issue\b/)).toBeInTheDocument();
+  });
+
+  it('reports the pass-budget-exhausted limit honestly instead of proposing another pass', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 3, lastFidelityScore: 90 });
+    const button = driftedButton();
+    renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/limit for automatic repair passes/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Repair \d+ issue/ })).toBeNull();
+  });
+
+  it('without an active reconstruction session, a reconstruction-only phrase is never intercepted locally — it reaches the normal backend command path', async () => {
+    mockSpeech();
+    // No storeReconstructionSession call — this documentId has no
+    // session, so reconstructionSessionRef.current is null and the
+    // whole reconstruction-repair branch is skipped entirely. "use the
+    // original spacing" deliberately contains neither "fix" nor "repair"
+    // (aiDocumentIntelligence.ts's own patterns are keyed on those two
+    // words), so — unlike "fix everything you can" — nothing else in
+    // this component's local-intent chain claims it either; if the
+    // reconstruction gate were broken (e.g. always-on instead of
+    // session-gated), this exact phrase would be answered locally
+    // instead of reaching the backend, catching that regression as the
+    // "no session -> local matcher never activates" test the OTHER
+    // tests in this block can't isolate on their own.
+    vi.mocked(requestAICommand).mockResolvedValue(response({ reply: 'ok', action: { type: 'NONE' } }));
+    renderPanel({ documentId: 999 });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'use the original spacing');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('ok');
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('R4-C11 cross-document isolation: a reconstruction session seeded for document 1 never leaks into document 2', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    // Deliberately NOT seeding a session for document 2.
+    const button = driftedButton();
+    const { rerender } = render(
+      <AIEngineerPanel
+        documentId={1} editorMode="ai" platform="generic" width={700}
+        selectedModule={null} selectedColumn={null}
+        content={{ version: 1, modules: [button] }}
+        emailTitle="Doc 1" emailSubject="Subject" faviconUrl=""
+        resetCssEnabled customCssEnabled={false} customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/); // document 1's session is active
+    // Resolve the pending proposal before switching documents — a
+    // pending proposal (whether from document 1 or 2) blocks handleSend
+    // entirely (see its own `|| pendingRepair) return` guard), which is
+    // a separate, pre-existing, non-R4-C concern this test intentionally
+    // avoids conflating with the actual thing under test here (session
+    // isolation), matching the "switching documents clears the
+    // resolver's stale referent memory" test's own established
+    // precedent above.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await screen.findByText('Cancelled. Nothing was changed.');
+
+    // Switch to document 2 — no reconstruction session was ever stored
+    // for it, so the SAME phrase must reach the normal backend path,
+    // never a stale reconstruction batch from document 1.
+    vi.mocked(requestAICommand).mockResolvedValue(response({ reply: 'ok', action: { type: 'NONE' } }));
+    rerender(
+      <AIEngineerPanel
+        documentId={2} editorMode="ai" platform="generic" width={700}
+        selectedModule={null} selectedColumn={null}
+        content={{ version: 1, modules: [] }}
+        emailTitle="Doc 2" emailSubject="Subject" faviconUrl=""
+        resetCssEnabled customCssEnabled={false} customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={vi.fn().mockReturnValue(true)}
+      />,
+    );
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'use the original spacing');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('ok');
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+    // And document 1's own session survives untouched in storage.
+    expect(loadReconstructionSession(1)?.sourceHtml).toBe(RECON_HTML);
+    expect(loadReconstructionSession(2)).toBeNull();
+  });
+});
+
+describe('AIEngineerPanel — R4-C closure hardening: no auto-triggered repair loop', () => {
+  const RECON_HTML = '<table><tr><td align="right"><a href="https://example.com/go" style="background-color:#76c043;color:#fff;padding:20px 40px 20px 40px;">Go</a></td></tr></table>';
+
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it('rendering a panel with an active reconstruction session never shows a pending repair proposal on its own — only Original/Reconstructed, never Proposed, until the user sends a command', () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = createModule('button', 0);
+    Object.assign(button.props as Record<string, unknown>, { align: 'left', href: 'https://example.com/go', text: 'Go' });
+    renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+
+    expect(screen.queryByRole('button', { name: /Repair \d+ issue/ })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Proposed Improvement' })).toBeNull();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  it('a reconstruction handoff\'s own opening message is a plain-text summary, never a repair proposal — appendMessage only, no setPendingRepair path reachable from the handoff effect', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const doc = new DOMParser().parseFromString(RECON_HTML, 'text/html');
+    const structure = analyzeImportedHtml(doc, 600);
+    const mapping = mapImportedHtml(doc);
+    const fidelity = buildFidelityReport(doc, structure, mapping);
+    const review = buildReconstructionReview(doc, structure, fidelity, mapping.modules);
+    const importReconstructionContext = buildImportReconstructionContext(structure, fidelity, mapping.modules.length);
+    const handoff = createImportReconstructionHandoff(1, review, importReconstructionContext);
+
+    renderPanel({ documentId: 1, aiEngineerHandoff: handoff, content: { version: 1, modules: mapping.modules } });
+
+    await screen.findByText(handoff.prompt);
+    expect(screen.queryByRole('button', { name: /Repair \d+ issue/ })).toBeNull();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  // R4-C closure hardening — "no repair loop starts automatically...
+  // merely from render/remount/navigation." The mount-only version of
+  // this already exists above; this proves the SAME thing survives an
+  // actual unmount + fresh remount (e.g. switching editor tabs and back,
+  // or React re-mounting the panel on a key change) — never just the
+  // very first mount of the test.
+  it('unmounting and remounting a panel with an active reconstruction session still never auto-starts a repair proposal', () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = createModule('button', 0);
+    Object.assign(button.props as Record<string, unknown>, { align: 'left', href: 'https://example.com/go', text: 'Go' });
+
+    const { unmount } = renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    expect(screen.queryByRole('button', { name: /Repair \d+ issue/ })).toBeNull();
+    unmount();
+
+    renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    expect(screen.queryByRole('button', { name: /Repair \d+ issue/ })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Proposed Improvement' })).toBeNull();
+    expect(requestAICommand).not.toHaveBeenCalled();
+  });
+
+  // R4-C closure hardening — "pass-budget/session state survives AI
+  // Engineer unmount/remount." Uses the REAL sessionStorage-backed
+  // session (reconstructionSessionStorage.ts), never a mock: seeds a
+  // session already AT the pass budget (passesUsed === MAX_RECONSTRUCTION_
+  // PASSES), unmounts, remounts fresh (a genuinely new component
+  // instance reading reconstructionSessionRef.current =
+  // loadReconstructionSession(...) on its own initial render), then
+  // proves the ALREADY-USED pass count was never silently reset by
+  // asking for one more repair pass — the panel must correctly decline
+  // with the budget-exhausted message, exactly as it would if the
+  // session had never been unmounted at all. (If remounting reset the
+  // counter to 0, this would instead show a normal "Repair N issues"
+  // proposal.)
+  it('the reconstruction pass counter survives an unmount + fresh remount — not reset to 0 by remounting', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: MAX_RECONSTRUCTION_PASSES, lastFidelityScore: 70 });
+    const button = createModule('button', 0);
+    Object.assign(button.props as Record<string, unknown>, { align: 'left', href: 'https://example.com/go', text: 'Go' });
+
+    const { unmount } = renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    unmount();
+
+    renderPanel({ documentId: 1, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(new RegExp(`already run ${MAX_RECONSTRUCTION_PASSES} reconstruction correction passes`))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Repair \d+ issue/ })).toBeNull();
+    expect(loadReconstructionSession(1)?.passesUsed).toBe(MAX_RECONSTRUCTION_PASSES);
+  });
+});
+
+describe('AIEngineerPanel — R4-C6 Original/Reconstructed/Proposed comparison', () => {
+  const RECON_HTML = '<table><tr><td align="right"><a href="https://example.com/go" style="background-color:#76c043;color:#fff;padding:20px 40px 20px 40px;">Go</a></td></tr></table>';
+
+  function driftedButton() {
+    const button = createModule('button', 0);
+    Object.assign(button.props as Record<string, unknown>, { align: 'left', paddingHorizontal: 8, href: 'https://example.com/go', text: 'Go' });
+    return button;
+  }
+
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it('the comparison panel never appears at all for an ordinary (non-reconstruction) document', () => {
+    mockSpeech();
+    renderPanel({ documentId: 999 }); // no storeReconstructionSession call
+    expect(screen.queryByRole('button', { name: /Original \/ Reconstructed/ })).toBeNull();
+  });
+
+  it('Original and Reconstructed are available as soon as a reconstruction session exists, with no pending proposal', () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    renderPanel({ documentId: 1, content: { version: 1, modules: [driftedButton()] } });
+
+    // Expanded by default.
+    expect(screen.getByRole('tab', { name: 'Original' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Reconstructed' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Proposed Improvement' })).toBeNull();
+    expect(screen.getByText(/Hide Original \/ Reconstructed comparison/)).toBeInTheDocument();
+  });
+
+  it('Proposed Improvement becomes available while a reconstruction repair proposal is pending, at the SAME document width as the other panes', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    renderPanel({ documentId: 1, width: 600, content: { version: 1, modules: [driftedButton()] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+
+    expect(screen.getByRole('tab', { name: 'Proposed Improvement' })).toBeInTheDocument();
+    expect(screen.getByText(/Hide Original \/ Reconstructed \/ Proposed Improvement comparison/)).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
+    expect(screen.getByText(/^Original imported HTML \(600px\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^Builder reconstruction \(600px\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^Proposed Improvement \(600px\)/)).toBeInTheDocument();
+  });
+
+  it('the Proposed pane never mutates the real document — Reconstructed still reflects the UN-repaired state while the proposal is only pending', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    renderPanel({ documentId: 1, width: 600, content: { version: 1, modules: [driftedButton()] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
+
+    const reconstructedIframe = screen.getByTitle('Reconstructed builder preview') as HTMLIFrameElement;
+    const proposedIframe = screen.getByTitle('Proposed improvement preview') as HTMLIFrameElement;
+    // The drifted button is left-aligned in the real (unapplied)
+    // reconstruction, right-aligned only in the pure-projection preview
+    // — proves the projection never leaked into what Reconstructed shows.
+    expect(reconstructedIframe.srcdoc).toContain('text-align:left');
+    expect(proposedIframe.srcdoc).toContain('text-align:right');
+    expect(reconstructedIframe.srcdoc).not.toBe(proposedIframe.srcdoc);
+  });
+
+  it('Proposed Improvement disappears when the proposal is Cancelled', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    renderPanel({ documentId: 1, content: { version: 1, modules: [driftedButton()] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+    expect(screen.getByRole('tab', { name: 'Proposed Improvement' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await screen.findByText('Cancelled. Nothing was changed.');
+
+    expect(screen.queryByRole('tab', { name: 'Proposed Improvement' })).toBeNull();
+    // Original/Reconstructed remain available — only Proposed disappears.
+    expect(screen.getByRole('tab', { name: 'Reconstructed' })).toBeInTheDocument();
+  });
+
+  it('Proposed Improvement disappears after Apply, and Reconstructed becomes the new (post-apply) baseline', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = driftedButton();
+    const onApplyRepairAction = vi.fn((items: RepairActionItem[]) => {
+      // Simulate the real parent mutator: apply the patches into a NEW
+      // module and hand it back as the next `content` prop, the same
+      // way EmailBuilderWorkspacePage -> useEmailBuilderState really
+      // does — proving the projected preview and the REAL post-apply
+      // reconstruction converge, not just that the proposal disappears.
+      for (const item of items) {
+        if (item.kind === 'module') Object.assign(button.props as Record<string, unknown>, item.propPatch);
+        if (item.kind === 'module-settings') Object.assign(button.settings, item.settingsPatch);
+      }
+      return true;
+    });
+    const { rerender } = render(
+      <AIEngineerPanel
+        documentId={1} editorMode="ai" platform="generic" width={600}
+        selectedModule={null} selectedColumn={null}
+        content={{ version: 1, modules: [button] }}
+        emailTitle="Recon" emailSubject="Subject" faviconUrl=""
+        resetCssEnabled customCssEnabled={false} customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={onApplyRepairAction}
+      />,
+    );
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Reconstruction fidelity is now/);
+
+    expect(screen.queryByRole('tab', { name: 'Proposed Improvement' })).toBeNull();
+
+    // Re-render with the mutated module (what the real parent would
+    // pass down on its next render) — Reconstructed now reflects it.
+    rerender(
+      <AIEngineerPanel
+        documentId={1} editorMode="ai" platform="generic" width={600}
+        selectedModule={null} selectedColumn={null}
+        content={{ version: 1, modules: [button] }}
+        emailTitle="Recon" emailSubject="Subject" faviconUrl=""
+        resetCssEnabled customCssEnabled={false} customCss=""
+        onApplyAction={vi.fn().mockReturnValue(true)}
+        onApplyDocumentSettingAction={vi.fn().mockResolvedValue(true)}
+        onApplyRepairAction={onApplyRepairAction}
+      />,
+    );
+    const reconstructedIframe = screen.getByTitle('Reconstructed builder preview') as HTMLIFrameElement;
+    expect(reconstructedIframe.srcdoc).toContain('text-align:right');
+  });
+
+  // R4-C closure hardening — "stale Proposed Improvement after Undo/Redo."
+  // reconstructionProjection (AIEngineerPanel.tsx) is a useMemo keyed on
+  // `content.modules` among its other deps — it is recomputed from
+  // scratch on every render, never cached across a content change. If
+  // the user Undoes/Redoes something ELSEWHERE while a reconstruction
+  // proposal is still pending, the NEXT render must show a preview
+  // derived from the NEW content, never the one frozen at the moment
+  // the proposal was created. This proves that end to end: rerender
+  // with a content prop an Undo could plausibly have produced (the
+  // drifted button's own align field reverted to match the source
+  // ALREADY, by something other than this proposal), and check the
+  // Proposed pane reflects THAT starting point, not the original one.
+  it('the Proposed Improvement preview re-derives from the CURRENT document if it changes while the proposal is pending (Undo/Redo elsewhere never leaves a stale preview)', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const button = driftedButton();
+    const baseProps = {
+      documentId: 1, editorMode: 'ai' as const, platform: 'generic' as const, width: 600,
+      selectedModule: null, selectedColumn: null,
+      emailTitle: 'Recon', emailSubject: 'Subject', faviconUrl: '',
+      resetCssEnabled: true, customCssEnabled: false, customCss: '',
+      onApplyAction: vi.fn().mockReturnValue(true),
+      onApplyDocumentSettingAction: vi.fn().mockResolvedValue(true),
+      onApplyRepairAction: vi.fn().mockReturnValue(true),
+    };
+    const { rerender } = render(<AIEngineerPanel {...baseProps} content={{ version: 1, modules: [button] }} />);
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
+    expect((screen.getByTitle('Proposed improvement preview') as HTMLIFrameElement).srcdoc).toContain('text-align:right');
+
+    // Simulate an Undo elsewhere: the button's own delete (target of the
+    // pending batch disappears from the tree entirely) — never once
+    // going through this proposal's own Apply/Cancel path.
+    rerender(<AIEngineerPanel {...baseProps} content={{ version: 1, modules: [] }} />);
+
+    // The proposal card itself may still be showing (this component
+    // never auto-cancels on an unrelated content change — that would be
+    // its own surprising behavior) but the preview MUST reflect reality:
+    // no button exists to preview a fix for, so the projected HTML must
+    // not still show the OLD (stale) right-aligned button markup.
+    const proposedIframeAfter = screen.getByTitle('Proposed improvement preview') as HTMLIFrameElement;
+    expect(proposedIframeAfter.srcdoc).not.toContain('text-align:right');
+  });
+
+  // R4-C closure hardening — "projected reconstruction never entering
+  // persistence/history before Apply." The Proposed pane existing (and
+  // being actively compared/viewed) must never itself call any real
+  // mutator — only an explicit Apply click may. Spies on BOTH mutator
+  // props the panel can call; neither may fire merely from a pending
+  // reconstruction proposal being generated and displayed.
+  it('a pending reconstruction proposal and its Proposed Improvement preview never call any real apply/mutation path on their own', async () => {
+    mockSpeech();
+    storeReconstructionSession({ documentId: 1, sourceHtml: RECON_HTML, documentWidthPx: 600, passesUsed: 0, lastFidelityScore: null });
+    const { onApplyAction, onApplyRepairAction, onApplyDocumentSettingAction } = renderPanel({
+      documentId: 1, width: 600, content: { version: 1, modules: [driftedButton()] },
+    });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix everything you safely can');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Repair 3 issues/);
+    await user.click(screen.getByRole('tab', { name: 'Compare' }));
+    expect(screen.getByTitle('Proposed improvement preview')).toBeInTheDocument();
+
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(onApplyRepairAction).not.toHaveBeenCalled();
+    expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
   });
 });
