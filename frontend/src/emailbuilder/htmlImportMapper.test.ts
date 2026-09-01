@@ -642,6 +642,27 @@ describe('mapImportedHtml — footer structural predicate (unsubscribe / prefere
     expect(result.modules.every((m) => !m.type.startsWith('footer-'))).toBe(true);
     expect(findingsOf('security', result).some((f) => f.source === '<script>')).toBe(true);
   });
+
+  // R4-D Checkpoint D3 — a real bug found during live QA: this exact
+  // shape ("123 Main St, Springfield<br><a>Unsubscribe</a> | <a>Privacy
+  // Policy</a>" — an address as a BARE text node, not wrapped in a <p>)
+  // is an extremely common real-world sender-footer pattern. Before the
+  // fix, collectFooterSignals only ever read text from wrapping
+  // <p>/<div>/... elements, so the address contributed nothing —
+  // companyName stayed empty and the footer module silently fell back to
+  // its own factory-default company/legal text while the reconstruction
+  // review still reported the Content category as fully preserved.
+  it('a bare (unwrapped) text node inside the footer cell — a common real-world address-line pattern — is preserved as the company name, not silently replaced by the module default', () => {
+    const html = '<table><tr><td>'
+      + '123 Main St, Springfield<br>'
+      + '<a href="https://example.com/unsubscribe">Unsubscribe</a> | '
+      + '<a href="https://example.com/privacy">Privacy Policy</a>'
+      + '</td></tr></table>';
+    const result = mapImportedHtml(parse(html));
+    expect(result.modules).toHaveLength(1);
+    const props = result.modules[0].props as { companyName: string };
+    expect(props.companyName).toBe('123 Main St, Springfield');
+  });
 });
 
 describe('mapImportedHtml — malformed-but-recoverable HTML (regression)', () => {

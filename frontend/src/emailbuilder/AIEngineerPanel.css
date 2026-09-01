@@ -346,6 +346,14 @@
   word-break: break-word;
 }
 
+/* R4-D Checkpoint D3 — the ordinary (non-repair) proposal card's own
+   before/after diff, reusing the repair card's dl/dt/dd grid for visual
+   consistency; only the outer spacing differs (this sits directly in the
+   proposal card body, not inside a bordered repair-item). */
+.ai-engineer-panel__proposal-diff {
+  margin: 0 0 var(--space-3);
+}
+
 .ai-engineer-panel__strong-confirm {
   display: flex;
   align-items: flex-start;

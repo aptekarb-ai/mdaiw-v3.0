@@ -1067,10 +1067,32 @@ function collectFooterSignals(cell: Element): FooterSignals {
 
   const blocks = resolveTransparent(directChildElements(cell))
     .filter((el) => /^(p|div|span|center|h[1-6])$/.test(el.tagName.toLowerCase()));
-  const textLines = blocks
+  const blockTextLines = blocks
     .filter((el) => !consumedAnchors.some((a) => el.contains(a)))
     .map((el) => textFromInlineContent(el))
     .filter(isNonEmptyText);
+
+  // R4-D Checkpoint D3 — a real bug found during live QA: a footer whose
+  // address/legal text is a BARE text node directly inside the cell
+  // ("123 Main St, Springfield<br><a>Unsubscribe</a>" — no wrapping
+  // <p>/<div>, extremely common in real-world sender footers) was
+  // silently dropped here. `blocks` above only ever looks at ELEMENT
+  // children, so a bare text node contributed nothing to `textLines`,
+  // `companyName` stayed empty, and the footer module fell back to its
+  // own factory default company/legal text — while the fidelity report
+  // still claimed "Content: Preserved" (no finding was ever generated
+  // for this, because nothing here recognized a loss occurred). Fixed by
+  // also collecting the cell's own direct TEXT-NODE children as
+  // candidate lines. Deliberately narrow: this does not attempt to
+  // recombine bare text that sits on the SAME line as a consumed anchor
+  // (e.g. a bare " | " separator between two links) — filterable noise
+  // like that is exactly why bare text is appended AFTER the more
+  // structured block lines rather than replacing them.
+  const bareTextLines = Array.from(cell.childNodes)
+    .filter((node): node is Text => node.nodeType === Node.TEXT_NODE)
+    .map((node) => (node.textContent ?? '').trim())
+    .filter(isNonEmptyText);
+  const textLines = [...blockTextLines, ...bareTextLines];
 
   return {
     companyName: textLines[0] ?? '',

@@ -373,7 +373,12 @@ function checkLinksAndImages(html: string, content: EmailDocumentContent): Valid
       category: 'links',
       severity: 'error',
       title: 'Placeholder link',
-      detail: `${count} link${count === 1 ? '' : 's'} still point to a placeholder URL.`,
+      // R4-D Checkpoint D3 — a real grammar bug found during live QA: for
+      // exactly 1 placeholder link this used to read "1 link still point
+      // to a placeholder URL." (subject-verb agreement dropped for the
+      // singular case, while "links ... point" was already correct for
+      // the plural).
+      detail: `${count} link${count === 1 ? '' : 's'} still ${count === 1 ? 'points' : 'point'} to a placeholder URL.`,
       // First affected module — "Go to module" jumps here; AI Engineer
       // must ask for the real destination for THIS module rather than
       // inventing one (see the C-3 remediation comment above).

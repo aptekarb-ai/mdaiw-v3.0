@@ -219,6 +219,67 @@ function cssProposalDetails(
   }
 }
 
+// R4-D Checkpoint D3 — a real gap found during live QA: the document-scope
+// actions above (SET_CUSTOM_CSS, SET_EMAIL_TITLE, ...) already show a real
+// Current/Proposed diff before Apply, but the far more common MODULE-scope
+// property/settings actions ("make this button green", "give this button
+// 24px padding") showed only a generic sentence like "Update the selected
+// button module's settings (desktop)" — the actual before/after VALUES
+// were never surfaced, so the user had no way to verify what would change
+// without applying it first. This reuses data ALREADY on hand (the live
+// `selectedModule` prop this component already receives) — no new backend
+// field, no second diff engine. Settings patches are nested one level by
+// device (`{desktop: {paddingTop: 24, ...}}` — see EmailModuleSettings),
+// so those rows get a "(desktop)"/"(mobile)" suffix; prop patches are flat.
+// APPLY_GLOBAL_STYLE touches every module of a type at once, so a single
+// "before" value would be misleading if those modules currently disagree —
+// shown as "(varies per module)" instead of a fabricated single value.
+interface ModulePatchDiffRow {
+  label: string;
+  before: string;
+  after: string;
+}
+
+function humanizePatchKey(key: string): string {
+  const spaced = key.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+function formatPatchValue(value: unknown): string {
+  if (value === undefined || value === null) return '(not set)';
+  if (typeof value === 'string' && value.trim() === '') return '(empty)';
+  return String(value);
+}
+
+function modulePatchDiffRows(action: AICommandAction, selectedModule: EmailModule | null): ModulePatchDiffRow[] | null {
+  if (action.type === 'UPDATE_MODULE_PROPS' || action.type === 'REPLACE_UNSUPPORTED_PROPERTY') {
+    const currentProps = (selectedModule?.props ?? {}) as Record<string, unknown>;
+    return Object.entries(action.patch).map(([key, after]) => ({
+      label: humanizePatchKey(key), before: formatPatchValue(currentProps[key]), after: formatPatchValue(after),
+    }));
+  }
+  if (action.type === 'UPDATE_MODULE_SETTINGS') {
+    const currentSettings = (selectedModule?.settings ?? {}) as Record<string, unknown>;
+    const rows: ModulePatchDiffRow[] = [];
+    for (const [device, devicePatch] of Object.entries(action.patch)) {
+      if (!devicePatch || typeof devicePatch !== 'object') continue;
+      const currentDevice = (currentSettings[device] ?? {}) as Record<string, unknown>;
+      for (const [key, after] of Object.entries(devicePatch as Record<string, unknown>)) {
+        rows.push({
+          label: `${humanizePatchKey(key)} (${device})`, before: formatPatchValue(currentDevice[key]), after: formatPatchValue(after),
+        });
+      }
+    }
+    return rows;
+  }
+  if (action.type === 'APPLY_GLOBAL_STYLE') {
+    return Object.entries(action.patch).map(([key, after]) => ({
+      label: humanizePatchKey(key), before: '(varies per module)', after: formatPatchValue(after),
+    }));
+  }
+  return null;
+}
+
 // Sub-phase 7 — one readable line per top-level composition item, so the
 // proposal card shows enough for the user to understand what will be
 // created BEFORE Apply (master-prompt "proposal-before-apply" contract),
@@ -732,6 +793,11 @@ export function AIEngineerPanel({
       return;
     }
 
+    // Sub-phase 4, item 2/4 (extended E9/E10) — computed here (rather than
+    // at its own block below) so the reconstruction-repair check next can
+    // consult it — see that block's own comment for why.
+    const intentMatch = matchDocumentIntent(message);
+
     // R4-C3/C4 — reconstruction repair commands ("fix everything you
     // safely can", "use the original spacing", ...), recognized and
     // answered ENTIRELY LOCALLY, exactly like the document-intent block
@@ -743,7 +809,24 @@ export function AIEngineerPanel({
     // fidelity gaps, the more specific and currently relevant reading,
     // not the generic validation-issue repair matchDocumentIntent's own
     // 'repair-all-safe' pattern would otherwise claim.
-    if (reconstructionSessionRef.current) {
+    //
+    // R4-D Checkpoint D3 — a real bug found during live QA: a message
+    // naming a SPECIFIC validation issue by name right after that issue
+    // was handed off from Validation Center ("Ask AI Engineer" on
+    // "Placeholder link", then "fix the placeholder link") was swallowed
+    // by this block purely because it also contains a reconstruction
+    // CATEGORY_KEYWORDS hit ("link" -> the 'links' fidelity category),
+    // giving a generic "nothing safely repairable" reconstruction-scoped
+    // reply instead of matchDocumentIntent's own 'repair-keyword' path,
+    // which correctly names the actual issue and gives real next steps.
+    // Deliberately narrow: this only defers to matchDocumentIntent when
+    // (a) a validation issue was JUST discussed (lastDiscussedIssueIdRef
+    // — the same explicit handoff/selection signal the block below
+    // already uses) AND (b) the message actually parses as a document
+    // intent at all — every other reconstruction-repair phrase, on any
+    // document, in any other context, is completely unaffected.
+    const deferToValidationIntent = Boolean(lastDiscussedIssueIdRef.current) && Boolean(intentMatch);
+    if (reconstructionSessionRef.current && !deferToValidationIntent) {
       const reconIntent = matchReconstructionIntent(message);
       if (reconIntent) {
         const session = reconstructionSessionRef.current;
@@ -802,7 +885,8 @@ export function AIEngineerPanel({
     // the wire for no benefit. An unmatched message falls through
     // unchanged to the normal backend-routed command flow below —
     // module/CSS/title/subject/favicon commands are entirely unaffected.
-    const intentMatch = matchDocumentIntent(message);
+    // (`intentMatch` itself is computed earlier now — see the
+    // reconstruction-repair block's own D3 comment for why.)
     if (intentMatch && validationReport) {
       const selectedIssue = lastDiscussedIssueIdRef.current
         ? validationReport.issues.find((issue) => issue.id === lastDiscussedIssueIdRef.current) ?? null
@@ -1389,6 +1473,16 @@ export function AIEngineerPanel({
                 pending.action, resetCssEnabled, customCssEnabled, customCss, emailTitle, emailSubject, faviconUrl,
               );
               const compositionLines = compositionSummaryLines(pending.action);
+              // Only compute a module before/after diff when the LIVE
+              // selection still matches what this proposal was built
+              // against — a selection change since the proposal was
+              // created (the same staleness onApplyAction's own "Could
+              // not apply — the canvas selection changed" failure path
+              // already guards against) would otherwise show another
+              // module's current values as if they were this one's.
+              const diffRows = selectedModule?.id === pending.capturedSelectedModuleId
+                ? modulePatchDiffRows(pending.action, selectedModule)
+                : null;
               const applyBlocked = resolving || (pending.requiresStrongConfirmation && !strongConfirmChecked);
               return (
                 <div
@@ -1428,6 +1522,17 @@ export function AIEngineerPanel({
                         </ul>
                       )}
                     </div>
+                  )}
+
+                  {diffRows && diffRows.length > 0 && (
+                    <dl className="ai-engineer-panel__repair-item-meta ai-engineer-panel__proposal-diff">
+                      {diffRows.map((row) => (
+                        <div key={row.label}>
+                          <dt>{row.label}</dt>
+                          <dd>{row.before} → {row.after}</dd>
+                        </div>
+                      ))}
+                    </dl>
                   )}
 
                   {compositionLines && (

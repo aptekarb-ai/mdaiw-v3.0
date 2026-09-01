@@ -2442,7 +2442,7 @@ describe('AIEngineerPanel — R4-D Checkpoint D2: Conversational Undo', () => {
 
     const a = renderPanel({ documentId: 1, canUndo: true, onUndo: docAOnUndo });
     a.unmount();
-    const { } = renderPanel({ documentId: 2, canUndo: true, onUndo: docBOnUndo });
+    renderPanel({ documentId: 2, canUndo: true, onUndo: docBOnUndo });
     const user = userEvent.setup();
 
     await user.type(screen.getByPlaceholderText(/Type your command/), 'undo');
@@ -2466,5 +2466,74 @@ describe('AIEngineerPanel — R4-D Checkpoint D2: Conversational Undo', () => {
     expect(onApplyAction).not.toHaveBeenCalled();
     expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
     expect(onApplyRepairAction).not.toHaveBeenCalled();
+  });
+});
+
+// R4-D Checkpoint D3 — a real bug found during live QA: on a document
+// with an active reconstruction session, a message naming a
+// just-discussed VALIDATION issue by name ("fix the placeholder link")
+// was swallowed by the reconstruction-repair local matcher purely
+// because it also contains a reconstruction CATEGORY_KEYWORDS hit
+// ("link" -> the 'links' fidelity category) — giving a generic,
+// unhelpful "nothing safely repairable" reconstruction-scoped reply
+// instead of matchDocumentIntent's own 'repair-keyword' path, which
+// correctly names the actual validation issue and gives real next
+// steps. Fixed by deferring to matchDocumentIntent whenever a
+// validation issue was JUST discussed (the same lastDiscussedIssueIdRef
+// signal the document-intent block already reads) AND the message
+// parses as a document intent at all.
+describe('AIEngineerPanel — R4-D Checkpoint D3: validation-issue intent takes precedence over a reconstruction category-keyword collision', () => {
+  afterEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  function buttonModuleWithPlaceholderLink() {
+    const button = createModule('button', 0);
+    return { ...button, props: { ...button.props, href: '' } };
+  }
+
+  it('"fix the placeholder link", sent right after that issue was handed off from Validation Center, routes to the validation repair-keyword reply — never the reconstruction matcher\'s generic "nothing safely repairable" reply', async () => {
+    mockSpeech();
+    storeReconstructionSession({
+      documentId: 1, sourceHtml: '<table><tr><td>Hello</td></tr></table>', documentWidthPx: 600,
+      passesUsed: 0, lastFidelityScore: null,
+    });
+    const button = buttonModuleWithPlaceholderLink();
+    const tracker = createConsumedHandoffTracker();
+    renderPanel({
+      documentId: 1,
+      content: { version: 1, modules: [button] },
+      aiEngineerHandoff: createAIEngineerHandoff(
+        1, 'Explain this issue and, if possible, fix it: Placeholder link — 1 link still points to a placeholder URL.',
+        'links:placeholder-href',
+      ),
+      onConsumeAiEngineerHandoff: tracker.tryConsume,
+    });
+    await screen.findByText('Placeholder link: 1 link still points to a placeholder URL.');
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix the placeholder link');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText(/I found the issue — Placeholder link/);
+    expect(screen.queryByText(/Everything I can safely repair/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/nothing safely repairable/)).not.toBeInTheDocument();
+  });
+
+  it('the SAME reconstruction category-keyword phrasing still reaches the reconstruction matcher when no validation issue was just discussed', async () => {
+    mockSpeech();
+    storeReconstructionSession({
+      documentId: 1, sourceHtml: '<table><tr><td>Hello</td></tr></table>', documentWidthPx: 600,
+      passesUsed: 0, lastFidelityScore: null,
+    });
+    renderPanel({ documentId: 1, content: { version: 1, modules: [] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'fix the links');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // No validation issue was discussed, so this is unaffected by the D3
+    // fix — it still reaches the reconstruction matcher exactly as before.
+    await screen.findByText(/safely repair/);
   });
 });

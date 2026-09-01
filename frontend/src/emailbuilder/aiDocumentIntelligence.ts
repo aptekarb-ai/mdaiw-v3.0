@@ -99,6 +99,18 @@ const REPAIR_KEYWORD_HINTS: [RegExp, string][] = [
   [/\bconditional\s*comment\b/i, 'conditional-comment'],
   [/\btitle\b/i, 'missing-title'],
   [/\bsubject\b/i, 'missing-subject'],
+  // R4-D Checkpoint D3 — a real gap found during live QA: "fix the
+  // placeholder link" (the exact phrasing Validation Center's own
+  // "Placeholder link" issue title invites) had no entry here at all, so
+  // it always fell through to the honest-but-wrong "I could not find a
+  // matching problem in this document" reply, even though the issue was
+  // right there in the report. This issue's own fixType is 'manual' (it
+  // needs a real destination URL the AI must never invent — see
+  // ai_command.py's placeholder-link guardrail), so matching it here
+  // still cannot produce an auto-fix candidate; it upgrades the reply
+  // from "no matching problem" to correctly naming the issue and its
+  // "does not have a safe, fully-automatic fix" guidance instead.
+  [/\bplaceholder\b/i, 'placeholder-href'],
 ];
 
 export function matchDocumentIntent(message: string): DocumentIntentMatch | null {
