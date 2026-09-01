@@ -19,6 +19,8 @@ import { formatReconstructionReviewMessage } from './reconstructionReview';
 import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } from './learningSignals';
 import { toRepairCandidate } from './reconstructionRepairCandidate';
 import { matchReconstructionIntent } from './reconstructionIntentMatcher';
+import { analyzeImportedHtml } from './htmlImportAnalysis';
+import { buildImportReconstructionContext } from './importReconstructionContext';
 import {
   MAX_RECONSTRUCTION_PASSES, projectModulesWithCandidates, runReconstructionPass, shouldStopCorrectionLoop,
 } from './reconstructionCorrectionLoop';
@@ -756,6 +758,31 @@ export function AIEngineerPanel({
         }]);
       }
       return;
+    }
+
+    // R4-D Checkpoint D1 live-QA fix — a real bug, not a D1 feature:
+    // importReconstructionContextRef (see its own declaration comment
+    // above) was only ever populated from the one-shot import handoff, so
+    // navigating away from this document and back — completely ordinary,
+    // not just a page reload — silently lost it on every later turn, even
+    // though reconstructionSessionRef (and therefore the comparison UI and
+    // the "fix everything you can" repair loop just above) survives that
+    // exact same navigation via sessionStorage. That broke the request
+    // payload's own documented promise a few dozen lines below ("present
+    // on every turn for an import-reconstruction conversation, not just
+    // the seeded first one") for every turn after the first in a
+    // reconstruction conversation resumed from a fresh mount. Backfilled
+    // here, once per mount, from the exact same persisted source facts
+    // (sourceHtml/documentWidthPx) reconstructionFidelity above already
+    // re-derives — never a second analysis engine, just reusing
+    // buildImportReconstructionContext (the one existing function that
+    // condenses DetectedStructure+FidelityReport into this wire shape,
+    // already used for the handoff's own first-turn context).
+    if (!importReconstructionContextRef.current && reconstructionSessionRef.current && reconstructionFidelity) {
+      const session = reconstructionSessionRef.current;
+      const sourceDoc = new DOMParser().parseFromString(session.sourceHtml, 'text/html');
+      const structure = analyzeImportedHtml(sourceDoc, session.documentWidthPx);
+      importReconstructionContextRef.current = buildImportReconstructionContext(structure, reconstructionFidelity, content.modules.length);
     }
 
     // R4-B3 §B — the Referential Context Resolver, run entirely locally

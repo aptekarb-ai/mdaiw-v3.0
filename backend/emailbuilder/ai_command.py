@@ -1766,6 +1766,69 @@ def compute_reconstruction_explain_result(context):
     return CommandResult(reply=' '.join(parts), action={'type': ActionType.NONE}, confidence=0.8)
 
 
+# R4-D Checkpoint D1-B — IMPROVE_IMPORT_RECONSTRUCTION's executor.
+# Deliberately NEVER mutates (action is always NONE) — this request's
+# own `context['import_reconstruction']` is the SAME bounded, category-
+# level summary compute_reconstruction_explain_result already reads
+# (fidelity_categories: 8 entries, each one of 'preserved'/'normalized'/
+# 'approximated'/'removed'/'unsupported' — see htmlImportFidelity.ts's
+# own FidelityStatus type), never the live module tree or the raw
+# source HTML. Building a real, per-property repair candidate needs
+# BOTH of those — that is exactly why R4-C's real candidate generation/
+# Apply flow is 100% frontend (reconstructionCorrectionLoop.ts) and
+# stays there; this function's only honest job is to (a) confirm the
+# request was understood, (b) summarize what genuinely needs attention
+# using ONLY the category-level facts this request actually carries,
+# and (c) point at where the real fix lives — never claim to have
+# fixed anything, never invent a per-item repairable/not-repairable
+# verdict this payload cannot support. In practice this path is a
+# graceful-degradation safety net: the FRONTEND's own local matcher
+# (reconstructionIntentMatcher.ts, now multilingual per D1-C) already
+# intercepts "fix everything you safely can" and its close variants in
+# en/hi/es/fr BEFORE any network request — see that file's own
+# docstring — so this backend path is reached only for a phrasing/
+# language the bounded local matcher does not (yet) cover.
+def compute_improve_reconstruction_result(context):
+    context = context if isinstance(context, dict) else {}
+    reconstruction = context.get('import_reconstruction')
+    if not isinstance(reconstruction, dict):
+        return CommandResult(
+            reply='This conversation has no imported-email reconstruction to improve yet.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    categories = reconstruction.get('fidelity_categories')
+    if not isinstance(categories, list) or not categories:
+        return CommandResult(
+            reply='I have reconstruction context, but no per-category fidelity summary to work from yet.',
+            action={'type': ActionType.NONE}, confidence=0.3,
+        )
+    approximated = [c for c in categories if isinstance(c, dict) and c.get('status') == 'approximated']
+    removed = [c for c in categories if isinstance(c, dict) and c.get('status') == 'removed']
+    unsupported = [c for c in categories if isinstance(c, dict) and c.get('status') == 'unsupported']
+    needs_attention = approximated + removed + unsupported
+    if not needs_attention:
+        return CommandResult(
+            reply=(
+                'Everything I can check is already preserved or safely normalized — there is nothing left '
+                'for me to safely fix.'
+            ),
+            action={'type': ActionType.NONE}, confidence=0.8,
+        )
+    lines = ["I'll go through what still needs attention:"]
+    for c in approximated:
+        lines.append(f"- {c.get('id')}: approximation — {c.get('summary')}")
+    for c in removed:
+        lines.append(f"- {c.get('id')}: removed — {c.get('summary')}")
+    for c in unsupported:
+        lines.append(f"- {c.get('id')}: unsupported — {c.get('summary')}")
+    lines.append(
+        'Open the reconstruction comparison panel and ask me to "fix everything you safely can" there — '
+        'I will show you the exact safe repairs as a proposal before anything changes, and be upfront about '
+        'whatever this builder genuinely cannot reproduce exactly.'
+    )
+    return CommandResult(reply='\n'.join(lines), action={'type': ActionType.NONE}, confidence=0.8)
+
+
 # R4-B4 Closure §B/§C — builds a canonical mutation proposal from a
 # property value the FRONTEND has already read from a resolved source
 # module/column (see frontend/src/emailbuilder/referenceResolver.ts's
@@ -1963,6 +2026,8 @@ def apply_canonical_intent(intent, context, message=''):
         return compute_column_ratio_result(selected_type, lowered)
     if intent == CanonicalIntent.SET_IMAGE:
         return compute_set_image_result(selected_type, text)
+    if intent == CanonicalIntent.IMPROVE_IMPORT_RECONSTRUCTION:
+        return compute_improve_reconstruction_result(context)
     return None
 
 
@@ -2666,13 +2731,50 @@ class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
         self._localization_client_factory = localization_client_factory
 
     def resolve(self, message, context):
-        from .intent_normalization import EXECUTABLE_INTENTS, normalize_intent
+        from .intent_normalization import CanonicalIntent, EXECUTABLE_INTENTS, is_explanation_seeking, normalize_intent
+
+        # R4-D Checkpoint D1-A/D1-C — the two reconstruction-conversation
+        # intents have NO independent English equivalent anywhere else
+        # in this provider chain (unlike every other canonical intent,
+        # which already has its own working English path inside
+        # RuleBasedEmailCommandProvider — see that class's own
+        # docstring). Checked regardless of language, unlike the
+        # `language != 'en'`-gated dispatch below, so "fix everything
+        # you safely can"/"what changed during import" behave
+        # identically whether the message is English or hi/es/fr — see
+        # compute_improve_reconstruction_result's own docstring for why
+        # this never itself mutates.
+        language_unconditional_intents = frozenset({
+            CanonicalIntent.COMPARE_IMPORT_RECONSTRUCTION, CanonicalIntent.IMPROVE_IMPORT_RECONSTRUCTION,
+        })
 
         intent, _confidence, language = normalize_intent(message)
+
+        if intent in language_unconditional_intents:
+            result = apply_canonical_intent(intent, context, message)
+            if result is not None:
+                return self._localize(result, language) if language != 'en' else result
+
         if intent in EXECUTABLE_INTENTS and language != 'en':
             result = apply_canonical_intent(intent, context, message)
             if result is not None:
                 return self._localize(result, language)
+
+        # R4-D Checkpoint D1-A — a reconstruction-context question that
+        # didn't literally match COMPARE_IMPORT_RECONSTRUCTION's own
+        # (necessarily bounded) phrase list still deserves a real,
+        # context-aware answer rather than silence or a wrong mutation
+        # attempt — "Why is this button different?", "What changed
+        # here?" and similar unpredictable phrasings all land here.
+        # Language-unconditional for the same reason as above (English
+        # has no equivalent catch-all elsewhere in this chain either).
+        if (
+            intent is None and is_explanation_seeking(message, language)
+            and isinstance(context, dict) and context.get('import_reconstruction')
+        ):
+            result = compute_reconstruction_explain_result(context)
+            return self._localize(result, language) if language != 'en' else result
+
         return self.fallback.resolve(message, context)
 
     def _localize(self, result, language):
