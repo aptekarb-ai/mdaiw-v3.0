@@ -242,6 +242,97 @@ class SavedEmailModule(models.Model):
         return f'{self.name} (user={self.user_id})'
 
 
+def email_attachment_upload_path(instance, filename):
+    extension = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'bin'
+    return f'email_attachments/{uuid.uuid4().hex}.{extension}'
+
+
+class EmailAttachmentType(models.TextChoices):
+    TEXT = 'text', 'Text (.txt)'
+    CSV = 'csv', 'CSV (.csv)'
+    MARKDOWN = 'markdown', 'Markdown (.md)'
+    PDF = 'pdf', 'PDF (.pdf)'
+    DOCX = 'docx', 'Word Document (.docx)'
+    XLSX = 'xlsx', 'Excel Workbook (.xlsx)'
+    IMAGE = 'image', 'Image'
+
+
+class EmailAttachmentStatus(models.TextChoices):
+    READY = 'ready', 'Ready'
+    FAILED = 'failed', 'Failed'
+
+
+class EmailAttachment(models.Model):
+    """Feature 14 V4 / D4-B — Email AI Engineer attachment/input ingestion.
+    Same manual-ownership convention as EmailDocument/EmailAsset/
+    SavedEmailModule: another user's attachment id is filtered out before
+    lookup (404, not 403).
+
+    D4-B hardening — every attachment belongs to exactly one EmailDocument
+    (the AI Engineer conversation it was uploaded into), reusing the
+    existing document model rather than inventing a second one. `document`
+    is required (never null): the create endpoint validates the caller
+    owns that document BEFORE any file validation/extraction runs (see
+    views.EmailAttachmentViewSet.create). Listing is document-scoped —
+    get_queryset() returns nothing for `list` unless `?document=<id>` is
+    given, so Document A's attachments can never appear while browsing
+    Document B (see the D4-B hardening report for the live-verified
+    isolation behaviour).
+
+    Deliberately does NOT persist extracted text/facts. Extraction is
+    synchronous — it runs exactly once, inline, during upload — and the
+    resulting ExtractedFact list (see attachment_extraction.py) is
+    returned directly in the create response only, never written to this
+    row. This keeps a stored attachment's privacy/storage footprint to
+    metadata only, per the conservative-persistence directive for D4-B.
+    `extraction_meta` holds ONLY small structural counts (page/sheet
+    counts, row counts, image dimensions, header guesses) for chip
+    display — never body text, cell values, or paragraph content.
+    `warnings` holds only the short, structural warning strings the
+    extractor already produces (e.g. "Only the first 30 pages were
+    processed") — never content. Both exist so a remounted AI Engineer
+    panel can restore a metadata-only chip (id/filename/detected type/
+    status/size/warnings/error) for the current document without
+    re-reading the file or persisting anything beyond what was already
+    safe to keep. D4-C (EmailBrief construction) is expected to consume
+    the create response's facts client-side/request-scoped, not re-fetch
+    them from this model.
+
+    No EmailBrief, no COMPOSE_EMAIL, no document mutation is ever
+    triggered by this model or its viewset — see attachment_extraction.py's
+    module docstring and test_attachments.py's import-graph assertion."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='email_attachments',
+    )
+    document = models.ForeignKey(
+        EmailDocument,
+        on_delete=models.CASCADE,
+        related_name='attachments',
+    )
+    original_filename = models.CharField(max_length=255)
+    file = models.FileField(upload_to=email_attachment_upload_path)
+    detected_type = models.CharField(max_length=20, choices=EmailAttachmentType.choices)
+    content_type = models.CharField(max_length=100, blank=True, default='')
+    size = models.PositiveIntegerField()
+    status = models.CharField(max_length=20, choices=EmailAttachmentStatus.choices)
+    error_message = models.CharField(max_length=300, blank=True, default='')
+    extraction_meta = models.JSONField(default=dict, blank=True)
+    warnings = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['document', 'user', 'created_at'], name='emailattachment_doc_idx'),
+        ]
+
+    def __str__(self):
+        return f'{self.original_filename} (user={self.user_id}, document={self.document_id})'
+
+
 class RepairSignalOutcome(models.TextChoices):
     ACCEPTED = 'accepted', 'Accepted'
     REJECTED = 'rejected', 'Rejected'

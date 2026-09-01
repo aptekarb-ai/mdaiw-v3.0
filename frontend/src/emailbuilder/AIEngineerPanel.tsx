@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { requestAICommand } from '../api/client';
+import {
+  createEmailAttachment, deleteEmailAttachment, listEmailAttachments, requestAICommand,
+} from '../api/client';
+import type { ApiError } from '../types/auth';
+import type { EmailAttachmentType } from './types';
 import { ImportReviewWorkspace } from './ImportReviewWorkspace';
 import { renderSanitizedSourceHtml } from './htmlImportSanitize';
 import { isSpeechRecognitionSupported, useSpeechRecognition } from '../hooks/useSpeechRecognition';
@@ -45,6 +49,35 @@ interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+}
+
+// D4-B (Feature 14 V4) — one attached file's client-side lifecycle.
+// 'selected' briefly precedes the network call; 'uploading' spans the
+// single synchronous upload+extract request (see attachment_extraction.py's
+// module docstring on the backend — there is no separate server-side
+// "extracting" phase the client can observe, so this deliberately does
+// not fabricate one); 'ready'/'unsupported'/'failed' come straight from
+// the server response. `factCount`/`warnings` are chip-display summaries
+// only — the full ExtractedFact[] from the response is intentionally NOT
+// retained in this state; D4-B stops at "attachment appears in the
+// conversation", never builds an EmailBrief or touches document content.
+//
+// D4-B hardening — `filename` (not the original `File` object): once
+// upload completes, only the name is ever displayed again, and a chip
+// RESTORED from the server (see the documentId effect below) never had a
+// browser File object in the first place — the backend never returns
+// file bytes. `factCount` stays undefined for a restored chip (facts are
+// never persisted — see models.EmailAttachment's docstring), so its chip
+// reads plain "Ready" rather than claiming a stale/fabricated count.
+interface AttachmentChip {
+  clientId: string;
+  filename: string;
+  status: 'selected' | 'uploading' | 'ready' | 'unsupported' | 'failed';
+  serverId?: number;
+  detectedType?: EmailAttachmentType;
+  errorMessage?: string;
+  warnings?: string[];
+  factCount?: number;
 }
 
 interface PendingProposal {
@@ -139,6 +172,42 @@ let nextId = 0;
 function newId(prefix: string): string {
   nextId += 1;
   return `${prefix}-${nextId}`;
+}
+
+// D4-B — pure display helpers for AttachmentChip; no component state, so
+// these live at module scope like newId() above.
+function attachmentChipIconClass(status: AttachmentChip['status']): string {
+  switch (status) {
+    case 'uploading':
+      return 'mdaiw-icon--spinner ai-engineer-panel__attachment-chip-icon--spin';
+    case 'ready':
+      return 'mdaiw-icon--check-circle';
+    case 'unsupported':
+      return 'mdaiw-icon--warning';
+    case 'failed':
+      return 'mdaiw-icon--error-circle';
+    default:
+      return 'mdaiw-icon--file';
+  }
+}
+
+function attachmentChipStatusText(chip: AttachmentChip): string {
+  switch (chip.status) {
+    case 'selected':
+      return 'Selected';
+    case 'uploading':
+      return 'Uploading & extracting…';
+    case 'ready': {
+      if (!chip.factCount) return 'Ready';
+      return `Ready · ${chip.factCount} item${chip.factCount === 1 ? '' : 's'} found`;
+    }
+    case 'unsupported':
+      return chip.errorMessage || 'Unsupported file type.';
+    case 'failed':
+      return chip.errorMessage || 'Could not process this file.';
+    default:
+      return '';
+  }
 }
 
 interface CssProposalDetails {
@@ -344,6 +413,54 @@ export function AIEngineerPanel({
   const [history, setHistory] = useState<AIActionHistoryEntry[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  // D4-B hardening — attachments are document-scoped server-side (see
+  // models.EmailAttachment), and RESTORED here whenever `documentId`
+  // changes (mount, remount, or a document switch within the same
+  // mounted instance) via the effect below. Only metadata is restored
+  // (id/filename/detected type/status/size/warnings/error) — never
+  // facts, which the backend never persisted in the first place.
+  const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
+  const attachmentFileInputRef = useRef<HTMLInputElement>(null);
+  // Guards against a slow, stale list() response from a PREVIOUS
+  // documentId landing after the user has already switched documents
+  // again — "latest documentId wins", same pattern as every other
+  // async-response-vs-fast-navigation race in this codebase.
+  const attachmentDocumentIdRef = useRef(documentId);
+
+  useEffect(() => {
+    attachmentDocumentIdRef.current = documentId;
+    // A document switch must clear the OLD document's chips immediately
+    // (not wait for the new list() to resolve) — otherwise Document A's
+    // chips would remain visible, misattributed, for one frame/until the
+    // network responds, which is exactly the leak this hardening pass
+    // closes.
+    setAttachments([]);
+    let cancelled = false;
+    void listEmailAttachments(documentId)
+      .then((records) => {
+        if (cancelled || attachmentDocumentIdRef.current !== documentId) return;
+        setAttachments(records.map((record) => ({
+          clientId: newId('attachment'),
+          filename: record.original_filename,
+          // The backend only ever persists 'ready'/'failed' — an
+          // 'unsupported' upload is rejected before a row is created
+          // (see attachment_validation.py), so it can never be restored.
+          status: record.status === 'ready' ? 'ready' : 'failed',
+          serverId: record.id,
+          detectedType: record.detected_type,
+          errorMessage: record.error_message,
+          warnings: record.warnings,
+        })));
+      })
+      .catch(() => {
+        // Best-effort restore only — a failed list() leaves the chip row
+        // empty rather than blocking the panel or showing a scary error
+        // for what is, at worst, "your attachments didn't come back."
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [documentId]);
   // R4-B2 §24 — "In AI Engineer, later expose a subtle status: Local AI
   // when the local intelligence engine is active." Deliberately just the
   // last-seen provider id from an actual backend response, not a
@@ -655,6 +772,65 @@ export function AIEngineerPanel({
       const spoken = speakableSummary(text);
       if (spoken) voice.speak(spoken);
     }
+  }
+
+  // D4-B — one file, one upload+extract request. Never blocks the
+  // composer/Send flow (attachments upload independently of `sending`),
+  // and never touches `messages`/document content — see AttachmentChip's
+  // docstring above.
+  async function uploadAttachment(file: File) {
+    const clientId = newId('attachment');
+    setAttachments((current) => [...current, { clientId, filename: file.name, status: 'uploading' }]);
+    try {
+      const response = await createEmailAttachment(file, documentId);
+      setAttachments((current) => current.map((chip) => (
+        chip.clientId === clientId
+          ? {
+            ...chip,
+            status: response.attachment.status === 'ready' ? 'ready' : 'failed',
+            serverId: response.attachment.id,
+            detectedType: response.attachment.detected_type,
+            errorMessage: response.attachment.error_message,
+            warnings: response.warnings,
+            factCount: response.facts.length,
+          }
+          : chip
+      )));
+    } catch (caught) {
+      const apiError = caught as ApiError;
+      const unsupported = apiError.code === 'UNSUPPORTED_FILE_TYPE';
+      setAttachments((current) => current.map((chip) => (
+        chip.clientId === clientId
+          ? {
+            ...chip,
+            status: unsupported ? 'unsupported' : 'failed',
+            errorMessage: apiError.message ?? 'This file could not be uploaded.',
+          }
+          : chip
+      )));
+    }
+  }
+
+  function handleAttachClick() {
+    attachmentFileInputRef.current?.click();
+  }
+
+  function handleAttachmentFilesSelected(fileList: FileList | null) {
+    for (const file of Array.from(fileList ?? [])) {
+      void uploadAttachment(file);
+    }
+  }
+
+  function handleRemoveAttachment(clientId: string) {
+    setAttachments((current) => {
+      const target = current.find((chip) => chip.clientId === clientId);
+      // Best-effort server cleanup — a failed delete never blocks the
+      // chip from disappearing; removal is a client-side UI action first.
+      if (target?.serverId) {
+        void deleteEmailAttachment(target.serverId).catch(() => {});
+      }
+      return current.filter((chip) => chip.clientId !== clientId);
+    });
   }
 
   async function handleSend(overrideMessage?: string) {
@@ -1633,7 +1809,64 @@ export function AIEngineerPanel({
             {speech.status === 'error' && speech.errorMessage && (
               <p className="ai-engineer-panel__mic-error" role="alert">{speech.errorMessage}</p>
             )}
+            {attachments.length > 0 && (
+              <ul className="ai-engineer-panel__attachment-list" aria-label="Attached files">
+                {attachments.map((chip) => (
+                  <li
+                    key={chip.clientId}
+                    className={`ai-engineer-panel__attachment-chip ai-engineer-panel__attachment-chip--${chip.status}`}
+                  >
+                    <span
+                      className={`mdaiw-icon ${attachmentChipIconClass(chip.status)}`}
+                      aria-hidden="true"
+                    />
+                    <span className="ai-engineer-panel__attachment-chip-body">
+                      <span className="ai-engineer-panel__attachment-chip-name">{chip.filename}</span>
+                      <span className="ai-engineer-panel__attachment-chip-status">
+                        {attachmentChipStatusText(chip)}
+                      </span>
+                      {chip.status === 'ready' && chip.warnings && chip.warnings.length > 0 && (
+                        <span className="ai-engineer-panel__attachment-chip-warnings">
+                          {chip.warnings.join(' ')}
+                        </span>
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      className="ai-engineer-panel__attachment-chip-remove"
+                      onClick={() => handleRemoveAttachment(chip.clientId)}
+                      aria-label={`Remove ${chip.filename}`}
+                    >
+                      <span className="mdaiw-icon mdaiw-icon--close" aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
             <div className="ai-engineer-panel__composer-row">
+              <input
+                ref={attachmentFileInputRef}
+                type="file"
+                className="visually-hidden ai-engineer-panel__attachment-input"
+                accept=".txt,.csv,.md,.markdown,.pdf,.docx,.xlsx,.png,.jpg,.jpeg,.webp"
+                multiple
+                tabIndex={-1}
+                aria-hidden="true"
+                onChange={(event) => {
+                  handleAttachmentFilesSelected(event.target.files);
+                  event.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                className="ai-engineer-panel__attach-button"
+                onClick={handleAttachClick}
+                disabled={sending}
+                aria-label="Attach a file"
+                title="Attach a file — .txt, .csv, .md, .pdf, .docx, .xlsx, or an image"
+              >
+                <span className="mdaiw-icon mdaiw-icon--upload" aria-hidden="true" />
+              </button>
               <textarea
                 className="ai-engineer-panel__input"
                 placeholder="Type your command… e.g. Add a button"

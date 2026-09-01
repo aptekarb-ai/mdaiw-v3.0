@@ -7,8 +7,8 @@ from . import module_capabilities
 from .custom_css_security import validate_custom_css_security
 from .edm import UNSAFE_URL_PREFIXES, EdmValidationError, validate_edm, validate_module_instance
 from .models import (
-    MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailDocument, RepairSignalOutcome,
-    RepairSignalSource, SavedEmailModule,
+    MAX_EMAIL_WIDTH, MIN_EMAIL_WIDTH, EmailAsset, EmailAssetSourceType, EmailAttachment, EmailDocument,
+    RepairSignalOutcome, RepairSignalSource, SavedEmailModule,
 )
 from .name_normalization import normalize_email_name
 from .validators import validate_asset_image
@@ -144,6 +144,26 @@ class SavedEmailModuleSerializer(serializers.ModelSerializer):
         except EdmValidationError as error:
             raise serializers.ValidationError({'module_type': [str(error)]}) from error
         return attrs
+
+
+class EmailAttachmentSerializer(serializers.ModelSerializer):
+    """D4-B — metadata-only read shape for list/retrieve/create, and the
+    exact shape a remounted AI Engineer panel restores a chip from.
+    Never exposes `file` (no server filesystem path/storage key ever
+    reaches the client — see models.EmailAttachment's docstring), never
+    exposes `document` (the caller already knows which document it asked
+    for via `?document=`; the id itself is not attachment metadata a
+    chip needs), and never carries extracted facts (not persisted; those
+    are returned once, inline, in the create view's own response — see
+    views.EmailAttachmentViewSet)."""
+
+    class Meta:
+        model = EmailAttachment
+        fields = [
+            'id', 'original_filename', 'detected_type', 'content_type', 'size',
+            'status', 'error_message', 'extraction_meta', 'warnings', 'created_at',
+        ]
+        read_only_fields = fields
 
 
 class EmailAssetSerializer(serializers.ModelSerializer):

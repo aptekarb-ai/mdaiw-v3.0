@@ -135,6 +135,52 @@ export interface UpdateEmailAssetInput {
   external_url?: string;
 }
 
+// D4-B (Feature 14 V4) — Email AI Engineer attachment/input ingestion.
+// `.doc`/`.xls` are deliberately absent from this union: the backend
+// rejects them outright (415, actionable message), they never reach a
+// state where the server would classify them as one of these types.
+export type EmailAttachmentType = 'text' | 'csv' | 'markdown' | 'pdf' | 'docx' | 'xlsx' | 'image';
+export type EmailAttachmentStatus = 'ready' | 'failed';
+
+// The metadata-only shape returned by list()/retrieve() and embedded in
+// the create response — see backend EmailAttachmentSerializer. Never
+// carries extracted facts (not persisted server-side by design — see
+// backend models.EmailAttachment's docstring) and never a file path/URL.
+export interface EmailAttachment {
+  id: number;
+  original_filename: string;
+  detected_type: EmailAttachmentType;
+  content_type: string;
+  size: number;
+  status: EmailAttachmentStatus;
+  error_message: string;
+  extraction_meta: Record<string, unknown>;
+  // D4-B hardening — short, structural warning strings only (e.g. "Only
+  // the first 30 pages were processed"), never content. Persisted so a
+  // remounted AI Engineer panel can restore this exact list on a chip.
+  warnings: string[];
+  created_at: string;
+}
+
+// One atomic extracted unit of content, with provenance — mirrors
+// backend attachment_extraction.ExtractedFact.to_dict(). Returned ONLY
+// in the create response, request-scoped; never re-fetchable afterward.
+export interface ExtractedFact {
+  kind: string;
+  value: unknown;
+  source: string;
+  locator: string;
+  structural_meta?: Record<string, unknown>;
+  confidence?: number;
+}
+
+export interface CreateEmailAttachmentResponse {
+  success: boolean;
+  attachment: EmailAttachment;
+  facts: ExtractedFact[];
+  warnings: string[];
+}
+
 export interface QuickActionDefinition {
   key: 'create' | 'template' | 'import' | 'ai-generate';
   icon: string;

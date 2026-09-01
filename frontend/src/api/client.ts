@@ -6,9 +6,9 @@ import type {
 } from '../types/auth';
 import type { RegistrationResponse } from '../types/registration';
 import type {
-  CreateEmailAssetExternalInput, CreateEmailAssetUploadInput, CreateEmailDocumentInput,
-  CreateSavedModuleInput, EmailAsset, EmailDocument, SavedEmailModule,
-  UpdateEmailAssetInput, UpdateEmailDocumentInput,
+  CreateEmailAssetExternalInput, CreateEmailAssetUploadInput, CreateEmailAttachmentResponse,
+  CreateEmailDocumentInput, CreateSavedModuleInput, EmailAsset, EmailAttachment, EmailDocument,
+  SavedEmailModule, UpdateEmailAssetInput, UpdateEmailDocumentInput,
 } from '../emailbuilder/types';
 import type { AICommandRequest, AICommandResponse } from '../emailbuilder/aiCommand';
 
@@ -227,6 +227,42 @@ export async function updateEmailAsset(
 
 export async function deleteEmailAsset(id: number | string): Promise<void> {
   await apiRequest<void>(`/api/v1/email-builder/assets/${id}/`, {
+    method: 'DELETE',
+  });
+}
+
+// D4-B (Feature 14 V4) — Email AI Engineer attachment/input ingestion.
+// One request does validate+extract synchronously; the response carries
+// both the metadata-only attachment record and the (never persisted)
+// extracted facts. Every attachment belongs to exactly one EmailDocument
+// (D4-B hardening) — the backend 404s if `documentId` isn't owned by the
+// caller before it reads a single byte of `file`.
+export async function createEmailAttachment(
+  file: File, documentId: number | string,
+): Promise<CreateEmailAttachmentResponse> {
+  const formData = new FormData();
+  formData.set('file', file);
+  formData.set('document', String(documentId));
+  return apiRequest<CreateEmailAttachmentResponse>('/api/v1/email-builder/attachments/', {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+// D4-B hardening — document-scoped by construction: the backend returns
+// an empty list for any request that omits `?document=`, so this is the
+// only way to list attachments at all. Used to restore metadata-only
+// chips (id/filename/detected type/status/size/warnings/error — no
+// facts, since those were never persisted) when the AI Engineer panel
+// mounts/remounts for a given document.
+export async function listEmailAttachments(documentId: number | string): Promise<EmailAttachment[]> {
+  return apiRequest<EmailAttachment[]>(
+    `/api/v1/email-builder/attachments/?document=${encodeURIComponent(String(documentId))}`,
+  );
+}
+
+export async function deleteEmailAttachment(id: number | string): Promise<void> {
+  await apiRequest<void>(`/api/v1/email-builder/attachments/${id}/`, {
     method: 'DELETE',
   });
 }

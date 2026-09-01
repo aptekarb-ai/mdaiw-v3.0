@@ -1,6 +1,8 @@
 from django.conf import settings
 from django.core.cache import cache
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
+from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import SearchFilter
@@ -13,10 +15,12 @@ from .ai_command import (
     requires_strong_confirmation, resolve_asset_references, validate_action,
 )
 from . import learning
-from .models import EmailAsset, EmailDocument, SavedEmailModule
+from .attachment_extraction import run_extraction
+from .attachment_validation import RejectedAttachmentType, classify_and_validate_upload
+from .models import EmailAsset, EmailAttachment, EmailDocument, SavedEmailModule
 from .serializers import (
-    EmailAICommandRequestSerializer, EmailAssetSerializer, EmailDocumentSerializer, LearningSignalRequestSerializer,
-    SavedEmailModuleSerializer,
+    EmailAICommandRequestSerializer, EmailAssetSerializer, EmailAttachmentSerializer, EmailDocumentSerializer,
+    LearningSignalRequestSerializer, SavedEmailModuleSerializer,
 )
 
 
@@ -324,3 +328,113 @@ class EmailAssetViewSet(
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+class EmailAttachmentViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """D4-B (Feature 14 V4) — POST /api/v1/email-builder/attachments/
+    validates + extracts one uploaded file inline (synchronous — no
+    Celery/background worker; see attachment_extraction.py's module
+    docstring) and returns the extracted facts directly in the create
+    response. Same manual ownership boundary as every other viewset in
+    this module: another user's attachment id is filtered out before
+    lookup (404, not 403) — see get_queryset.
+
+    D4-B hardening — every attachment belongs to exactly one EmailDocument
+    (`document`, required). create() resolves and OWNERSHIP-CHECKS the
+    referenced document before any file validation/extraction runs, so an
+    attempt to attach to a document the caller doesn't own 404s before a
+    single byte is read. list() is document-scoped: without `?document=
+    <id>` it returns nothing at all (see get_queryset) — this is the
+    mechanism that keeps Document A's attachments from ever appearing
+    while browsing Document B. retrieve()/destroy() stay id+owner scoped
+    like every other viewset here (a single attachment's id already
+    identifies exactly one document; no extra document filter is needed
+    for those two to stay correct).
+
+    list()/retrieve() return metadata only (EmailAttachmentSerializer)
+    since extracted facts are never persisted (see models.EmailAttachment's
+    docstring); create() is the only response that ever carries facts —
+    the same serializer shape list()/retrieve() use is exactly what a
+    remounted AI Engineer panel restores its chips from.
+
+    No `update()` — reprocessing an attachment is out of scope for D4-B;
+    remove and re-upload covers it, same pattern as SavedEmailModuleViewSet."""
+
+    serializer_class = EmailAttachmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = EmailAttachment.objects.filter(user=self.request.user)
+        if self.action == 'list':
+            # Safe-by-default: with no explicit `?document=`, list()
+            # returns nothing rather than every attachment across every
+            # document this user owns — the panel always passes its
+            # current documentId, so this only ever matters for a caller
+            # that (accidentally or otherwise) omits it.
+            document_id = self.request.query_params.get('document')
+            if not document_id:
+                return queryset.none()
+            return queryset.filter(document_id=document_id)
+        return queryset
+
+    def create(self, request, *args, **kwargs):
+        document_id = request.data.get('document')
+        if not document_id:
+            return Response(
+                {'success': False, 'code': 'MISSING_DOCUMENT', 'message': 'A document is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        document = get_object_or_404(EmailDocument.objects.filter(user=request.user), pk=document_id)
+
+        uploaded_file = request.FILES.get('file')
+        if uploaded_file is None:
+            return Response(
+                {'success': False, 'code': 'MISSING_FILE', 'message': 'No file was submitted.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        original_filename = uploaded_file.name or 'upload'
+
+        try:
+            classification = classify_and_validate_upload(uploaded_file, original_filename)
+        except RejectedAttachmentType as exc:
+            return Response(
+                {'success': False, 'code': 'UNSUPPORTED_FILE_TYPE', 'message': exc.messages[0]},
+                status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            )
+        except DjangoValidationError as exc:
+            return Response(
+                {'success': False, 'code': 'INVALID_ATTACHMENT', 'message': exc.messages[0]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        extraction = run_extraction(
+            classification.detected_type, uploaded_file,
+            probe_meta=classification.probe_meta, content_type=classification.content_type,
+        )
+
+        instance = EmailAttachment.objects.create(
+            user=request.user,
+            document=document,
+            original_filename=original_filename[:255],
+            file=uploaded_file,
+            detected_type=classification.detected_type,
+            content_type=classification.content_type,
+            size=uploaded_file.size,
+            status=extraction.status,
+            error_message=extraction.error_message,
+            extraction_meta=extraction.meta,
+            warnings=extraction.warnings,
+        )
+
+        return Response({
+            'success': extraction.status == 'ready',
+            'attachment': EmailAttachmentSerializer(instance).data,
+            'facts': [fact.to_dict() for fact in extraction.facts],
+            'warnings': extraction.warnings,
+        }, status=status.HTTP_201_CREATED)

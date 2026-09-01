@@ -466,6 +466,139 @@
   background-color: var(--color-text-subtle);
 }
 
+/* D4-B — attach button, mirrors the mic button's outline-pill styling. */
+.ai-engineer-panel__attach-button {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-primary-blue);
+  background: var(--color-white);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-engineer-panel__attach-button .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  background-color: var(--color-primary-blue);
+}
+
+.ai-engineer-panel__attach-button:disabled {
+  border-color: var(--color-border);
+  cursor: not-allowed;
+}
+
+.ai-engineer-panel__attach-button:disabled .mdaiw-icon {
+  background-color: var(--color-text-subtle);
+}
+
+.ai-engineer-panel__attachment-list {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__attachment-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-background-light);
+}
+
+.ai-engineer-panel__attachment-chip .mdaiw-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  background-color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__attachment-chip--ready .mdaiw-icon {
+  background-color: var(--color-accent-green);
+}
+
+.ai-engineer-panel__attachment-chip--failed .mdaiw-icon,
+.ai-engineer-panel__attachment-chip--unsupported .mdaiw-icon {
+  background-color: var(--color-error);
+}
+
+.ai-engineer-panel__attachment-chip-icon--spin {
+  animation: ai-engineer-panel-attachment-spin 0.8s linear infinite;
+}
+
+@keyframes ai-engineer-panel-attachment-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-engineer-panel__attachment-chip-icon--spin {
+    animation: none;
+  }
+}
+
+.ai-engineer-panel__attachment-chip-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.ai-engineer-panel__attachment-chip-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-engineer-panel__attachment-chip-status {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__attachment-chip--failed .ai-engineer-panel__attachment-chip-status,
+.ai-engineer-panel__attachment-chip--unsupported .ai-engineer-panel__attachment-chip-status {
+  color: var(--color-error);
+}
+
+.ai-engineer-panel__attachment-chip-warnings {
+  font-size: 11px;
+  color: var(--color-warning, var(--color-text-muted));
+}
+
+.ai-engineer-panel__attachment-chip-remove {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ai-engineer-panel__attachment-chip-remove .mdaiw-icon {
+  width: 12px;
+  height: 12px;
+  background-color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__attachment-chip-remove:hover .mdaiw-icon {
+  background-color: var(--color-error);
+}
+
 .ai-engineer-panel__composer-row .button {
   flex-shrink: 0;
   height: 40px;

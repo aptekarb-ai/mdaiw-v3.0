@@ -244,6 +244,15 @@ PROFILE_PHOTO_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp']
 EMAIL_ASSET_MAX_BYTES = 5 * 1024 * 1024
 EMAIL_ASSET_ALLOWED_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
+# Module-4 Feature 14 V4 / D4-B (Email AI Engineer attachment ingestion).
+# Kept comfortably under DATA_UPLOAD_MAX_MEMORY_SIZE below (~9 MB) per the
+# D4-A audit finding that any new upload limit must stay under that
+# shared Django-wide ceiling rather than raising it. Larger than
+# EMAIL_ASSET_MAX_BYTES since a legitimate PDF/DOCX/XLSX document is
+# often bigger than a marketing image, but still bounded well short of
+# the ceiling.
+EMAIL_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
+
 # Module-4 Feature 14 (Email AI Engineer). 3-way provider selection via
 # EMAILBUILDER_AI_COMMAND_PROVIDER: 'openai' (the SAME OPENAI_API_KEY
 # value Yukti/LP AI Review already use — one secret, not a new one),

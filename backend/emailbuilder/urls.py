@@ -7,6 +7,7 @@ router = DefaultRouter()
 router.register('emails', views.EmailDocumentViewSet, basename='email-document')
 router.register('saved-modules', views.SavedEmailModuleViewSet, basename='saved-email-module')
 router.register('assets', views.EmailAssetViewSet, basename='email-asset')
+router.register('attachments', views.EmailAttachmentViewSet, basename='email-attachment')
 
 urlpatterns = [
     path('ai-command/', views.EmailAICommandView.as_view(), name='email-ai-command'),
