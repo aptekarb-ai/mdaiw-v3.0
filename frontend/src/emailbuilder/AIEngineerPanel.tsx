@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  createEmailAttachment, deleteEmailAttachment, listEmailAttachments, requestAICommand,
+  createEmailAttachment, deleteEmailAttachment, listEmailAttachments, requestAICommand, requestConstructionPlan,
 } from '../api/client';
+import { matchConstructionIntent } from './constructionIntentMatcher';
+import type { ConstructionPlan } from './constructionPlan';
 import type { ApiError } from '../types/auth';
 import type { EmailAttachmentType } from './types';
 import { ImportReviewWorkspace } from './ImportReviewWorkspace';
@@ -89,6 +91,12 @@ interface PendingProposal {
   requiresStrongConfirmation: boolean;
   provider: AICommandProviderId;
   capturedSelectedModuleId: string | null;
+  // D4-D — populated only for a construction-plan-sourced proposal
+  // (requestConstructionPlan); undefined for every ordinary ai-command
+  // proposal. Apply/Cancel/onApplyAction are IDENTICAL either way — this
+  // only changes what the proposal card RENDERS (see
+  // constructionPlanSummary below), never how it's applied.
+  constructionPlan?: ConstructionPlan;
 }
 
 interface AIEngineerPanelProps {
@@ -207,6 +215,25 @@ function attachmentChipStatusText(chip: AttachmentChip): string {
       return chip.errorMessage || 'Could not process this file.';
     default:
       return '';
+  }
+}
+
+// D4-D — pure display helper for a construction-plan proposal's
+// per-section classification badge.
+function constructionPlanClassificationLabel(classification: string): string {
+  switch (classification) {
+    case 'exact':
+      return 'Exact match';
+    case 'normalized':
+      return 'Normalized';
+    case 'approximated':
+      return 'Approximated';
+    case 'unsupported':
+      return 'Not supported';
+    case 'requires_new_module':
+      return 'Needs a new module';
+    default:
+      return classification;
   }
 }
 
@@ -969,6 +996,53 @@ export function AIEngineerPanel({
       return;
     }
 
+    // D4-D — "create/build/generate/make/compose/draft ... email" routes
+    // to the builder-aware construction planner instead of the ordinary
+    // ai-command endpoint. Checked before every other local intent below
+    // (mirrors composition.py's own compose-verb+"email" gate, so this
+    // client-side check and the backend's zero-OpenAI deterministic
+    // composer stay conceptually in sync) — a compose request is
+    // distinctive enough in wording that it never collides with an
+    // undo/reconstruction/repair phrase, but is still checked early for
+    // the same "never shadowed" reasoning those blocks already document.
+    // Only READY attachments (a real server id, successfully extracted)
+    // are ever sent — a still-uploading or failed chip contributes
+    // nothing.
+    if (matchConstructionIntent(message)) {
+      setSending(true);
+      const readyAttachmentIds = attachments
+        .filter((chip) => chip.status === 'ready' && chip.serverId !== undefined)
+        .map((chip) => chip.serverId as number);
+      try {
+        const response = await requestConstructionPlan({ document: documentId, message, attachmentIds: readyAttachmentIds });
+        appendMessage('assistant', response.reply);
+        setLastProvider(response.provider);
+        if (response.action.type === 'NONE') {
+          setHistory((current) => [...current, {
+            id: newId('hist'), command: message, interpretation: response.reply, action: response.action,
+            status: 'clarification', summary: response.reply, provider: response.provider, requiresConfirmation: false,
+          }]);
+        } else {
+          setStrongConfirmChecked(false);
+          setPending({
+            messageId: newId('proposal'), command: message, interpretation: response.reply, action: response.action,
+            requiresConfirmation: response.requires_confirmation, requiresStrongConfirmation: response.requires_strong_confirmation,
+            provider: response.provider, capturedSelectedModuleId: selectedModule?.id ?? null,
+            constructionPlan: response.plan,
+          });
+        }
+      } catch {
+        appendMessage('assistant', 'We could not build a construction plan for this email. Please try again.');
+        setHistory((current) => [...current, {
+          id: newId('hist'), command: message, interpretation: 'We could not build a construction plan for this email. Please try again.',
+          action: { type: 'NONE' }, status: 'failed', summary: 'Request failed', provider: 'deterministic', requiresConfirmation: false,
+        }]);
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
     // Sub-phase 4, item 2/4 (extended E9/E10) — computed here (rather than
     // at its own block below) so the reconstruction-repair check next can
     // consult it — see that block's own comment for why.
@@ -1711,7 +1785,50 @@ export function AIEngineerPanel({
                     </dl>
                   )}
 
-                  {compositionLines && (
+                  {pending.constructionPlan ? (
+                    <div className="ai-engineer-panel__construction-plan">
+                      {pending.constructionPlan.platform_notes.map((note, index) => (
+                        // eslint-disable-next-line react/no-array-index-key -- fixed, freshly-built snapshot for this one proposal
+                        <p key={index} className="ai-engineer-panel__construction-plan-platform-note">{note}</p>
+                      ))}
+                      <ol className="ai-engineer-panel__construction-plan-sections">
+                        {pending.constructionPlan.sections.map((section, index) => (
+                          // eslint-disable-next-line react/no-array-index-key -- fixed, freshly-built snapshot for this one proposal
+                          <li
+                            key={index}
+                            className={
+                              `ai-engineer-panel__construction-plan-section `
+                              + `ai-engineer-panel__construction-plan-section--${section.match.classification}`
+                            }
+                          >
+                            <div className="ai-engineer-panel__construction-plan-section-head">
+                              <span className="ai-engineer-panel__construction-plan-section-module">
+                                {section.match.module_type ?? `${section.match.section_role} (no matching module)`}
+                              </span>
+                              <span className="ai-engineer-panel__construction-plan-section-badge">
+                                {constructionPlanClassificationLabel(section.match.classification)}
+                              </span>
+                            </div>
+                            {section.match.reasons[0] && (
+                              <p className="ai-engineer-panel__construction-plan-section-reason">{section.match.reasons[0]}</p>
+                            )}
+                            {section.match.approximation_notes.map((note, noteIndex) => (
+                              // eslint-disable-next-line react/no-array-index-key -- fixed, freshly-built snapshot for this one proposal
+                              <p key={noteIndex} className="ai-engineer-panel__construction-plan-section-note">{note}</p>
+                            ))}
+                          </li>
+                        ))}
+                      </ol>
+                      {pending.constructionPlan.warnings.length > 0 && (
+                        <ul className="ai-engineer-panel__proposal-warnings">
+                          {pending.constructionPlan.warnings.map((warning, index) => (
+                            // eslint-disable-next-line react/no-array-index-key -- fixed, freshly-built snapshot for this one proposal
+                            <li key={index}>{warning}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ) : compositionLines && (
                     <ol className="ai-engineer-panel__composition-list">
                       {compositionLines.map((line, index) => (
                         // eslint-disable-next-line react/no-array-index-key -- the list is a fixed, freshly-built plan snapshot for this one proposal, re-rendered whole on every change

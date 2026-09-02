@@ -17,6 +17,11 @@ urlpatterns = [
     # context), different cost profile (re-extracts every referenced
     # attachment), different throttle (EMAILBUILDER_BRIEF_REQUEST_MAX).
     path('brief/', views.EmailBriefView.as_view(), name='email-brief'),
+    # D4-D — takes the same request shape as brief/ one step further:
+    # builds the EmailBrief AND the builder-aware construction plan in
+    # one call, returning a ready-to-Apply, already-validated
+    # COMPOSE_EMAIL action alongside the plan's explanation.
+    path('construction-plan/', views.ConstructionPlanView.as_view(), name='email-construction-plan'),
     # Feature 14 V3 Sub-phase 8 — ranking must be its own GET path (not a
     # method branch on the signals collection) so it's cacheable/
     # bookmarkable independently and never collides with a future

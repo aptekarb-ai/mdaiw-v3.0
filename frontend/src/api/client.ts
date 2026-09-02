@@ -12,6 +12,7 @@ import type {
 } from '../emailbuilder/types';
 import type { AICommandRequest, AICommandResponse } from '../emailbuilder/aiCommand';
 import type { RequestEmailBriefInput, RequestEmailBriefResponse } from '../emailbuilder/emailBrief';
+import type { RequestConstructionPlanInput, RequestConstructionPlanResponse } from '../emailbuilder/constructionPlan';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -287,6 +288,27 @@ export async function requestAICommand(input: AICommandRequest): Promise<AIComma
 // a conversational "build my email" flow).
 export async function requestEmailBrief(input: RequestEmailBriefInput): Promise<RequestEmailBriefResponse> {
   return apiRequest<RequestEmailBriefResponse>('/api/v1/email-builder/brief/', {
+    method: 'POST',
+    body: JSON.stringify({
+      document: input.document,
+      message: input.message ?? '',
+      attachment_ids: input.attachmentIds ?? [],
+    }),
+  });
+}
+
+// D4-D (Feature 14 V4) — builds the EmailBrief AND a builder-aware
+// construction plan server-side in one call, returning a ready-to-Apply,
+// already-validated COMPOSE_EMAIL `action` alongside the plan's
+// explanation. Called from AIEngineerPanel.tsx when
+// constructionIntentMatcher.matchConstructionIntent(message) is true —
+// the SAME apply path every other AI Engineer proposal already uses
+// (onApplyAction) consumes `action` unchanged; nothing here mutates the
+// document itself.
+export async function requestConstructionPlan(
+  input: RequestConstructionPlanInput,
+): Promise<RequestConstructionPlanResponse> {
+  return apiRequest<RequestConstructionPlanResponse>('/api/v1/email-builder/construction-plan/', {
     method: 'POST',
     body: JSON.stringify({
       document: input.document,

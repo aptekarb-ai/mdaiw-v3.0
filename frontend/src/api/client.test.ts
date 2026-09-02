@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  getCurrentUser, initializeCsrf, loginWithPassword, logout, requestAICommand, requestEmailBrief,
+  getCurrentUser, initializeCsrf, loginWithPassword, logout, requestAICommand, requestConstructionPlan,
+  requestEmailBrief,
 } from './client';
 
 function mockFetchOnce(body: unknown, init: { ok?: boolean; status?: number } = {}) {
@@ -139,6 +140,54 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await requestEmailBrief({ document: 5 });
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual({ document: 5, message: '', attachment_ids: [] });
+  });
+
+  // D4-D
+  it('requestConstructionPlan posts to the construction-plan endpoint and returns the ready-to-apply action', async () => {
+    const fetchMock = mockFetchOnce({
+      success: true,
+      reply: 'I found 3 sections...',
+      brief: {
+        version: 1, platform: 'generic', purpose: null, audience: null, subject_suggestions: [], preheader_suggestions: [],
+        sections: [], ctas: [], images: [], footer: null, personalization: [], conflicts: [], clarifications: [], warnings: [],
+      },
+      plan: { platform: 'generic', sections: [], platform_notes: [], warnings: [] },
+      action: { type: 'COMPOSE_EMAIL', items: [{ module_type: 'header-logo-center', patch: {} }] },
+      requires_confirmation: true,
+      requires_strong_confirmation: false,
+      provider: 'deterministic',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestConstructionPlan({
+      document: 97, message: 'Create a promotional email for our sale.', attachmentIds: [1, 2],
+    });
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/v1/email-builder/construction-plan/');
+    expect(options.method).toBe('POST');
+    expect(JSON.parse(options.body)).toEqual({
+      document: 97, message: 'Create a promotional email for our sale.', attachment_ids: [1, 2],
+    });
+    expect(result.action.type).toBe('COMPOSE_EMAIL');
+    expect(result.requires_confirmation).toBe(true);
+  });
+
+  it('requestConstructionPlan defaults message and attachmentIds when omitted', async () => {
+    const fetchMock = mockFetchOnce({
+      success: true, reply: '', brief: {
+        version: 1, platform: 'generic', purpose: null, audience: null, subject_suggestions: [], preheader_suggestions: [],
+        sections: [], ctas: [], images: [], footer: null, personalization: [], conflicts: [], clarifications: [], warnings: [],
+      },
+      plan: { platform: 'generic', sections: [], platform_notes: [], warnings: [] },
+      action: { type: 'NONE' }, requires_confirmation: false, requires_strong_confirmation: false, provider: 'deterministic',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await requestConstructionPlan({ document: 5 });
 
     const [, options] = fetchMock.mock.calls[0];
     expect(JSON.parse(options.body)).toEqual({ document: 5, message: '', attachment_ids: [] });

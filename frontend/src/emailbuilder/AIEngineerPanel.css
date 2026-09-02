@@ -295,6 +295,84 @@
   gap: 2px;
 }
 
+/* D4-D — the builder-aware construction planner's richer proposal card
+   content: per-section module selection + classification badge. */
+.ai-engineer-panel__construction-plan-platform-note {
+  margin: 0 0 var(--space-2);
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__construction-plan-sections {
+  margin: var(--space-2) 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__construction-plan-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.ai-engineer-panel__construction-plan-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__construction-plan-section-module {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-dark);
+}
+
+.ai-engineer-panel__construction-plan-section-badge {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-background-light);
+  color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__construction-plan-section--exact .ai-engineer-panel__construction-plan-section-badge {
+  background: var(--color-success-bg);
+  color: var(--color-accent-green);
+}
+
+.ai-engineer-panel__construction-plan-section--normalized .ai-engineer-panel__construction-plan-section-badge {
+  background: var(--color-info-bg);
+  color: var(--color-primary-blue);
+}
+
+.ai-engineer-panel__construction-plan-section--approximated .ai-engineer-panel__construction-plan-section-badge,
+.ai-engineer-panel__construction-plan-section--requires_new_module .ai-engineer-panel__construction-plan-section-badge {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.ai-engineer-panel__construction-plan-section--unsupported {
+  border-color: var(--color-error);
+}
+
+.ai-engineer-panel__construction-plan-section--unsupported .ai-engineer-panel__construction-plan-section-badge {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+}
+
+.ai-engineer-panel__construction-plan-section-reason,
+.ai-engineer-panel__construction-plan-section-note {
+  margin: var(--space-1) 0 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
 /* Sub-phase 4, item 4 — the Repair Engine's multi-issue proposal card. */
 .ai-engineer-panel__repair-list {
   margin: 0 0 var(--space-3);

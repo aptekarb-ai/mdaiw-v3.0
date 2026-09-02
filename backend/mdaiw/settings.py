@@ -261,6 +261,16 @@ EMAIL_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024
 EMAILBUILDER_BRIEF_REQUEST_MAX = int(os.environ.get('EMAILBUILDER_BRIEF_REQUEST_MAX', '15'))
 EMAILBUILDER_BRIEF_REQUEST_WINDOW_SECONDS = int(os.environ.get('EMAILBUILDER_BRIEF_REQUEST_WINDOW_SECONDS', '60'))
 
+# Module-4 Feature 14 V4 / D4-D (builder-aware construction planner). Own
+# throttle, separate from the brief endpoint's — a construction-plan
+# request does everything the brief endpoint does (re-extract every
+# referenced attachment) PLUS the matching/plan-assembly pass, so it gets
+# the tightest budget of the three AI-adjacent endpoints.
+EMAILBUILDER_CONSTRUCTION_PLAN_REQUEST_MAX = int(os.environ.get('EMAILBUILDER_CONSTRUCTION_PLAN_REQUEST_MAX', '10'))
+EMAILBUILDER_CONSTRUCTION_PLAN_REQUEST_WINDOW_SECONDS = int(
+    os.environ.get('EMAILBUILDER_CONSTRUCTION_PLAN_REQUEST_WINDOW_SECONDS', '60'),
+)
+
 # Module-4 Feature 14 (Email AI Engineer). 3-way provider selection via
 # EMAILBUILDER_AI_COMMAND_PROVIDER: 'openai' (the SAME OPENAI_API_KEY
 # value Yukti/LP AI Review already use — one secret, not a new one),

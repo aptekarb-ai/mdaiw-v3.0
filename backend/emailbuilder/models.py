@@ -349,6 +349,15 @@ class RepairSignalSource(models.TextChoices):
     # itself — see reconstructionReview.ts's "no learning mutation yet"
     # docstring.
     AI_ENGINEER_RECONSTRUCTION = 'ai_engineer_reconstruction', 'AI Engineer — reconstruction repair'
+    # D4-D — construction_planner.py's MatchResult.signature is already a
+    # stable, valid learning signature for every module-selection/
+    # classification decision it produces (see that module's docstring on
+    # the learning boundary). This choice exists now so a later
+    # checkpoint's genuine user decision (Build/Cancel/pick-an-alternative
+    # on a construction proposal) can record a signal without a further
+    # migration. Never written by D4-D itself — D4-D exposes
+    # learning-ready metadata only; it never calls record_signal().
+    AI_ENGINEER_CONSTRUCTION = 'ai_engineer_construction', 'AI Engineer — construction plan'
 
 
 class LearnedRepairSignal(models.Model):

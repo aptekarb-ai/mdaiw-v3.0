@@ -17,6 +17,7 @@ from .ai_command import (
 from . import learning
 from .attachment_extraction import run_extraction
 from .attachment_validation import RejectedAttachmentType, classify_and_validate_upload
+from .construction_planner import build_construction_plan, summarize_plan
 from .email_brief import build_email_brief
 from .models import EmailAsset, EmailAttachment, EmailDocument, SavedEmailModule
 from .serializers import (
@@ -512,3 +513,91 @@ class EmailBriefView(APIView):
             )
 
         return Response({'success': True, 'brief': brief.to_dict()}, status=status.HTTP_200_OK)
+
+
+def _construction_plan_rate_limited(user_id):
+    key = f'emailbuilder-construction-plan-request:{user_id}'
+    try:
+        count = cache.incr(key)
+    except ValueError:
+        cache.set(key, 1, timeout=settings.EMAILBUILDER_CONSTRUCTION_PLAN_REQUEST_WINDOW_SECONDS)
+        count = 1
+    return count > settings.EMAILBUILDER_CONSTRUCTION_PLAN_REQUEST_MAX
+
+
+class ConstructionPlanView(APIView):
+    """D4-D (Feature 14 V4) — POST /api/v1/email-builder/construction-plan/.
+    Builds a D4-C EmailBrief (same inputs/ownership rules as
+    EmailBriefView — reuses the exact same request serializer) and then a
+    D4-D ConstructionPlan from it, section by section
+    (construction_planner.build_construction_plan). The resulting
+    COMPOSE_EMAIL action is passed through the SAME validate_action() gate
+    every other action type uses before it is ever returned to the client
+    — this view never trusts its own planner's output unchecked. Like
+    EmailBriefView and EmailAICommandView, this is entirely read-only:
+    nothing here touches an EmailDocument's `content`. Applying the
+    returned `action` happens client-side through the EXISTING
+    addComposedModules path (see AIEngineerPanel.tsx / moduleFactory.ts),
+    unchanged by this checkpoint — one Apply, one history entry, one Undo.
+
+    Zero OpenAI/LLM dependency: build_email_brief() and
+    build_construction_plan() are both fully deterministic (see their own
+    module docstrings) — this endpoint works identically whether or not
+    any AI provider is configured."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if _construction_plan_rate_limited(request.user.pk):
+            return Response(
+                {'success': False, 'code': 'RATE_LIMITED', 'message': 'Too many requests. Please wait a moment and try again.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        serializer = EmailBriefRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        document = get_object_or_404(EmailDocument.objects.filter(user=request.user), pk=data['document'])
+
+        requested_ids = data['attachment_ids']
+        attachments = list(EmailAttachment.objects.filter(
+            user=request.user, document=document, id__in=requested_ids,
+        )) if requested_ids else []
+        missing_count = len(set(requested_ids)) - len(attachments)
+
+        message = data['message'].strip()
+        if not message and not requested_ids:
+            return Response(
+                {'success': False, 'code': 'EMPTY_REQUEST', 'message': 'Provide an instruction, an attachment, or both.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        brief = build_email_brief(message, attachments, document.platform)
+        if missing_count:
+            brief.warnings.append(
+                f'{missing_count} attachment(s) could not be found for this document and were skipped.',
+            )
+
+        plan = build_construction_plan(brief, message)
+
+        action = {'type': ActionType.COMPOSE_EMAIL, 'items': plan.compose_email_items}
+        validated_action = validate_action(action)
+        if validated_action is None:
+            validated_action = {'type': ActionType.NONE}
+            plan.warnings.append('The generated plan could not be validated and was discarded — nothing will be applied.')
+        # Same second-pass, per-request asset-reference resolution every
+        # other action type gets — a construction plan never gets a
+        # looser resolution path than a hand-typed action would.
+        validated_action = resolve_asset_references(validated_action, request)
+
+        return Response({
+            'success': True,
+            'reply': summarize_plan(plan),
+            'brief': brief.to_dict(),
+            'plan': plan.to_dict(),
+            'action': validated_action,
+            'requires_confirmation': requires_confirmation(validated_action),
+            'requires_strong_confirmation': requires_strong_confirmation(validated_action),
+            'provider': 'deterministic',
+        }, status=status.HTTP_200_OK)
