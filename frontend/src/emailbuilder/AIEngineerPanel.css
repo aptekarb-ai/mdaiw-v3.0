@@ -723,6 +723,67 @@
   margin-bottom: var(--space-4);
 }
 
+/* D4-E0 item 14 — administrator/developer diagnostics disclosure,
+   collapsed by default, fetched only on expand. Same understated
+   toggle treatment as the reconstruction panel's own toggle above. */
+.ai-engineer-panel__diagnostics {
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.ai-engineer-panel__diagnostics-toggle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-primary-blue);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ai-engineer-panel__diagnostics-toggle .mdaiw-icon {
+  width: 14px;
+  height: 14px;
+  background-color: currentColor;
+}
+
+.ai-engineer-panel__diagnostics-body {
+  margin-top: var(--space-3);
+  font-size: 13px;
+}
+
+.ai-engineer-panel__diagnostics-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ai-engineer-panel__diagnostics-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.ai-engineer-panel__diagnostics-row:last-child {
+  border-bottom: none;
+}
+
+.ai-engineer-panel__diagnostics-row dt {
+  color: var(--color-text-muted);
+}
+
+.ai-engineer-panel__diagnostics-row dd {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text-dark);
+  text-align: right;
+}
+
 .ai-engineer-panel__learning-notice {
   margin: 0;
   font-size: 12px;

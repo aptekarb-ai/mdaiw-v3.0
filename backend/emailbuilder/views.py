@@ -19,6 +19,7 @@ from .attachment_extraction import run_extraction
 from .attachment_validation import RejectedAttachmentType, classify_and_validate_upload
 from .construction_planner import build_construction_plan, summarize_plan
 from .email_brief import build_email_brief
+from .local_ai_diagnostics import get_local_ai_diagnostics
 from .models import EmailAsset, EmailAttachment, EmailDocument, SavedEmailModule
 from .serializers import (
     EmailAICommandRequestSerializer, EmailAssetSerializer, EmailAttachmentSerializer, EmailBriefRequestSerializer,
@@ -301,6 +302,32 @@ class LearningRankingView(APIView):
         return Response({'success': True, 'signatures': ranking}, status=status.HTTP_200_OK)
 
 
+class LocalAIDiagnosticsView(APIView):
+    """D4-E0 item 14 — GET /api/v1/email-builder/local-ai-diagnostics/.
+
+    Read-only, no document/ownership scope (this is global deployment
+    configuration, not per-user data) — any authenticated user may check
+    whether the optional local AI provider is reachable. Never exposes
+    the configured API key's value (get_local_ai_diagnostics() itself
+    never includes it, only whether one is set). A local runtime being
+    down never turns into a 5xx here — the diagnostics payload itself
+    reports 'reachable': False, same "never fail the request" posture as
+    LearningRankingView above."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            diagnostics = get_local_ai_diagnostics()
+        except Exception:  # noqa: BLE001 - diagnostics must never fail the request
+            diagnostics = {
+                'configured': False, 'reachable': False, 'runtime': None, 'model': None,
+                'configured_model_available': None, 'available_models': [], 'api_key_configured': False,
+                'capabilities': None, 'error': 'diagnostics_failed', 'deterministic_fallback_ready': True,
+            }
+        return Response({'success': True, 'diagnostics': diagnostics}, status=status.HTTP_200_OK)
+
+
 class EmailAssetViewSet(
     mixins.ListModelMixin,
     mixins.CreateModelMixin,
@@ -543,7 +570,16 @@ class ConstructionPlanView(APIView):
     Zero OpenAI/LLM dependency: build_email_brief() and
     build_construction_plan() are both fully deterministic (see their own
     module docstrings) — this endpoint works identically whether or not
-    any AI provider is configured."""
+    any AI provider is configured.
+
+    Learning boundary (D4-D hardening item 3): every `plan.sections[*].match`
+    carries a stable, learning.py-valid `signature` — this view exposes
+    learning-READY construction decisions only; it never calls
+    learning.record_signal() itself, and this endpoint performs no
+    database writes. A later checkpoint records a genuine signal (Build /
+    Cancel / choose-an-alternative) once that real user decision exists,
+    using RepairSignalSource.AI_ENGINEER_CONSTRUCTION and one of these
+    signatures."""
 
     permission_classes = [IsAuthenticated]
 

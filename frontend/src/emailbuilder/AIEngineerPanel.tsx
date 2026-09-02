@@ -42,6 +42,7 @@ import {
   type StoredConversationMessage,
 } from './aiConversationStorage';
 import { speakableSummary } from './aiSpeech';
+import { LocalAIDiagnosticsPanel } from './LocalAIDiagnosticsPanel';
 import type { EmailDocumentContent, EmailModule } from './edm';
 import type { EmailPlatform } from './types';
 import type { EmailDocumentSettingsSnapshot } from './useEmailBuilderState';
@@ -2080,6 +2081,8 @@ export function AIEngineerPanel({
               </div>
             </div>
           )}
+
+          <LocalAIDiagnosticsPanel />
 
           {history.length === 0 ? (
             <div className="ai-engineer-panel__empty" role="status">

@@ -13,6 +13,7 @@ import type {
 import type { AICommandRequest, AICommandResponse } from '../emailbuilder/aiCommand';
 import type { RequestEmailBriefInput, RequestEmailBriefResponse } from '../emailbuilder/emailBrief';
 import type { RequestConstructionPlanInput, RequestConstructionPlanResponse } from '../emailbuilder/constructionPlan';
+import type { RequestLocalAIDiagnosticsResponse } from '../emailbuilder/localAIDiagnostics';
 
 export const API_BASE_URL: string =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
@@ -316,4 +317,12 @@ export async function requestConstructionPlan(
       attachment_ids: input.attachmentIds ?? [],
     }),
   });
+}
+
+// D4-E0 item 14 — read-only local AI runtime/model diagnostics for the
+// admin/developer surface (see LocalAIDiagnosticsPanel.tsx). Never
+// gates anything else in the app; a failed/errored call here has no
+// effect on the deterministic AI Engineer working normally.
+export async function requestLocalAIDiagnostics(): Promise<RequestLocalAIDiagnosticsResponse> {
+  return apiRequest<RequestLocalAIDiagnosticsResponse>('/api/v1/email-builder/local-ai-diagnostics/');
 }

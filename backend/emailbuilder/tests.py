@@ -2588,22 +2588,26 @@ class KnowledgeRuleTests(TestCase):
     new find_rules_by_*() query helpers behave as the deterministic
     explain intent (below) depends on."""
 
-    def test_load_rules_returns_sixty_rules_across_the_original_categories(self):
+    def test_load_rules_returns_seventy_rules_across_the_original_categories(self):
         # R4-B2 -- WAS 50 (this test's own count was already stale by one
         # relative to load_rules()'s own docstring claim of 51 as of
         # Sub-phase 5; not a R4-B2 regression either way). R4-B2 adds 10
         # platform/ESP rules (category='platform') on top, for 60 total.
+        # D4-E0 adds 10 more (5 accessibility/html/responsive/outlook rules
+        # adapted from framix-team/skill-email-html-mjml, 5 document-
+        # category deliverability/compliance rules adapted from
+        # resend/resend-skills' email-best-practices), for 70 total.
         rules = load_rules()
-        self.assertEqual(len(rules), 60)
+        self.assertEqual(len(rules), 70)
         for rule in rules:
             self.assertIsInstance(rule, KnowledgeRule)
         outlook_rules = [r for r in rules if r.category == 'outlook']
         document_rules = [r for r in rules if r.category == 'document']
         platform_rules = [r for r in rules if r.category == 'platform']
-        # Sub-phase 3/4's original counts must never shrink -- Sub-phase 5
-        # and R4-B2 are additive only.
+        # Sub-phase 3/4's original counts must never shrink -- Sub-phase 5,
+        # R4-B2, and D4-E0 are all additive only.
         self.assertGreaterEqual(len(outlook_rules), 9)
-        self.assertEqual(len(document_rules), 5)
+        self.assertEqual(len(document_rules), 10)
         self.assertEqual(len(platform_rules), 10)
 
     def test_row_collapse_rule_is_kept_in_sync_with_the_repair_engines_actual_safe_fix(self):

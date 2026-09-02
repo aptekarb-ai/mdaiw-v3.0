@@ -29,6 +29,18 @@ vi.mock('../api/client', () => ({
   // below override this per-case with vi.mocked(listEmailAttachments).
   listEmailAttachments: vi.fn().mockResolvedValue([]),
   requestConstructionPlan: vi.fn(),
+  // D4-E0 — LocalAIDiagnosticsPanel (rendered in the History tab) calls
+  // this only when its disclosure is opened; no existing test in this
+  // file opens it, but it must still be a real mock function to avoid
+  // "not a function" if that ever changes.
+  requestLocalAIDiagnostics: vi.fn().mockResolvedValue({
+    success: true,
+    diagnostics: {
+      configured: false, reachable: false, runtime: null, model: null, configured_model_available: null,
+      available_models: [], api_key_configured: false, capabilities: null, error: null,
+      deterministic_fallback_ready: true,
+    },
+  }),
 }));
 vi.mock('../hooks/useSpeechRecognition', () => ({
   isSpeechRecognitionSupported: vi.fn(),

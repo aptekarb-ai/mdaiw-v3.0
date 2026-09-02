@@ -28,5 +28,9 @@ urlpatterns = [
     # GET-list-of-signals endpoint this feature deliberately does not add.
     path('learning/signals/ranking/', views.LearningRankingView.as_view(), name='email-learning-ranking'),
     path('learning/signals/', views.LearningSignalView.as_view(), name='email-learning-signals'),
+    # D4-E0 item 14 — read-only local AI runtime/model diagnostics; never
+    # gates anything else, the deterministic AI Engineer works with this
+    # endpoint absent entirely.
+    path('local-ai-diagnostics/', views.LocalAIDiagnosticsView.as_view(), name='email-local-ai-diagnostics'),
     path('', include(router.urls)),
 ]

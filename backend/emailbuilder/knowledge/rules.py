@@ -102,6 +102,13 @@ CONCERN_VALUES = frozenset({
     # client-rendering concerns above — these are about the SENDING
     # platform/templating layer, not how a client renders the resulting HTML.
     'ampscript', 'personalization', 'esp-platform',
+    # D4-E0 — deliverability/compliance concerns, adapted from
+    # resend/resend-skills' email-best-practices subskill (MIT). A
+    # genuinely different knowledge dimension from every concern above:
+    # not "how does a client render this HTML" but "will this email be
+    # delivered/opened/legally compliant at all." See _ADAPTED_FROM_
+    # RESEND_EMAIL_BEST_PRACTICES below and THIRD_PARTY_NOTICES.md.
+    'deliverability', 'authentication', 'compliance', 'list-hygiene',
 })
 
 
@@ -219,6 +226,51 @@ _INFORMED_BY_CANIEMAIL = {
         'client-compatibility matrix and general email-development community knowledge; NOT an automated '
         'parse/transform of Can I Email\'s YAML dataset — no such ingestion pipeline exists yet. A future '
         'refresh could add a real offline YAML-to-KnowledgeRule transform script for closer fidelity.'
+    ),
+}
+
+# D4-E0 — genuine ADAPT relationship (per docs/module-4/
+# AI_ENGINEER_OPEN_SOURCE_AUDIT.md item 23's recommendation, finally
+# acted on): structured checklist facts from framix-team/
+# skill-email-html-mjml (a Claude Code agent skill, MIT-licensed,
+# github.com/framix-team/skill-email-html-mjml), rewritten in this
+# codebase's own words as KnowledgeRule records — not a literal text
+# copy of the skill's markdown, but a genuine content adaptation of its
+# checklist facts, which is what MIT's attribution requirement is for.
+_ADAPTED_FROM_SKILL_EMAIL_HTML_MJML = {
+    'name': 'framix-team/skill-email-html-mjml (MIT)',
+    'url': 'https://github.com/framix-team/skill-email-html-mjml',
+    'license': 'MIT',
+    'version': None,
+    'date': '2026-09-02',
+    'transformation': (
+        'Checklist facts from this skill\'s SKILL.md/reference markdown (Outlook-safe HTML/VML/ghost-table '
+        'construction, WCAG 2.1 AA guidance, Gmail clip-threshold awareness) rewritten as independent '
+        'KnowledgeRule records in this codebase\'s own words — no markdown text copied verbatim.'
+    ),
+}
+
+# D4-E0 — genuine ADAPT relationship for the deliverability/compliance
+# dimension: resend/resend-skills' `email-best-practices` subskill
+# (github.com/resend/resend-skills, MIT-licensed), which the audit
+# explicitly flagged as "a genuinely different knowledge dimension —
+# deliverability, not rendering" and deferred to a future checkpoint.
+# Facts only (SPF/DKIM/DMARC concepts, CAN-SPAM/GDPR/CASL unsubscribe/
+# sender-identification requirements, list-hygiene practices) — never
+# Resend's own API, SDK, or hosted sending service, which this app does
+# not integrate (per this checkpoint's explicit instruction).
+_ADAPTED_FROM_RESEND_EMAIL_BEST_PRACTICES = {
+    'name': 'resend/resend-skills — email-best-practices (MIT)',
+    'url': 'https://github.com/resend/resend-skills',
+    'license': 'MIT',
+    'version': None,
+    'date': '2026-09-02',
+    'transformation': (
+        'Deliverability/compliance concepts from this subskill\'s guidance (authentication standards, legal '
+        'unsubscribe/sender-identification requirements, list-hygiene practices) rewritten as independent, '
+        'general-knowledge KnowledgeRule records — informational/explanatory only, since none of these are '
+        'things this builder can detect or auto-fix in a single email document; no Resend API, SDK, or hosted '
+        'sending service is referenced or integrated.'
     ),
 }
 
@@ -1602,6 +1654,248 @@ _RULES = (
         confidence=0.75,
         source=_DEVELOPER_AUTHORED,
     ),
+
+    # =====================================================================
+    # D4-E0 — adapted from framix-team/skill-email-html-mjml (MIT), filling
+    # genuine gaps in the existing HTML-email-structure/VML/accessibility
+    # coverage above (never duplicating an existing rule's fact).
+    # =====================================================================
+    KnowledgeRule(
+        id='email-role-presentation-tables',
+        category='accessibility',
+        title='Layout tables need role="presentation" so screen readers skip announcing them as data tables',
+        description=(
+            'A <table> used purely for visual layout (as this builder\'s renderer uses throughout, since the '
+            'Word engine has no other reliable layout mechanism — see outlook-table-layout-required) is, by '
+            'default, still announced by a screen reader as a data table with rows/columns, which is confusing '
+            'noise for content that has no actual tabular data. Adding role="presentation" (and, for the '
+            'outermost such table, aria-hidden is NOT appropriate since real content is inside it) tells '
+            'assistive technology to treat it as pure layout, announcing only its content, not its table '
+            'structure.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('tables', 'accessibility', 'html-support'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_ADAPTED_FROM_SKILL_EMAIL_HTML_MJML,
+    ),
+    KnowledgeRule(
+        id='email-alt-text-mandatory',
+        category='accessibility',
+        title='Every meaningful image needs real alt text — never a blank or filename-derived default',
+        description=(
+            'Alt text serves two audiences at once: screen-reader users (who hear it read aloud in place of '
+            'the image) and every sighted user of a client that blocks images by default until explicitly '
+            'trusted (see gmail-image-proxying-and-blocking, yahoo-mail-image-blocking) — a blank or generic '
+            'alt attribute leaves both without any real information about what the image communicates. A '
+            'purely decorative image (a spacer, a background flourish with no informational content) should '
+            'instead use an empty alt="" so assistive technology skips it silently, rather than announcing a '
+            'meaningless filename.'
+        ),
+        severity='warning',
+        affected_clients=('OTHER',),
+        concerns=('images', 'accessibility'),
+        detection={'kind': 'reference'},
+        suggested_fix='Set descriptive alt text for every informational image; use alt="" only for purely decorative images.',
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_ADAPTED_FROM_SKILL_EMAIL_HTML_MJML,
+    ),
+    KnowledgeRule(
+        id='email-xhtml-doctype-recommended',
+        category='html',
+        title='The XHTML 1.0 Transitional doctype remains the safest, most widely-tested email doctype',
+        description=(
+            'Unlike a modern web page, email HTML is not rendered by one consistent browser engine — a mix of '
+            'the Word engine, WebKit variants, and assorted webmail sanitizers each interpret markup somewhat '
+            'differently. The XHTML 1.0 Transitional doctype (rather than HTML5\'s bare <!DOCTYPE html>) is '
+            'the most widely community-tested choice across email clients historically, since it pairs with '
+            'the XML-style self-closing tags and explicit namespace declarations (xmlns:v, xmlns:o) that VML '
+            'and MSO conditional blocks depend on. This builder\'s renderer emits this doctype for exactly '
+            'this reason.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('html-support', 'namespaces'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.8,
+        source=_ADAPTED_FROM_SKILL_EMAIL_HTML_MJML,
+    ),
+    KnowledgeRule(
+        id='email-mobile-minimum-tap-target',
+        category='responsive',
+        title='A tappable element needs roughly 44x44px of touch target on small screens',
+        description=(
+            'Apple\'s and Google\'s own mobile accessibility guidelines recommend at least approximately '
+            '44x44 CSS pixels (44pt on iOS, roughly matching on Android) for any element the user is meant to '
+            'tap — a link or button smaller than that is easy to mis-tap on a phone screen, especially inside '
+            'a dense email layout. This applies to the full clickable area (padding included), not just the '
+            'visible text/icon size.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('responsive', 'accessibility', 'buttons'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.85,
+        source=_ADAPTED_FROM_SKILL_EMAIL_HTML_MJML,
+    ),
+    KnowledgeRule(
+        id='outlook-vml-roundrect-arcsize',
+        category='outlook',
+        title='VML v:roundrect\'s arcsize property controls the corner radius of an Outlook-safe rounded CTA',
+        description=(
+            'Building on the bulletproof-button pattern (outlook-bulletproof-button-pattern), the VML '
+            '<v:roundrect> element\'s arcsize attribute (a percentage, e.g. arcsize="10%") is what actually '
+            'produces the rounded-corner look in Classic Outlook — a plain <v:rect> (no arcsize) renders '
+            'square corners instead. The percentage is relative to the shorter side of the shape, so the same '
+            'arcsize value can look visually different on a very wide vs. very narrow button; matching it to '
+            'the CSS border-radius used for every other client\'s HTML fallback is what keeps the two versions '
+            'visually consistent.'
+        ),
+        severity='info',
+        affected_clients=('OUTLOOK_CLASSIC',),
+        concerns=('vml', 'buttons'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.85,
+        source=_ADAPTED_FROM_SKILL_EMAIL_HTML_MJML,
+    ),
+
+    # =====================================================================
+    # D4-E0 — adapted from resend/resend-skills' email-best-practices
+    # subskill (MIT): deliverability/compliance, a genuinely different
+    # knowledge dimension from every rendering-compatibility rule above.
+    # Every rule here is severity='info' and safe_auto_fix=False — this
+    # builder edits ONE email document, it has no sending infrastructure,
+    # authentication records, or list to inspect, so these are explanatory
+    # background knowledge for the AI Engineer to draw on, never something
+    # this app can detect or auto-fix in a document. See THIRD_PARTY_NOTICES.md.
+    # =====================================================================
+    KnowledgeRule(
+        id='email-authentication-spf-dkim-dmarc',
+        category='document',
+        title='SPF, DKIM, and DMARC are sending-domain authentication records, not email HTML settings',
+        description=(
+            'SPF (which servers may send for a domain), DKIM (a cryptographic signature proving the message '
+            'was not altered in transit), and DMARC (a policy telling receiving servers what to do when SPF/'
+            'DKIM fail, e.g. reject or quarantine) are DNS records configured on the SENDING DOMAIN by whoever '
+            'operates the mail infrastructure — they have no representation inside an email\'s HTML/CSS '
+            'content and cannot be set, previewed, or validated from within this builder. A well-designed '
+            'email can still land in spam if the sending domain\'s authentication is misconfigured, which is '
+            'a mail-infrastructure concern entirely separate from anything this builder edits.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('authentication', 'deliverability'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.9,
+        source=_ADAPTED_FROM_RESEND_EMAIL_BEST_PRACTICES,
+    ),
+    KnowledgeRule(
+        id='email-unsubscribe-legal-requirement',
+        category='document',
+        title='Marketing email legally requires a working unsubscribe mechanism and sender identification',
+        description=(
+            'Regulations including the US CAN-SPAM Act, the EU/UK GDPR, and Canada\'s CASL each require (with '
+            'differing specifics) that a commercial/marketing email include a clear way to unsubscribe/opt out '
+            'and identify who sent it (a real postal address is a common CAN-SPAM requirement specifically) — '
+            'this is a LEGAL content requirement, distinct from this builder\'s own footer module rendering '
+            'correctly. A footer module with a real unsubscribe link and sender identification satisfies the '
+            'rendering side; whether the underlying links/addresses are accurate and the send itself is '
+            'compliant is the sender\'s responsibility, not something this builder can verify.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('compliance', 'links'),
+        detection={'kind': 'reference'},
+        suggested_fix='Ensure the footer includes a real, working unsubscribe link and accurate sender identification before sending.',
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.85,
+        source=_ADAPTED_FROM_RESEND_EMAIL_BEST_PRACTICES,
+    ),
+    KnowledgeRule(
+        id='email-list-hygiene-sender-reputation',
+        category='document',
+        title='Sending to disengaged or invalid addresses damages sender reputation, independent of email design',
+        description=(
+            'Mailbox providers weigh recipient engagement (opens, clicks, spam complaints, bounces) heavily '
+            'when deciding whether future email from a sending domain reaches the inbox or spam — repeatedly '
+            'sending to addresses that never engage, or that bounce/hard-fail, degrades that reputation over '
+            'time regardless of how well-designed any individual email is. This is a sending-list/audience '
+            'management concern, entirely outside what a single email document\'s HTML/CSS can influence.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('list-hygiene', 'deliverability'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.8,
+        source=_ADAPTED_FROM_RESEND_EMAIL_BEST_PRACTICES,
+    ),
+    KnowledgeRule(
+        id='email-preheader-length-best-practice',
+        category='document',
+        title='Preheader text is typically most effective around 40-100 characters',
+        description=(
+            'The preheader (the hidden preview text pulled into an inbox list\'s snippet, alongside the '
+            'subject line — see outlook-mso-hide-preheader for the Classic Outlook-specific hiding technique) '
+            'is commonly truncated by mailbox clients somewhere in the rough 40-100 character range depending '
+            'on client and device width; content past that point may never be seen. Writing preheader copy '
+            'that reads naturally within roughly that length, rather than padding it to a fixed count with '
+            'filler characters, keeps the visible portion meaningful across the widest range of clients.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('preheader', 'deliverability'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.75,
+        source=_ADAPTED_FROM_RESEND_EMAIL_BEST_PRACTICES,
+    ),
+    KnowledgeRule(
+        id='email-consistent-sender-identity',
+        category='document',
+        title='A consistent, recognizable From name/address builds the trust signals deliverability depends on',
+        description=(
+            'Recipients (and, indirectly, mailbox providers\' reputation models) learn to trust a sending '
+            'identity through consistency — the same From name and sending domain used repeatedly, matching '
+            'what the recipient actually expects, performs better over time than one that changes frequently '
+            'or looks generic/unfamiliar. This is a sending-configuration concern (set on the mail platform '
+            'sending the message), not an email-HTML-content one, but is worth an AI Engineer explaining '
+            'honestly when a user asks a general "why might this end up in spam" question, rather than only '
+            'ever discussing rendering-compatibility causes.'
+        ),
+        severity='info',
+        affected_clients=('OTHER',),
+        concerns=('deliverability', 'compliance'),
+        detection={'kind': 'reference'},
+        suggested_fix=None,
+        safe_auto_fix=False,
+        references=(),
+        confidence=0.7,
+        source=_ADAPTED_FROM_RESEND_EMAIL_BEST_PRACTICES,
+    ),
 )
 
 _RULES_BY_ID = {rule.id: rule for rule in _RULES}
@@ -1616,10 +1910,14 @@ def load_rules():
     Mail, Yahoo Mail, AOL Mail, Outlook.com, and cross-client general
     practices (51 rules), plus R4-B2's 10 platform/ESP rules (SFMC
     AMPScript posture, Marketo/HubSpot/Pardot personalization — 60 rules
-    total as of R4-B2). Phase C (Sub-phase 6)'s VML-generation rules and
-    Phase D/E's composition/learning-related knowledge are separate,
-    still-unstarted future work — this function's growth is additive,
-    never a replacement of existing entries."""
+    total as of R4-B2), plus D4-E0's 10 rules adapted from
+    framix-team/skill-email-html-mjml (accessibility/HTML/VML gap-fill)
+    and resend/resend-skills' email-best-practices (deliverability/
+    compliance — a new knowledge dimension, see THIRD_PARTY_NOTICES.md)
+    — 70 rules total as of D4-E0. Phase C (Sub-phase 6)'s VML-generation
+    rules and Phase D/E's composition/learning-related knowledge are
+    separate, still-unstarted future work — this function's growth is
+    additive, never a replacement of existing entries."""
     return list(_RULES)
 
 

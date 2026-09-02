@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getCurrentUser, initializeCsrf, loginWithPassword, logout, requestAICommand, requestConstructionPlan,
-  requestEmailBrief,
+  requestEmailBrief, requestLocalAIDiagnostics,
 } from './client';
 
 function mockFetchOnce(body: unknown, init: { ok?: boolean; status?: number } = {}) {
@@ -191,5 +191,24 @@ describe('api client', () => {
 
     const [, options] = fetchMock.mock.calls[0];
     expect(JSON.parse(options.body)).toEqual({ document: 5, message: '', attachment_ids: [] });
+  });
+
+  it('requestLocalAIDiagnostics gets the local-ai-diagnostics endpoint', async () => {
+    const fetchMock = mockFetchOnce({
+      success: true,
+      diagnostics: {
+        configured: false, reachable: false, runtime: null, model: null, configured_model_available: null,
+        available_models: [], api_key_configured: false, capabilities: null, error: null,
+        deterministic_fallback_ready: true,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await requestLocalAIDiagnostics();
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/v1/email-builder/local-ai-diagnostics/');
+    expect(options.method ?? 'GET').toBe('GET');
+    expect(result.diagnostics.deterministic_fallback_ready).toBe(true);
   });
 });
