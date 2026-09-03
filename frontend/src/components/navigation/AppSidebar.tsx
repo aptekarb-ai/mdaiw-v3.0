@@ -438,8 +438,6 @@ export function AppSidebar({ mobileOpen, onMobileClose, menuButtonRef }: AppSide
         </button>
       </nav>
 
-      <div className="app-sidebar__spacer" />
-
       <button
         type="button"
         className="app-sidebar__yukti"

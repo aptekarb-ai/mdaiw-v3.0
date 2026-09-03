@@ -85,6 +85,11 @@
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-row-gap);
+  /* The ONE growable region in this flex column: flex:1 (with min-height:0
+     so overflow-y:auto can actually kick in) both pins the Ask Yukti
+     button/footer to the bottom of the sidebar AND gives the nav list its
+     own internal scrollbar if it's ever genuinely too tall for the
+     viewport — no separate spacer element needed for either job. */
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -201,10 +206,6 @@
 
 .app-sidebar__link--disabled:hover {
   background: transparent;
-}
-
-.app-sidebar__spacer {
-  flex: 1;
 }
 
 .app-sidebar__yukti {
