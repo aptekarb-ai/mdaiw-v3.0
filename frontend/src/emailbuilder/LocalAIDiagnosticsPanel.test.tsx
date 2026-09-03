@@ -24,6 +24,8 @@ function diagnosticsResponse(overrides: Partial<Record<string, unknown>> = {}) {
         structured_action_successes: 0, structured_action_success_rate: null,
         validator_repair_corrections: 0, scope_gate_corrections: 0, deterministic_fallback_count: 0,
         llm_calls_avoided_by_deterministic: 0, llm_calls_required: 0, semantic_gate_corrections: 0,
+        llm_successful_completions: 0, llm_timeouts: 0, llm_failures: 0, max_llm_latency_ms: null,
+        knowledge_grounded_responses: 0, recent_knowledge_rule_ids: [],
       },
       ...overrides,
     },
@@ -117,6 +119,8 @@ describe('LocalAIDiagnosticsPanel', () => {
         structured_action_successes: 3, structured_action_success_rate: 0.75,
         validator_repair_corrections: 1, scope_gate_corrections: 2, deterministic_fallback_count: 0,
         llm_calls_avoided_by_deterministic: 9, llm_calls_required: 6, semantic_gate_corrections: 3,
+        llm_successful_completions: 11, llm_timeouts: 0, llm_failures: 0, max_llm_latency_ms: 2000,
+        knowledge_grounded_responses: 7, recent_knowledge_rule_ids: [],
       },
     }));
     const user = userEvent.setup();
@@ -135,6 +139,8 @@ describe('LocalAIDiagnosticsPanel', () => {
         structured_action_successes: 3, structured_action_success_rate: 0.75,
         validator_repair_corrections: 1, scope_gate_corrections: 2, deterministic_fallback_count: 0,
         llm_calls_avoided_by_deterministic: 8, llm_calls_required: 6, semantic_gate_corrections: 4,
+        llm_successful_completions: 5, llm_timeouts: 1, llm_failures: 0, max_llm_latency_ms: 3000,
+        knowledge_grounded_responses: 2, recent_knowledge_rule_ids: ['gmail-clipping-threshold'],
       },
     }));
     const user = userEvent.setup();
@@ -144,5 +150,27 @@ describe('LocalAIDiagnosticsPanel', () => {
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(screen.getByText('6')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
+  });
+
+  it('D4-E3 item 5/7 — shows LLM completion/timeout/failure counts, max latency, and knowledge-grounded count', async () => {
+    vi.mocked(requestLocalAIDiagnostics).mockResolvedValue(diagnosticsResponse({
+      session_stats: {
+        total_calls: 5, average_latency_ms: 1234.5, structured_action_attempts: 4,
+        structured_action_successes: 3, structured_action_success_rate: 0.75,
+        validator_repair_corrections: 1, scope_gate_corrections: 2, deterministic_fallback_count: 0,
+        llm_calls_avoided_by_deterministic: 8, llm_calls_required: 6, semantic_gate_corrections: 4,
+        llm_successful_completions: 12, llm_timeouts: 13, llm_failures: 14, max_llm_latency_ms: 4567,
+        knowledge_grounded_responses: 9, recent_knowledge_rule_ids: ['gmail-clipping-threshold'],
+      },
+    }));
+    const user = userEvent.setup();
+    render(<LocalAIDiagnosticsPanel />);
+    await user.click(screen.getByText('Local AI diagnostics'));
+    await screen.findByText('This session');
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('13')).toBeInTheDocument();
+    expect(screen.getByText('14')).toBeInTheDocument();
+    expect(screen.getByText('4567 ms')).toBeInTheDocument();
+    expect(screen.getByText('9')).toBeInTheDocument();
   });
 });

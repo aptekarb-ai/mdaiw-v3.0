@@ -356,13 +356,33 @@ class ActionType:
     # other insert path already uses.
     COMPOSE_EMAIL = 'COMPOSE_EMAIL'
 
+    # D4-E3 item 7/8 — the ONE compound-request action type: bundles a
+    # props patch AND a settings patch for the SAME currently-selected
+    # module (e.g. "make this button green, increase the padding to
+    # 20px, and center it" — color+align live under UPDATE_MODULE_PROPS,
+    # padding lives under UPDATE_MODULE_SETTINGS's nested desktop object;
+    # today those are two separate, mutually exclusive action types).
+    # Always `target: 'selected'` — same convention as UPDATE_MODULE_PROPS/
+    # UPDATE_MODULE_SETTINGS, resolved client-side, never a module id sent
+    # BY the model (this app never sends the module tree to any AI
+    # provider — see execute_tool_call's GET_DOCUMENT_SUMMARY docstring —
+    # so cross-module compound requests naming several DIFFERENT modules
+    # are intentionally out of scope for this action type; see this
+    # checkpoint's own completion report for that disclosed limitation).
+    # Each half is validated through the EXACT SAME field-level validators
+    # UPDATE_MODULE_PROPS/UPDATE_MODULE_SETTINGS already use — never a
+    # second, parallel validation path — and applied through the EXISTING
+    # applyRepairPatch batch-commit primitive (frontend), so the whole
+    # thing lands as ONE undo step, exactly like a repair batch already does.
+    BATCH_UPDATE = 'BATCH_UPDATE'
+
     values = frozenset({
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE, NONE,
         INSERT_NESTED_MODULE, UPDATE_MODULE_SETTINGS, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
         SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
-        COMPOSE_EMAIL,
+        COMPOSE_EMAIL, BATCH_UPDATE,
     })
 
     IMPLEMENTED = frozenset({
@@ -376,7 +396,7 @@ class ActionType:
         # updateModuleProps) — never a parallel mutation system.
         UPDATE_MODULE_SETTINGS, INSERT_NESTED_MODULE, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
-        COMPOSE_EMAIL,
+        COMPOSE_EMAIL, BATCH_UPDATE,
     })
 
     # Sub-phase 6 — structural tree changes always require confirmation
@@ -691,6 +711,27 @@ def validate_action(action):
             return None
         return {'type': action_type, 'target': 'selected', 'module_type': module_type, 'patch': patch}
 
+    # D4-E3 item 7/8 — BATCH_UPDATE. Each half reuses the EXACT SAME
+    # validators UPDATE_MODULE_PROPS/UPDATE_MODULE_SETTINGS already call
+    # (_validate_patch/_validate_settings_patch) — never a second,
+    # parallel validation path. At least one half must be present and
+    # non-empty (an action with neither is not a real request); either
+    # half failing its OWN validator drops just that half (never the
+    # whole action) unless BOTH end up empty, in which case the whole
+    # thing safely reduces to NONE like any other unvalidatable action.
+    if action_type == ActionType.BATCH_UPDATE:
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return None
+        props_patch = _validate_patch(module_type, action.get('props_patch')) if action.get('props_patch') else None
+        settings_patch = _validate_settings_patch(action.get('settings_patch')) if action.get('settings_patch') else None
+        if not props_patch and not settings_patch:
+            return {'type': ActionType.NONE}
+        return {
+            'type': action_type, 'target': 'selected', 'module_type': module_type,
+            'props_patch': props_patch, 'settings_patch': settings_patch,
+        }
+
     # APPLY_VML_PATTERN (buttons) / APPLY_OUTLOOK_WRAPPER (background-image
     # modules) — each a narrow, single-purpose alias that always means
     # "enable the already-implemented VML fallback for this module" (see
@@ -925,6 +966,11 @@ def build_active_target_context(module_type, module_id=None):
     supported_actions = [ActionType.UPDATE_MODULE_PROPS, ActionType.DELETE_MODULE, ActionType.DUPLICATE_MODULE, ActionType.APPLY_GLOBAL_STYLE]
     if editable_settings:
         supported_actions.append(ActionType.UPDATE_MODULE_SETTINGS)
+        # D4-E3 item 7/8 — BATCH_UPDATE needs BOTH a props field and a
+        # settings field on this module type to ever be useful; a module
+        # with no settings at all (editable_settings empty) has nothing
+        # for its settings_patch half to target.
+        supported_actions.append(ActionType.BATCH_UPDATE)
     if is_layout:
         supported_actions.append(ActionType.RESTRUCTURE_LAYOUT)
     if has_repeatable_field:
@@ -985,6 +1031,18 @@ def describe_action_validation_failure(action, validated):
         return (
             'The proposed UPDATE_MODULE_SETTINGS patch did not match the module\'s settings schema '
             '(padding/visibility/gutter-style fields only, per-breakpoint). Correct only the field structure.'
+        )
+
+    if action_type == ActionType.BATCH_UPDATE:
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return f'"{module_type}" is not a real module type.'
+        valid_keys = sorted(f['key'] for f in module_capabilities.get_editable_fields(module_type))
+        return (
+            'BATCH_UPDATE needs at least one of props_patch/settings_patch to be a real, non-empty object. '
+            f'props_patch field names must come from this module\'s editable fields: {valid_keys}. settings_patch '
+            'must match the settings schema (padding/visibility/gutter-style fields only, per-breakpoint). '
+            'Correct only the field structure — do not change what the user asked for.'
         )
 
     return f'The proposed "{action_type}" action did not pass builder-schema validation. Check field names, value types, and required keys.'
@@ -1077,29 +1135,21 @@ def _requested_concepts(message):
     return {concept for concept, keywords in _MESSAGE_CONCEPT_KEYWORDS.items() if any(kw in lowered for kw in keywords)}
 
 
-def apply_scope_gate(message, action):
-    """Returns (possibly-narrowed) `action`, and a list of stripped field
-    keys (empty when nothing was stripped) — the caller decides how to
-    log/report that. Only ever narrows an already-validated
-    UPDATE_MODULE_PROPS/APPLY_GLOBAL_STYLE/REPLACE_UNSUPPORTED_PROPERTY
-    patch; every other action type passes through unchanged (nothing
-    else carries a free-form multi-field patch a scope gate applies to)."""
-    if not isinstance(action, dict):
-        return action, []
-    if action.get('type') not in (
-        ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY,
-    ):
-        return action, []
-    patch = action.get('patch')
-    if not isinstance(patch, dict) or not patch:
-        return action, []
+def _scope_gate_patch(patch, requested):
+    """Given a flat {field_key: value} patch and a set of requested
+    concepts, returns (kept_patch, stripped_keys) — the ONE concept-
+    filtering primitive apply_scope_gate() itself now uses for every
+    action-type branch, never duplicated per branch. A key whose concept
+    can't be classified is never stripped (same conservative default as
+    _requested_concepts' own "no signal -> don't touch anything").
+    Mirrors apply_scope_gate's original, pre-D4-E3-hardening single-patch
+    behavior exactly — extracted here only so BATCH_UPDATE's two halves
+    can reuse it unchanged rather than re-implementing the loop.
 
-    requested = _requested_concepts(message)
-    if not requested:
-        # No classifiable concept anywhere in the message — too weak a
-        # signal to strip anything against; pass the whole patch through.
-        return action, []
-
+    If stripping would empty the patch entirely, conservatively returns
+    the ORIGINAL patch with an empty stripped list — over-aggressive
+    concept detection is more likely than a genuinely all-off-topic
+    proposal (same guard the pre-D4-E3 single-patch code already had)."""
     kept, stripped = {}, []
     for key, value in patch.items():
         concept = _concept_for_field_key(key)
@@ -1107,14 +1157,84 @@ def apply_scope_gate(message, action):
             kept[key] = value
         else:
             stripped.append(key)
-
     if not kept:
-        # Stripping would empty the patch entirely — over-aggressive
-        # concept detection is more likely than a genuinely all-off-topic
-        # proposal; conservatively pass the original patch through rather
-        # than discarding the model's entire answer.
+        return patch, []
+    return kept, stripped
+
+
+def _scope_gate_settings_patch(patch, requested):
+    """The settings-shaped counterpart of _scope_gate_patch — for a
+    per-breakpoint patch like {"desktop": {paddingTop: 20, ...}, ...}
+    (the ONLY shape _validate_settings_patch ever produces; see that
+    function's own docstring). Recurses exactly one level (one pass per
+    breakpoint key) and reuses _scope_gate_patch UNCHANGED on each
+    breakpoint's leaf dict — "paddingTop" already resolves to the
+    'spacing' concept via the SAME _FIELD_KEY_CONCEPT_HINTS table a flat
+    prop patch uses (see that table's own 'padding'->'spacing' entry) —
+    never a second, settings-specific concept system. A non-dict
+    breakpoint entry is left untouched (defensive; validate_action()
+    already guarantees this never happens in practice)."""
+    if not isinstance(patch, dict):
+        return patch, []
+    new_patch = {}
+    all_stripped = []
+    for breakpoint_key, breakpoint_patch in patch.items():
+        if not isinstance(breakpoint_patch, dict):
+            new_patch[breakpoint_key] = breakpoint_patch
+            continue
+        kept, stripped = _scope_gate_patch(breakpoint_patch, requested)
+        new_patch[breakpoint_key] = kept
+        all_stripped.extend(stripped)
+    return new_patch, all_stripped
+
+
+def apply_scope_gate(message, action):
+    """Returns (possibly-narrowed) `action`, and a list of stripped field
+    keys (empty when nothing was stripped) — the caller decides how to
+    log/report that. Only ever narrows an already-validated
+    UPDATE_MODULE_PROPS/APPLY_GLOBAL_STYLE/REPLACE_UNSUPPORTED_PROPERTY
+    patch, or BATCH_UPDATE's props_patch/settings_patch pair (D4-E3
+    scope-gate hardening — a BATCH_UPDATE proposed by the LLM tier
+    previously bypassed this gate entirely, since it carries no `patch`
+    key at all; that confirmed gap is what this branch closes, reusing
+    the SAME _concept_for_field_key/_FIELD_KEY_CONCEPT_HINTS tables,
+    never a second, parallel scope-control system). Every other action
+    type passes through unchanged (nothing else carries a free-form
+    multi-field patch a scope gate applies to)."""
+    if not isinstance(action, dict):
+        return action, []
+    action_type = action.get('type')
+    if action_type not in (
+        ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY,
+        ActionType.BATCH_UPDATE,
+    ):
         return action, []
 
+    requested = _requested_concepts(message)
+    if not requested:
+        # No classifiable concept anywhere in the message — too weak a
+        # signal to strip anything against; pass the whole action through.
+        return action, []
+
+    if action_type == ActionType.BATCH_UPDATE:
+        props_patch = action.get('props_patch')
+        settings_patch = action.get('settings_patch')
+        new_props, props_stripped = (
+            _scope_gate_patch(props_patch, requested) if isinstance(props_patch, dict) and props_patch
+            else (props_patch, [])
+        )
+        new_settings, settings_stripped = (
+            _scope_gate_settings_patch(settings_patch, requested) if settings_patch else (settings_patch, [])
+        )
+        stripped = props_stripped + settings_stripped
+        if not stripped:
+            return action, []
+        return {**action, 'props_patch': new_props, 'settings_patch': new_settings}, stripped
+
+    patch = action.get('patch')
+    if not isinstance(patch, dict) or not patch:
+        return action, []
+    kept, stripped = _scope_gate_patch(patch, requested)
     if not stripped:
         return action, []
     return {**action, 'patch': kept}, stripped
@@ -1162,6 +1282,14 @@ def resolve_asset_references(action, request):
                 return {**action, 'patch': {}}
             return {'type': ActionType.NONE}
         return {**action, 'patch': resolved_patch}
+
+    if action_type == ActionType.BATCH_UPDATE:
+        module_type = action.get('module_type')
+        props_patch = action.get('props_patch') or {}
+        if not _patch_has_asset_marker(module_type, props_patch):
+            return action
+        resolved_patch = _resolve_patch_assets(module_type, props_patch, request)
+        return {**action, 'props_patch': resolved_patch or None}
 
     if action_type == ActionType.UPDATE_REPEATABLE_FIELD and action.get('op') in ('add', 'update'):
         module_type = action.get('module_type')
@@ -1607,6 +1735,18 @@ _WEAK_CONTRAST_FIX_PATTERN = re.compile(
 _EXPLAIN_PATTERN = re.compile(
     r'\b(explain|what\s+is|what\'?s|why\s+does|why\s+is|why\s+did|why\s+might|why\s+would|why\s+can\'?t|'
     r'what\s+causes|how\s+come|tell\s+me\s+about|can\s+you\s+explain)\b',
+    re.IGNORECASE,
+)
+
+# D4-E3 item 6 — QUESTION + MUTATION REQUEST detection. Deliberately
+# narrow: requires the literal word "and" immediately followed by a known
+# imperative action verb — never a bare action-sounding word anywhere in
+# the sentence, which is exactly the false-positive D4-E2 already had to
+# guard against ("Why did you change the column widths?" contains "change"
+# but never "and change", so this correctly does NOT match it; "Why is
+# this button inconsistent, and fix it." does).
+_COMPOUND_ACTION_HINT_PATTERN = re.compile(
+    r'\band\s+(fix|correct|change|update|make\s+it|improve|increase|decrease|add|remove|adjust)\b',
     re.IGNORECASE,
 )
 # Sub-phase 5 — extended from 16 to ~60 topic patterns as the knowledge
@@ -2390,10 +2530,27 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
 
         # Sub-phase 3, item 13 — the read-only "explain X" knowledge
         # lookup, checked before every mutating pattern (see
-        # _EXPLAIN_PATTERN's docstring above).
-        if _EXPLAIN_PATTERN.search(lowered):
+        # _EXPLAIN_PATTERN's docstring above). D4-E3 item 6 — a QUESTION
+        # is not the same turn shape as a QUESTION + MUTATION REQUEST
+        # ("Why is this button inconsistent, and fix it."): the second
+        # shape must still produce a real proposed correction, not just
+        # an explanation with the "fix it" half silently dropped. This
+        # deterministic explain-branch only ever answers pure questions —
+        # when _COMPOUND_ACTION_HINT_PATTERN also matches, this branch
+        # steps aside (falls through the rest of resolve() unchanged) so
+        # the message can reach a genuine NO_MATCH and route to the LLM
+        # tier, which can produce both the grounded explanation (the same
+        # rule is independently retrieved for it via retrieve_relevant_
+        # knowledge — see that function's own docstring) AND a proposed
+        # action in one turn. A bare question with no compound-action hint
+        # is completely unaffected — still answered here, deterministically,
+        # with zero LLM involvement, exactly as before.
+        if _EXPLAIN_PATTERN.search(lowered) and not _COMPOUND_ACTION_HINT_PATTERN.search(lowered):
             rule = _find_explain_rule(lowered)
             if rule is not None:
+                from . import local_ai_diagnostics
+
+                local_ai_diagnostics.record_knowledge_rules_used([rule.id])
                 return CommandResult(
                     reply=f'{rule.title}. {rule.description}',
                     action={'type': ActionType.NONE}, confidence=1.0,
@@ -2770,8 +2927,49 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
 
         # R4-B4 §1/§3 — CHANGE_SPACING ("give this 20px padding" / "add
         # some space inside" / "increase internal spacing to 20").
+        # D4-E3 item 7/8 — a message can ask for a spacing change AND a
+        # props change (color/text/align/size) in the SAME turn ("make
+        # this button green, increase the padding to 20px, and center
+        # it") — spacing lives under UPDATE_MODULE_SETTINGS, the rest
+        # under UPDATE_MODULE_PROPS, two normally-separate action types.
+        # Reuses compute_spacing_result() unchanged for the settings half
+        # (never a duplicated padding-parsing path); only combines it
+        # with _extract_style_patch()'s props half, via BATCH_UPDATE,
+        # when BOTH are genuinely present — a spacing-only message is
+        # completely unaffected, still returned exactly as before.
         if _SPACING_PATTERN.search(lowered):
-            return compute_spacing_result(selected_type, lowered)
+            spacing_result = compute_spacing_result(selected_type, lowered)
+            if selected_type and spacing_result.action.get('type') == ActionType.UPDATE_MODULE_SETTINGS:
+                # D4-E3 item 7/8 — deliberately NOT the full _extract_style_patch()
+                # here: its fontSize heuristic matches bare "bigger"/"increase"/
+                # "smaller"/"decrease" with no font-specific qualifier, which
+                # would misfire on "increase the padding to 20px" (a SPACING
+                # instruction, not a font-size one) and silently bundle in an
+                # unrequested size change. Only color/alignment are unambiguous
+                # enough to safely combine with a spacing request this way.
+                props_patch = _extract_unambiguous_props_patch(lowered, selected_type)
+                set_text_match = _SET_TEXT_PATTERN.search(text)
+                if set_text_match:
+                    text_field = next(
+                        (f for f in module_capabilities.get_editable_fields(selected_type)
+                         if f['key'] == 'text' and f['valueType'] == 'text'),
+                        None,
+                    )
+                    if text_field:
+                        props_patch = {**(props_patch or {}), 'text': set_text_match.group(1).strip()}
+                if props_patch:
+                    return CommandResult(
+                        reply=(
+                            f'I will update the selected {selected_type} module and adjust its padding. '
+                            'Please confirm.'
+                        ),
+                        action={
+                            'type': ActionType.BATCH_UPDATE, 'target': 'selected', 'module_type': selected_type,
+                            'props_patch': props_patch, 'settings_patch': spacing_result.action['patch'],
+                        },
+                        confidence=0.85,
+                    )
+            return spacing_result
 
         # R4-B4 §1/§2 — SET_IMAGE. Checked BEFORE the generic style-patch
         # fallback below (which has no image_asset handling at all) —
@@ -2932,6 +3130,38 @@ def _extract_style_patch(lowered, module_type, current_props):
     return patch or None
 
 
+# D4-E3 item 7/8 — the color/alignment-only subset of _extract_style_patch(),
+# for the ONE call site (the spacing-plus-props BATCH_UPDATE combiner
+# above) that must never pick up the fontSize heuristic's ambiguous bare
+# "bigger"/"increase"/"smaller"/"decrease" match, which collides with
+# spacing vocabulary ("increase the padding"). Deliberately duplicates
+# only the color+align branches (never the fontSize one) — not a second,
+# competing patch-extraction system, just a narrower slice of the SAME one.
+def _extract_unambiguous_props_patch(lowered, module_type):
+    patch = {}
+    allowed = {f['key'] for f in module_capabilities.get_editable_fields(module_type)}
+
+    color = _find_color(lowered)
+    if color:
+        if 'background' in lowered and 'backgroundColor' in allowed:
+            patch['backgroundColor'] = color
+        elif 'textColor' in allowed and ('text color' in lowered or 'font color' in lowered):
+            patch['textColor'] = color
+        elif 'color' in allowed:
+            patch['color'] = color
+        elif 'backgroundColor' in allowed:
+            patch['backgroundColor'] = color
+
+    if 'align' in allowed and _ALIGN_PATTERN.search(lowered):
+        from .intent_normalization import find_alignment_value
+
+        alignment_value = find_alignment_value(lowered, 'en')
+        if alignment_value:
+            patch['align'] = alignment_value
+
+    return patch or None
+
+
 # D4-E2 item 1 — Intelligence Router. The distinction this function draws
 # is the load-bearing one: a message the deterministic chain confidently
 # ACTED on, DECLINED with real/specific information, or ANSWERED from the
@@ -2964,71 +3194,97 @@ _QUOTED_TEXT_RE = re.compile(r'["“”‘’\'](.{1,200}?)["“”‘’\']')
 _EXPLICIT_URL_RE = re.compile(r'\bhttps?://\S+\b', re.IGNORECASE)
 
 
+def _correct_props_patch(message, module_type, patch):
+    """Returns (possibly-corrected patch dict, corrections list) — the
+    UPDATE_MODULE_PROPS-shaped half of the semantic consistency gate,
+    factored out so BATCH_UPDATE's props_patch can reuse it unchanged
+    (see apply_semantic_consistency_gate's own docstring)."""
+    if not isinstance(patch, dict) or not patch:
+        return patch, []
+    corrections = []
+    new_patch = dict(patch)
+    for key, value in patch.items():
+        field = module_capabilities.get_editable_field(module_type, key) if module_type else None
+        value_type = field.get('valueType') if field else None
+        if value_type == 'color':
+            requested = _find_color((message or '').lower())
+            if requested and requested != value:
+                new_patch[key] = requested
+                corrections.append(f'{key}: {value!r} -> {requested!r} (message named an explicit color)')
+        elif value_type == 'align':
+            from .intent_normalization import find_alignment_value
+
+            requested = find_alignment_value((message or '').lower(), 'en')
+            if requested and requested != value:
+                new_patch[key] = requested
+                corrections.append(f'{key}: {value!r} -> {requested!r} (message named an explicit alignment)')
+        elif value_type == 'text':
+            quoted = _QUOTED_TEXT_RE.search(message or '')
+            if quoted:
+                requested = _clean_text_value(quoted.group(1))
+                if requested and requested != value:
+                    new_patch[key] = requested
+                    corrections.append(f'{key}: {value!r} -> {requested!r} (message quoted an explicit text value)')
+        elif value_type == 'url':
+            explicit = _EXPLICIT_URL_RE.search(message or '')
+            if explicit:
+                requested = _clean_url_value(explicit.group(0))
+                if requested and requested != value:
+                    new_patch[key] = requested
+                    corrections.append(f'{key}: {value!r} -> {requested!r} (message contained an explicit URL)')
+    return (new_patch if corrections else patch), corrections
+
+
+def _correct_settings_patch(message, patch):
+    """Returns (possibly-corrected patch dict, corrections list) — the
+    UPDATE_MODULE_SETTINGS-shaped half, factored out for the same reason
+    as _correct_props_patch above."""
+    if not isinstance(patch, dict) or not isinstance(patch.get('desktop'), dict):
+        return patch, []
+    desktop = patch['desktop']
+    padding_keys = [k for k in desktop if k.startswith('padding')]
+    if padding_keys and _SPACING_PATTERN.search((message or '').lower()):
+        numbers = _SPACING_NUMBER_PATTERN.findall((message or '').lower())
+        if numbers:
+            requested_px = float(numbers[0])
+            new_desktop = dict(desktop)
+            changed = False
+            for key in padding_keys:
+                if desktop[key] != requested_px:
+                    new_desktop[key] = requested_px
+                    changed = True
+            if changed:
+                return {**patch, 'desktop': new_desktop}, [f'desktop padding -> {requested_px}px (message named an explicit value)']
+    return patch, []
+
+
 def apply_semantic_consistency_gate(message, action):
     """Returns (possibly-corrected `action`, list of correction descriptions)."""
     if not isinstance(action, dict):
         return action, []
     action_type = action.get('type')
-    corrections = []
 
     if action_type in (ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY):
-        module_type = action.get('module_type')
-        patch = action.get('patch')
-        if not isinstance(patch, dict) or not patch:
-            return action, []
-        new_patch = dict(patch)
-        for key, value in patch.items():
-            field = module_capabilities.get_editable_field(module_type, key) if module_type else None
-            value_type = field.get('valueType') if field else None
-            if value_type == 'color':
-                requested = _find_color((message or '').lower())
-                if requested and requested != value:
-                    new_patch[key] = requested
-                    corrections.append(f'{key}: {value!r} -> {requested!r} (message named an explicit color)')
-            elif value_type == 'align':
-                from .intent_normalization import find_alignment_value
-
-                requested = find_alignment_value((message or '').lower(), 'en')
-                if requested and requested != value:
-                    new_patch[key] = requested
-                    corrections.append(f'{key}: {value!r} -> {requested!r} (message named an explicit alignment)')
-            elif value_type == 'text':
-                quoted = _QUOTED_TEXT_RE.search(message or '')
-                if quoted:
-                    requested = _clean_text_value(quoted.group(1))
-                    if requested and requested != value:
-                        new_patch[key] = requested
-                        corrections.append(f'{key}: {value!r} -> {requested!r} (message quoted an explicit text value)')
-            elif value_type == 'url':
-                explicit = _EXPLICIT_URL_RE.search(message or '')
-                if explicit:
-                    requested = _clean_url_value(explicit.group(0))
-                    if requested and requested != value:
-                        new_patch[key] = requested
-                        corrections.append(f'{key}: {value!r} -> {requested!r} (message contained an explicit URL)')
+        new_patch, corrections = _correct_props_patch(message, action.get('module_type'), action.get('patch'))
         if corrections:
             return {**action, 'patch': new_patch}, corrections
         return action, []
 
     if action_type == ActionType.UPDATE_MODULE_SETTINGS:
-        patch = action.get('patch')
-        if not isinstance(patch, dict) or not isinstance(patch.get('desktop'), dict):
-            return action, []
-        desktop = patch['desktop']
-        padding_keys = [k for k in desktop if k.startswith('padding')]
-        if padding_keys and _SPACING_PATTERN.search((message or '').lower()):
-            numbers = _SPACING_NUMBER_PATTERN.findall((message or '').lower())
-            if numbers:
-                requested_px = float(numbers[0])
-                new_desktop = dict(desktop)
-                changed = False
-                for key in padding_keys:
-                    if desktop[key] != requested_px:
-                        new_desktop[key] = requested_px
-                        changed = True
-                if changed:
-                    corrections.append(f'desktop padding -> {requested_px}px (message named an explicit value)')
-                    return {**action, 'patch': {**patch, 'desktop': new_desktop}}, corrections
+        new_patch, corrections = _correct_settings_patch(message, action.get('patch'))
+        if corrections:
+            return {**action, 'patch': new_patch}, corrections
+        return action, []
+
+    # D4-E3 item 7/8 — BATCH_UPDATE carries BOTH shapes at once; each half
+    # is corrected through the EXACT SAME two helpers above, independently
+    # (never a third, parallel correction path).
+    if action_type == ActionType.BATCH_UPDATE:
+        new_props, props_corrections = _correct_props_patch(message, action.get('module_type'), action.get('props_patch'))
+        new_settings, settings_corrections = _correct_settings_patch(message, action.get('settings_patch'))
+        corrections = props_corrections + settings_corrections
+        if corrections:
+            return {**action, 'props_patch': new_props, 'settings_patch': new_settings}, corrections
         return action, []
 
     return action, []

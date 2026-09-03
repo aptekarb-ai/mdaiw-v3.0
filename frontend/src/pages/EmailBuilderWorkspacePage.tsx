@@ -545,7 +545,7 @@ export function EmailBuilderWorkspacePage() {
       || action.type === 'DUPLICATE_MODULE' || action.type === 'UPDATE_MODULE_SETTINGS'
       || action.type === 'APPLY_VML_PATTERN' || action.type === 'APPLY_OUTLOOK_WRAPPER'
       || action.type === 'RESTRUCTURE_LAYOUT' || action.type === 'REPLACE_UNSUPPORTED_PROPERTY'
-      || action.type === 'UPDATE_REPEATABLE_FIELD';
+      || action.type === 'UPDATE_REPEATABLE_FIELD' || action.type === 'BATCH_UPDATE';
     if (targetsCurrentSelection && builder.selectedModuleId !== capturedSelectedModuleId) {
       return false;
     }
@@ -630,6 +630,33 @@ export function EmailBuilderWorkspacePage() {
           ? { ...patch, desktop: { ...builder.selectedModule.settings.desktop, ...patch.desktop } }
           : patch;
         handleUpdateSettings(builder.selectedModuleId, mergedPatch);
+        return true;
+      }
+      // D4-E3 item 7/8 — BATCH_UPDATE. Reuses applyRepairPatch (already
+      // the "commit N patches as ONE history entry" primitive the repair
+      // engine uses) rather than calling handleUpdateProps AND
+      // handleUpdateSettings separately, which would create two undo
+      // steps instead of one. Same desktop-settings pre-merge as
+      // UPDATE_MODULE_SETTINGS above (applyRepairPatch's own settings
+      // merge is shallow at the top level too — a bare `{...patch}`
+      // would silently drop every other desktop field this module has).
+      case 'BATCH_UPDATE': {
+        if (!builder.selectedModuleId || !builder.selectedModule || builder.selectedModule.type !== action.module_type) {
+          return false;
+        }
+        const modulePatches = action.props_patch
+          ? [{ moduleId: builder.selectedModuleId, propPatch: action.props_patch }]
+          : [];
+        const settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[] = [];
+        if (action.settings_patch) {
+          const patch = action.settings_patch as { desktop?: Record<string, unknown> } & Record<string, unknown>;
+          const mergedSettingsPatch = patch.desktop
+            ? { ...patch, desktop: { ...builder.selectedModule.settings.desktop, ...patch.desktop } }
+            : patch;
+          settingsPatches.push({ moduleId: builder.selectedModuleId, settingsPatch: mergedSettingsPatch });
+        }
+        if (modulePatches.length === 0 && settingsPatches.length === 0) return false;
+        builder.applyRepairPatch(modulePatches, null, settingsPatches);
         return true;
       }
       case 'APPLY_VML_PATTERN':

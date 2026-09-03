@@ -127,6 +127,26 @@ export function LocalAIDiagnosticsPanel() {
                 <dt>Semantic-gate corrections</dt>
                 <dd>{diagnostics.session_stats.semantic_gate_corrections}</dd>
               </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>LLM successful completions</dt>
+                <dd>{diagnostics.session_stats.llm_successful_completions}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>LLM timeouts</dt>
+                <dd>{diagnostics.session_stats.llm_timeouts}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>LLM failures (non-timeout)</dt>
+                <dd>{diagnostics.session_stats.llm_failures}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Max LLM latency</dt>
+                <dd>{diagnostics.session_stats.max_llm_latency_ms != null ? `${Math.round(diagnostics.session_stats.max_llm_latency_ms)} ms` : '—'}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Knowledge-grounded responses</dt>
+                <dd>{diagnostics.session_stats.knowledge_grounded_responses}</dd>
+              </div>
             </dl>
           </>
         )}

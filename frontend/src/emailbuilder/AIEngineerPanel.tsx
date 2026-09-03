@@ -374,6 +374,28 @@ function modulePatchDiffRows(action: AICommandAction, selectedModule: EmailModul
       label: humanizePatchKey(key), before: '(varies per module)', after: formatPatchValue(after),
     }));
   }
+  if (action.type === 'BATCH_UPDATE') {
+    const currentProps = (selectedModule?.props ?? {}) as Record<string, unknown>;
+    const currentSettings = (selectedModule?.settings ?? {}) as Record<string, unknown>;
+    const rows: ModulePatchDiffRow[] = [];
+    if (action.props_patch) {
+      for (const [key, after] of Object.entries(action.props_patch)) {
+        rows.push({ label: humanizePatchKey(key), before: formatPatchValue(currentProps[key]), after: formatPatchValue(after) });
+      }
+    }
+    if (action.settings_patch) {
+      for (const [device, devicePatch] of Object.entries(action.settings_patch)) {
+        if (!devicePatch || typeof devicePatch !== 'object') continue;
+        const currentDevice = (currentSettings[device] ?? {}) as Record<string, unknown>;
+        for (const [key, after] of Object.entries(devicePatch as Record<string, unknown>)) {
+          rows.push({
+            label: `${humanizePatchKey(key)} (${device})`, before: formatPatchValue(currentDevice[key]), after: formatPatchValue(after),
+          });
+        }
+      }
+    }
+    return rows;
+  }
   return null;
 }
 

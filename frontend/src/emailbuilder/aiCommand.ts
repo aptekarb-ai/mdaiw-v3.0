@@ -53,6 +53,16 @@ export type AICommandAction =
   | { type: 'DELETE_MODULE'; target: 'selected' }
   | { type: 'DUPLICATE_MODULE'; target: 'selected' }
   | { type: 'APPLY_GLOBAL_STYLE'; target: 'selected'; module_type: AICommandModuleType; patch: Record<string, unknown> }
+  // D4-E3 item 7/8 — a compound request against the SAME currently
+  // selected module: a props-shaped patch AND a settings-shaped patch in
+  // ONE proposal/ONE undo step (see EmailBuilderWorkspacePage.tsx's
+  // handleApplyAiAction, which reuses the EXISTING applyRepairPatch batch
+  // primitive — never a new mutation path). Either half may be null, but
+  // never both (the backend's validate_action() already guarantees that).
+  | {
+      type: 'BATCH_UPDATE'; target: 'selected'; module_type: AICommandModuleType;
+      props_patch: Record<string, unknown> | null; settings_patch: Record<string, unknown> | null;
+    }
   // Sub-phase 6, work package D — the six actions reserved (named but
   // never implemented) in Phase A. Each routes through an EXISTING
   // mutator (updateModuleSettings/insertNestedModule/updateColumnWidths/
@@ -333,6 +343,12 @@ export function describeAction(action: AICommandAction): string {
       return `Apply a style change to every ${action.module_type} module (${Object.keys(action.patch).join(', ')})`;
     case 'UPDATE_MODULE_SETTINGS':
       return `Update the selected ${action.module_type} module's settings (${Object.keys(action.patch).join(', ')})`;
+    case 'BATCH_UPDATE': {
+      const propsKeys = action.props_patch ? Object.keys(action.props_patch) : [];
+      const settingsKeys = action.settings_patch ? Object.keys(action.settings_patch) : [];
+      const parts = [...propsKeys, ...settingsKeys];
+      return `Update the selected ${action.module_type} module (${parts.join(', ') || 'no changes'})`;
+    }
     case 'APPLY_VML_PATTERN':
       return `Enable the Classic Outlook VML fallback for the selected ${action.module_type} module`;
     case 'APPLY_OUTLOOK_WRAPPER':

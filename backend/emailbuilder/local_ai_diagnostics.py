@@ -238,7 +238,22 @@ _session_stats = {
     'llm_timeouts': 0,
     'llm_failures': 0,
     'max_llm_latency_ms': 0.0,
+    # D4-E3 item 5 — how many responses (deterministic explain-branch OR
+    # LLM-tier knowledge injection) were grounded in at least one curated
+    # KnowledgeRule, vs how many were not. Proves the imported open-source
+    # email-engineering skills are actually being RETRIEVED and USED
+    # during real conversations, not merely sitting in the registry
+    # unused — see rules.py/retrieval.py.
+    'knowledge_grounded_responses': 0,
 }
+
+# Kept OUTSIDE _session_stats (list, not a number) so
+# reset_session_stats_for_tests()'s generic int/float reset loop below
+# stays simple — reset explicitly alongside it instead. Bounded — this is
+# a diagnostics/testability surface, never meant to reconstruct a full
+# conversation transcript.
+_MAX_RECENT_KNOWLEDGE_RULE_IDS = 20
+_recent_knowledge_rule_ids = []
 
 
 def record_call_result(*, latency_ms, proposed_action_type, validated_successfully, repaired, scope_gated):
@@ -335,6 +350,24 @@ def record_llm_failure():
         logger.info('emailbuilder.local_ai_diagnostics.record_llm_failure_failed')
 
 
+def record_knowledge_rules_used(rule_ids):
+    """D4-E3 item 5 — called whenever a response (deterministic explain-
+    branch OR LLM-tier `knowledge` context injection) was grounded in one
+    or more real KnowledgeRule ids. `rule_ids` is a small list of strings
+    (rule.id values — never a title/description, never user text) —
+    stored bounded/rotating so this stays a live diagnostics/testability
+    signal, never an unbounded log. Best-effort — never raises."""
+    try:
+        ids = [str(r) for r in rule_ids if r]
+        if not ids:
+            return
+        _session_stats['knowledge_grounded_responses'] += 1
+        _recent_knowledge_rule_ids.extend(ids)
+        del _recent_knowledge_rule_ids[:-_MAX_RECENT_KNOWLEDGE_RULE_IDS]
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_knowledge_rules_used_failed')
+
+
 def get_session_stats():
     total_calls = _session_stats['total_calls']
     attempts = _session_stats['structured_action_attempts']
@@ -356,6 +389,8 @@ def get_session_stats():
         'llm_timeouts': _session_stats['llm_timeouts'],
         'llm_failures': _session_stats['llm_failures'],
         'max_llm_latency_ms': _session_stats['max_llm_latency_ms'] or None,
+        'knowledge_grounded_responses': _session_stats['knowledge_grounded_responses'],
+        'recent_knowledge_rule_ids': list(_recent_knowledge_rule_ids),
     }
 
 
@@ -365,3 +400,4 @@ def reset_session_stats_for_tests():
     code."""
     for key in _session_stats:
         _session_stats[key] = 0 if isinstance(_session_stats[key], int) else 0.0
+    _recent_knowledge_rule_ids.clear()

@@ -81,7 +81,13 @@ _SYSTEM_PROMPT_BASE = (
     'string. You may only propose: inserting one or more modules of a type given in the '
     'allowed module types, updating an allowed property of the currently selected module, '
     'deleting or duplicating the currently selected module, applying a style change to '
-    'every module of one type, a document-level change (enable/disable Email Reset CSS, '
+    'every module of one type, D4-E3 — a COMPOUND update to the selected module when the '
+    'user asks for a property change (color/text/alignment/size) AND a spacing/padding '
+    'change in the SAME message (action type BATCH_UPDATE, with props_patch for the '
+    'property half and settings_patch — {"desktop": {"paddingTop"/"paddingRight"/'
+    '"paddingBottom"/"paddingLeft": <px>}} — for the spacing half; use this ONLY when both '
+    'halves are genuinely requested together, never when only one kind of change was asked '
+    'for), a document-level change (enable/disable Email Reset CSS, '
     'set/enable/disable/clear Custom CSS, set the email title, set the email subject, or '
     'set/clear the favicon URL — action types SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, '
     'SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS, SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, '
@@ -295,9 +301,22 @@ def _action_schema():
                             'items': composition_item,
                             'maxItems': MAX_COMPOSITION_ITEMS,
                         },
+                        # D4-E3 item 7/8 — BATCH_UPDATE's two halves, always
+                        # against the currently selected module (same
+                        # `target: 'selected'` as UPDATE_MODULE_PROPS/
+                        # UPDATE_MODULE_SETTINGS): props_patch for
+                        # color/text/align/size-shaped fields, settings_patch
+                        # for the nested desktop.padding* shape. Use ONLY
+                        # when the user asked for BOTH kinds of change on
+                        # the SAME module in one message — a single-kind
+                        # request still uses the existing single-purpose
+                        # action type, never BATCH_UPDATE with one half null.
+                        'props_patch': {'type': ['object', 'null']},
+                        'settings_patch': {'type': ['object', 'null']},
                     },
                     'required': [
                         'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
+                        'props_patch', 'settings_patch',
                     ],
                     'additionalProperties': False,
                 },
@@ -438,7 +457,47 @@ def _build_safe_context(context):
     a follow-up like "why was the ratio approximated" the way the OpenAI
     provider already could — see the R4-B2 report's live-QA finding).
     Returns (safe_context_dict, safe_history_list), same shape as the
-    OpenAI provider's version."""
+    OpenAI provider's version.
+
+    D4-E3 item 2 — this function's return value (plus the `active_target_context`
+    _build_system_prompt() reads from it, and the `safe_history` list
+    threaded into `messages`) together already constitute this
+    checkpoint's "EmailEngineerConversationContext": a bounded, per-turn
+    context window built fresh from whatever is actually relevant, never
+    the full document/knowledge base/chat history. Reused here rather
+    than replaced with a second, parallel context object, per D4-E3's own
+    "do not create replacements for working systems" instruction. Mapped
+    against D4-E3 item 2's checklist:
+
+      - document (platform/width)         -> safe_context['platform'/'width']
+      - current selected module / type    -> safe_context['selected_module']
+                                              (+ 'active_target_context' below)
+      - active email structure            -> intentionally NEVER included — this
+                                              app never sends the module tree to
+                                              any AI provider (see
+                                              execute_tool_call's GET_DOCUMENT_SUMMARY
+                                              docstring); a disclosed, deliberate
+                                              boundary, not a gap
+      - previous user / AI turns          -> safe_history (conversation_history)
+      - previous proposed/applied action  -> carried inside safe_history's own
+                                              assistant-turn text (AIEngineerPanel.tsx
+                                              stores "Applied: <describeAction(...)>"
+                                              after every Apply — see that file's
+                                              handleApplyProposal), never a second,
+                                              structured field duplicating it
+      - last validation issue discussed   -> safe_context['selected_validation_issue']
+      - EmailBrief summary if present     -> safe_context['construction_plan_summary']
+      - attachment summaries              -> out of scope for this endpoint by
+                                              design: an attachment-aware request
+                                              ("build an email from this") routes
+                                              to the SEPARATE /construction-plan/
+                                              endpoint entirely (see
+                                              constructionIntentMatcher.ts) before
+                                              it would ever reach here
+      - reconstruction/fidelity context   -> safe_context['import_reconstruction']
+      - builder capabilities              -> safe_context['active_target_context']
+      - relevant retrieved knowledge      -> safe_context['knowledge']
+    """
     context = context if isinstance(context, dict) else {}
     selected = context.get('selected_module') if isinstance(context.get('selected_module'), dict) else None
     safe_selected = None
@@ -496,6 +555,10 @@ def _build_safe_context(context):
     knowledge = retrieve_relevant_knowledge(message_for_retrieval, safe_context)
     if knowledge:
         safe_context['knowledge'] = knowledge
+        # D4-E3 item 5 — proves the imported open-source email-engineering
+        # skills are actually retrieved for real requests, not just
+        # sitting unused in the registry.
+        local_ai_diagnostics.record_knowledge_rules_used([k['id'] for k in knowledge])
 
     # R4-B3 §A — a same-language-independent signal for the model: WHAT
     # the user likely wants (a bounded canonical-intent vocabulary) and

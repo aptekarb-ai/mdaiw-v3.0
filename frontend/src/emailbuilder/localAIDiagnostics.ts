@@ -35,6 +35,21 @@ export interface LocalAISessionStats {
   // D4-E2 item 5 — residual LLM-proposed field values overridden by
   // apply_semantic_consistency_gate().
   semantic_gate_corrections: number;
+  // D4-E2 Local-LLM Reachability + Performance Hardening item 7 — the
+  // local LLM tier's three mutually exclusive per-call outcomes, plus the
+  // slowest successful completion observed this session. Correcting a
+  // gap: these were added to the backend in that checkpoint but never
+  // actually wired into this type/the panel below until D4-E3.
+  llm_successful_completions: number;
+  llm_timeouts: number;
+  llm_failures: number;
+  max_llm_latency_ms: number | null;
+  // D4-E3 item 5 — how many responses were grounded in a real curated
+  // KnowledgeRule (deterministic explain-branch or LLM knowledge
+  // injection), proving the imported open-source email skills are
+  // actually used, not just registered.
+  knowledge_grounded_responses: number;
+  recent_knowledge_rule_ids: string[];
 }
 
 export interface LocalAIDiagnostics {

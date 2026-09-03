@@ -3366,6 +3366,91 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     expect(textarea.value).toContain('Add your heading or paragraph text here.');
   });
 
+  // D4-E3 scope-gate hardening — end-to-end proof (not just the unit-level
+  // useEmailBuilderState.test.ts coverage of applyRepairPatch itself) that
+  // a BATCH_UPDATE proposal's Apply/Cancel/Undo behave exactly like every
+  // other proposal type: one Apply = one history entry covering BOTH
+  // halves, Cancel = zero mutation, one Undo restores the complete
+  // pre-Apply state.
+  it('BATCH_UPDATE applies both halves as ONE history entry; one Undo restores the complete pre-Apply state', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const beforeApply = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will update the selected button module and adjust its padding. Please confirm.',
+      action: {
+        type: 'BATCH_UPDATE', target: 'selected', module_type: 'button',
+        props_patch: { backgroundColor: '#76C043' },
+        settings_patch: { desktop: { paddingTop: 37, paddingRight: 37, paddingBottom: 37, paddingLeft: 37 } },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make this button green and increase the padding to 37px');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Update the selected button module/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const afterApply = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    // Both halves landed from the SAME Apply.
+    expect(afterApply.value).toContain('#76C043');
+    expect(afterApply.value).toContain('37px');
+    expect(afterApply.value).not.toBe(beforeApply);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    const afterUndo = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    // ONE undo reverted BOTH the color AND the padding together (exact
+    // byte-for-byte restoration of the pre-Apply document) — proves they
+    // were committed as a single history entry, not two.
+    expect(afterUndo.value).toBe(beforeApply);
+  });
+
+  it('BATCH_UPDATE: Cancel discards the proposal with zero document mutation', async () => {
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
+    const user = userEvent.setup();
+    renderPage();
+    await openCategory(user, 'CTA');
+    await user.click(await screen.findByRole('button', { name: 'Add Button' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: 'I will update the selected button module and adjust its padding. Please confirm.',
+      action: {
+        type: 'BATCH_UPDATE', target: 'selected', module_type: 'button',
+        props_patch: { backgroundColor: '#76C043' },
+        settings_patch: { desktop: { paddingTop: 37, paddingRight: 37, paddingBottom: 37, paddingLeft: 37 } },
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make this button green and increase the padding to 37px');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Update the selected button module/);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('#76C043');
+    expect(textarea.value).not.toContain('37px');
+  });
+
   it('APPLY_OUTLOOK_WRAPPER enables the background-image VML fallback, visible in Code view', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();

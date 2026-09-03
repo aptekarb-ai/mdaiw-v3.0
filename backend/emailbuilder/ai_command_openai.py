@@ -39,7 +39,7 @@ from .ai_command import (
     execute_tool_call,
     validate_action,
 )
-from . import construction_planner, module_capabilities
+from . import construction_planner, local_ai_diagnostics, module_capabilities
 from .attachment_untrusted_wrapper import wrap_untrusted_document_content
 from .knowledge.retrieval import retrieve_relevant_knowledge
 from .intent_normalization import normalize_intent
@@ -55,7 +55,13 @@ _SYSTEM_PROMPT = (
     'string. You may only propose: inserting one or more modules of a type given in the '
     'allowed module types, updating an allowed property of the currently selected module, '
     'deleting or duplicating the currently selected module, applying a style change to '
-    'every module of one type, a document-level change (enable/disable Email Reset CSS, '
+    'every module of one type, D4-E3 — a COMPOUND update to the selected module when the '
+    'user asks for a property change (color/text/alignment/size) AND a spacing/padding '
+    'change in the SAME message (action type BATCH_UPDATE, with props_patch for the '
+    'property half and settings_patch — {"desktop": {"paddingTop"/"paddingRight"/'
+    '"paddingBottom"/"paddingLeft": <px>}} — for the spacing half; use this ONLY when both '
+    'halves are genuinely requested together, never when only one kind of change was asked '
+    'for), a document-level change (enable/disable Email Reset CSS, '
     'set/enable/disable/clear Custom CSS, set the email title, set the email subject, or '
     'set/clear the favicon URL — action types SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, '
     'SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS, SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, '
@@ -254,9 +260,15 @@ def _action_schema():
                             'items': composition_item,
                             'maxItems': MAX_COMPOSITION_ITEMS,
                         },
+                        # D4-E3 item 7/8 — BATCH_UPDATE's two halves — see
+                        # ai_command_local.py's own schema comment (mirrored
+                        # here, same shape, same posture).
+                        'props_patch': {'type': ['object', 'null']},
+                        'settings_patch': {'type': ['object', 'null']},
                     },
                     'required': [
                         'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
+                        'props_patch', 'settings_patch',
                     ],
                     'additionalProperties': False,
                 },
@@ -362,6 +374,9 @@ def _build_safe_context(context):
     knowledge = retrieve_relevant_knowledge(message_for_retrieval, safe_context)
     if knowledge:
         safe_context['knowledge'] = knowledge
+        # D4-E3 item 5 — parity with the local provider's own diagnostics
+        # hook (see ai_command_local.py's own comment on this call).
+        local_ai_diagnostics.record_knowledge_rules_used([k['id'] for k in knowledge])
 
     # R4-B3 §A — parity with the local provider's own canonical-intent/
     # language hint (see ai_command_local.py::_build_safe_context's
