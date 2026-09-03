@@ -761,6 +761,17 @@
   gap: var(--space-1);
 }
 
+/* D4-E1 item 11 — the "this session" stats sub-block, visually separated
+   from the connection/capability facts above it. */
+.ai-engineer-panel__diagnostics-subheading {
+  margin: var(--space-3) 0 var(--space-1);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-subtle);
+}
+
 .ai-engineer-panel__diagnostics-row {
   display: flex;
   justify-content: space-between;
