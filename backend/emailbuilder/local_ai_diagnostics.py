@@ -22,9 +22,14 @@ Two independent questions this module answers:
 MDAIW works with ANY OpenAI-compatible local model — this registry is a
 best-effort ENRICHMENT for the diagnostics surface, never a gate. An
 unrecognized model name still gets a conservative, honest 'unknown'
-profile rather than blocking use; ai_command_local.py itself never reads
-this module at all, so a diagnostics blind spot here can never affect
-whether the AI Engineer actually works.
+profile rather than blocking use.
+
+D4-E1 item 11 — ai_command_local.py now WRITES session-scoped call
+statistics here (record_call_result/record_fallback, both best-effort,
+fire-and-forget, never raising) but never reads anything back from this
+module to decide whether/how to answer a turn — the write is one-way,
+so a diagnostics bookkeeping bug here can never affect whether the AI
+Engineer actually works.
 
 Never exposes the configured API key's value anywhere in this module's
 output — only whether one is set (see get_local_ai_diagnostics).
@@ -186,4 +191,177 @@ def get_local_ai_diagnostics():
         # this or any other optional provider being available. See
         # ai_command.py::get_default_email_command_provider()'s own docstring.
         'deterministic_fallback_ready': True,
+        'session_stats': get_session_stats(),
     }
+
+
+# --- D4-E1 item 11 — session-scoped call statistics -----------------------
+# A one-way WRITE dependency from ai_command_local.py into this module
+# (record_call_result(), called fire-and-forget after every real request)
+# — this module still never reads anything back to influence whether the
+# AI Engineer works (see this file's own module docstring): a stats-
+# recording failure here is caught and ignored by the caller, never
+# raised, never blocks a turn. Plain in-process counters, reset on
+# process restart — "current test session," not a persisted metric;
+# no database write, no new model, matching this checkpoint's explicit
+# "extend the existing diagnostics" instruction rather than building a
+# new persistence layer for what is fundamentally live operational
+# telemetry, not a durable record.
+_session_stats = {
+    'total_calls': 0,
+    'total_latency_ms': 0.0,
+    'structured_action_attempts': 0,
+    'structured_action_successes': 0,
+    'validator_repair_corrections': 0,
+    'scope_gate_corrections': 0,
+    'deterministic_fallback_count': 0,
+    # D4-E2 item 10 — how many turns the deterministic router answered
+    # WITHOUT ever calling the optional LLM tier (DeterministicFirstEmailCommandProvider
+    # short-circuiting on a non-NO_MATCH deterministic result), vs how many
+    # genuinely needed it. Together these are the direct evidence for
+    # "deterministic-first materially reduces latency/LLM usage."
+    'llm_calls_avoided_by_deterministic': 0,
+    'llm_calls_required': 0,
+    # D4-E2 item 5 — how many residual LLM-routed actions had a field
+    # value overridden by apply_semantic_consistency_gate().
+    'semantic_gate_corrections': 0,
+    # D4-E2 Local-LLM Reachability + Performance Hardening item 7 — the
+    # local LLM tier's three MUTUALLY EXCLUSIVE outcomes per attempted
+    # call, tracked distinctly (see EmailCommandProviderTimeout's own
+    # docstring for why timeout is its own category, not folded into
+    # deterministic_fallback_count, which stays as the pre-existing
+    # "the local provider degraded to deterministic for ANY reason"
+    # signal). max_llm_latency_ms is only ever updated by a SUCCESSFUL
+    # completion (a timed-out call has no real "latency" to report — it
+    # ran into the configured ceiling, not a natural completion time).
+    'llm_successful_completions': 0,
+    'llm_timeouts': 0,
+    'llm_failures': 0,
+    'max_llm_latency_ms': 0.0,
+}
+
+
+def record_call_result(*, latency_ms, proposed_action_type, validated_successfully, repaired, scope_gated):
+    """Called once per completed (non-raising) LocalEmailCommandProvider.resolve()
+    call. Best-effort — never raises; a bookkeeping bug here must never
+    break a real AI Engineer turn."""
+    try:
+        _session_stats['total_calls'] += 1
+        _session_stats['total_latency_ms'] += float(latency_ms or 0)
+        if proposed_action_type and proposed_action_type != 'NONE':
+            _session_stats['structured_action_attempts'] += 1
+            if validated_successfully:
+                _session_stats['structured_action_successes'] += 1
+        if repaired:
+            _session_stats['validator_repair_corrections'] += 1
+        if scope_gated:
+            _session_stats['scope_gate_corrections'] += 1
+    except Exception:  # noqa: BLE001 - diagnostics bookkeeping must never break a real turn
+        logger.info('emailbuilder.local_ai_diagnostics.record_call_result_failed')
+
+
+def record_fallback():
+    """Called once whenever LocalEmailCommandProvider.resolve() is about
+    to raise EmailCommandProviderUnavailable (i.e. every real trigger of
+    the deterministic fallback for the local path) — see
+    ai_command_local.py's own call sites."""
+    try:
+        _session_stats['deterministic_fallback_count'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_fallback_failed')
+
+
+def record_llm_call_avoided():
+    """Called once per turn where DeterministicFirstEmailCommandProvider's
+    first (deterministic) attempt already produced a non-NO_MATCH result,
+    so the optional LLM tier was never invoked at all. Best-effort —
+    never raises."""
+    try:
+        _session_stats['llm_calls_avoided_by_deterministic'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_llm_call_avoided_failed')
+
+
+def record_llm_call_required():
+    """Called once per turn where the deterministic attempt genuinely
+    NO_MATCHed and the LLM tier was actually consulted. Best-effort —
+    never raises."""
+    try:
+        _session_stats['llm_calls_required'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_llm_call_required_failed')
+
+
+def record_semantic_gate_corrections(count):
+    """Called with the number of fields apply_semantic_consistency_gate()
+    overrode on a single LLM-proposed action. Best-effort — never raises."""
+    try:
+        _session_stats['semantic_gate_corrections'] += int(count or 0)
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_semantic_gate_corrections_failed')
+
+
+def record_llm_success(*, latency_ms):
+    """Called once per LocalEmailCommandProvider.resolve() call that
+    reaches a real, non-raising completion (a genuine LLM answer was
+    obtained — independent of whether the PROPOSED ACTION itself later
+    validated; see record_call_result for that finer-grained split).
+    Best-effort — never raises."""
+    try:
+        _session_stats['llm_successful_completions'] += 1
+        _session_stats['max_llm_latency_ms'] = max(_session_stats['max_llm_latency_ms'], float(latency_ms or 0))
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_llm_success_failed')
+
+
+def record_llm_timeout():
+    """Called once whenever a local-model call raises EmailCommandProviderTimeout
+    specifically (see that exception's own docstring) — tracked separately
+    from every other failure reason. Best-effort — never raises."""
+    try:
+        _session_stats['llm_timeouts'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_llm_timeout_failed')
+
+
+def record_llm_failure():
+    """Called once for any local-model call failure that is NOT a timeout
+    (connection refused, malformed response, provider construction
+    failure, etc.) — see ai_command_local.py's own call sites. Best-effort
+    — never raises."""
+    try:
+        _session_stats['llm_failures'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_llm_failure_failed')
+
+
+def get_session_stats():
+    total_calls = _session_stats['total_calls']
+    attempts = _session_stats['structured_action_attempts']
+    return {
+        'total_calls': total_calls,
+        'average_latency_ms': round(_session_stats['total_latency_ms'] / total_calls, 1) if total_calls else None,
+        'structured_action_attempts': attempts,
+        'structured_action_successes': _session_stats['structured_action_successes'],
+        'structured_action_success_rate': (
+            round(_session_stats['structured_action_successes'] / attempts, 3) if attempts else None
+        ),
+        'validator_repair_corrections': _session_stats['validator_repair_corrections'],
+        'scope_gate_corrections': _session_stats['scope_gate_corrections'],
+        'deterministic_fallback_count': _session_stats['deterministic_fallback_count'],
+        'llm_calls_avoided_by_deterministic': _session_stats['llm_calls_avoided_by_deterministic'],
+        'llm_calls_required': _session_stats['llm_calls_required'],
+        'semantic_gate_corrections': _session_stats['semantic_gate_corrections'],
+        'llm_successful_completions': _session_stats['llm_successful_completions'],
+        'llm_timeouts': _session_stats['llm_timeouts'],
+        'llm_failures': _session_stats['llm_failures'],
+        'max_llm_latency_ms': _session_stats['max_llm_latency_ms'] or None,
+    }
+
+
+def reset_session_stats_for_tests():
+    """Test-only escape hatch — mirrors module_capabilities.py's own
+    reset_cache_for_tests() convention. Never called from application
+    code."""
+    for key in _session_stats:
+        _session_stats[key] = 0 if isinstance(_session_stats[key], int) else 0.0

@@ -26,6 +26,7 @@ other provider failure. This is a safe degrade path, not a crash.
 
 import json
 import logging
+import re
 import time
 
 from django.conf import settings
@@ -35,15 +36,20 @@ from .ai_command import (
     ActionType,
     CommandResult,
     EmailCommandProvider,
+    EmailCommandProviderTimeout,
     EmailCommandProviderUnavailable,
     MAX_COMPOSITION_CHILDREN_PER_COLUMN,
     MAX_COMPOSITION_ITEMS,
     MAX_GENERATED_MODULES,
     MAX_TOOL_LOOP_ITERATIONS,
     READ_TOOL_NAMES,
+    apply_scope_gate,
+    build_active_target_context,
+    describe_action_validation_failure,
     execute_tool_call,
+    validate_action,
 )
-from . import construction_planner, module_capabilities
+from . import construction_planner, local_ai_diagnostics, module_capabilities
 from .attachment_untrusted_wrapper import wrap_untrusted_document_content
 from .knowledge.retrieval import retrieve_relevant_knowledge
 from .intent_normalization import normalize_intent
@@ -51,7 +57,23 @@ from .planner import build_plan
 
 logger = logging.getLogger('emailbuilder.ai_command_local')
 
-_SYSTEM_PROMPT = (
+# D4-E2 Local-LLM Reachability + Performance Hardening item 4 — the
+# always-relevant instructions live in _SYSTEM_PROMPT_BASE, sent on every
+# local-model call. _VALIDATION_ISSUE_GUIDANCE (below) is real, safety-
+# relevant grounding that is only ever ACTIONABLE when a specific
+# validation issue is actually the subject of the turn (selected_validation_issue
+# present in context) — appending it unconditionally cost ~700 characters
+# (~180 tokens) of fixed prefill on every single local call, including the
+# large majority that have nothing to do with VML/contrast/placeholder-
+# link issues at all. _build_system_prompt() appends it ONLY when
+# selected_validation_issue is present, never removing it when it is
+# actually needed — this is a field-presence-driven structural trim, not
+# a request-phrasing-driven one, so it generalizes to every future
+# request rather than special-casing today's QA phrases. ai_command_openai.py
+# (the cloud/paid tier, not local, and not what this hardening item
+# targets) deliberately keeps its OWN always-unconditional _SYSTEM_PROMPT
+# unchanged.
+_SYSTEM_PROMPT_BASE = (
     'You are the AI Engineer inside an email builder. You translate one short user '
     'instruction into AT MOST ONE structured action. You never write raw HTML, CSS, or '
     'JavaScript, and you never invent image URLs — to reference an image, use the '
@@ -74,7 +96,33 @@ _SYSTEM_PROMPT = (
     '"Shop Now", "Learn More") is fine, but do not fabricate specific facts. If the '
     'instruction is ambiguous, unsupported, or targets something other than the current '
     'selection, return action type NONE and ask a brief clarifying question in `reply`. Reply '
-    'in the same language the user wrote in. The context JSON may include editor_mode (which '
+    'in the same language the user wrote in, unless they explicitly asked for a different one. '
+    'D4-E2 — the context JSON may include active_target_context (present only when a module is '
+    'selected/resolved): module_id (its identifier, already resolved — if selected_module is present '
+    'in context, that module IS the target; never ask the user which module they mean, and never ask '
+    'them to re-select it, unless active_target_context is genuinely absent), editable_props (the EXACT '
+    'list of editable field names, value types, and allowed values for THAT module type, taken directly '
+    'from the real builder schema — a patch key not listed there does not exist on this module, never '
+    'invent one; a common mistake is proposing "content" when the real field is named "text", always use '
+    'the exact key from active_target_context.editable_props, never a plausible-sounding synonym), '
+    'editable_settings (dotted keys like "desktop.paddingTop" — these belong under UPDATE_MODULE_SETTINGS\'s '
+    'nested patch.desktop object, never as a flat property; a request like "make this padding 24px" is '
+    'UPDATE_MODULE_SETTINGS with patch {"desktop": {"paddingTop": 24, "paddingRight": 24, "paddingBottom": 24, '
+    '"paddingLeft": 24}}, never UPDATE_MODULE_PROPS with an invented flat "padding" field), and '
+    'supported_actions (the action types this specific module actually supports — never propose an action '
+    'type absent from this list for the selected module). D4-E1 — stay scoped to exactly what the user asked: if the '
+    'user asks to change one property (e.g. "make this red"), propose a patch containing ONLY the '
+    'field(s) that property requires — never also change unrelated fields (text, link, alignment, '
+    'padding, ...) the user did not mention, even if you think they might want it too; a scope-creep '
+    'proposal is rejected by this application before the user ever sees it. D4-E1 — reason like a '
+    'professional email developer before answering: (1) what does the user want, in concrete terms; '
+    '(2) which part of the email does it refer to (use context/active_target_context to ground this, '
+    'never guess between multiple real candidates — ask instead); (3) can the current builder represent '
+    'it exactly, partially, or not at all; (4) if exactly, which existing module/property/action '
+    'implements it; (5) if only partially, what will differ from what was asked, stated plainly; (6) '
+    'does the change carry any Outlook/VML, responsive, accessibility, or platform-specific risk worth '
+    'a one-line mention. Keep this reasoning internal — the user-facing `reply` is the concise, '
+    'professional conclusion, never a raw step-by-step transcript. The context JSON may include editor_mode (which '
     'tab the user is on), selected_column (which column is focused — informational only, you '
     'cannot yet target a column directly, only the currently selected module), and '
     'selected_validation_issue (a specific compatibility/accessibility issue the user was just '
@@ -106,28 +154,23 @@ _SYSTEM_PROMPT = (
     'and is not unsupported due to missing information, but no existing module or safe combination of modules '
     'can represent it, building a new module type would be needed, which this conversation cannot do). Never '
     'claim this builder can do something a construction_plan_summary entry, or your own knowledge of the '
-    'allowed module types, says it cannot. Prior turns of this SAME conversation '
+    'allowed module types, says it cannot. D4-E1 — when explaining an UNSUPPORTED or REQUIRES_NEW_MODULE '
+    'limitation, never answer with only "I cannot do that" — say what you CAN do first, then name the gap '
+    'plainly. Bad: "Cannot perform action." Better: "I can reproduce the text, spacing, and CTA exactly, but '
+    'the current builder has no video module — I can build the rest of the email and leave the video section '
+    'as a documented unsupported requirement." Prior turns of this SAME conversation '
     'may be included as ordinary user/assistant messages before the current one — use them to '
     'resolve a follow-up like "make it darker" or "can you fix it" against what was just discussed, '
     'but never assume anything about a different conversation or document. '
-    'Three specific validation issues need extra care. (1) "VML is not processed by New '
-    'Outlook": VML only renders in Classic Outlook — never claim it will make New Outlook, '
-    'Gmail, Apple Mail, or any other client show VML content; if the selected module already '
-    'has a real HTML/CSS fallback alongside its VML (this app\'s renderer always generates '
-    'one), say so and explain that no code change is needed, rather than proposing one anyway. '
-    '(2) "Weak text contrast": compute a real WCAG AA-compliant replacement (contrast ratio at '
-    'least 4.5:1 for normal text) from the exact foreground/background colors given in context '
-    '— prefer the smallest change, adjusting only the text color unless that alone cannot reach '
-    'the ratio, and state the old color, the proposed color, the old ratio, and the resulting '
-    'ratio in your reply before proposing the action. (3) "Placeholder link" (href="#"): never '
-    'invent a destination URL just to clear the warning, the same rule as image URLs above — if '
-    'the user, an earlier turn of this conversation, or the document\'s own brief already gives '
-    'a real destination, propose it and ask for confirmation; otherwise return action type NONE '
-    'and ask the user for the destination URL, leaving the issue unresolved until they answer. '
     'R4-B3 — when you must ask a clarifying question, ground it in whatever real context you were '
     'actually given; never fall back to a generic prompt when specific context is available. If '
     "selected_module or selected_validation_issue is present, that IS what the user means — don't ask "
-    'which module/issue they mean. If knowledge or import_reconstruction entries are present and '
+    'which module/issue they mean, and never ask the user to re-select it. D4-E2 — this holds even when '
+    'the message itself names a property generically (e.g. "change the color" with no module named): '
+    'active_target_context.module_id, if present, is the authoritative, already-resolved target — treat '
+    'it exactly as if the user had pointed at that module. Only ask which module is meant when '
+    'active_target_context is absent AND no other context (conversation history, a named module type) '
+    'resolves it. If knowledge or import_reconstruction entries are present and '
     "relevant, use their specifics (exact colors, ratios, category names) instead of a textbook answer. "
     'Bad: "Select a module on the canvas first." Better, when context exists: "I can make that change, '
     "but I can't tell whether you're referring to the hero text or its button. Which one should I "
@@ -143,6 +186,37 @@ _SYSTEM_PROMPT = (
     '"..."}), or COMPARE_RECONSTRUCTION. You get at most a few such requests before you must answer with '
     'whatever you have; never request the same tool twice in a row.'
 )
+
+# Appended only when context['selected_validation_issue'] is present (see
+# _build_system_prompt below) — see this module's own comment above
+# _SYSTEM_PROMPT_BASE for why.
+_VALIDATION_ISSUE_GUIDANCE = (
+    ' Three specific validation issues need extra care. (1) "VML is not processed by New '
+    'Outlook": VML only renders in Classic Outlook — never claim it will make New Outlook, '
+    'Gmail, Apple Mail, or any other client show VML content; if the selected module already '
+    'has a real HTML/CSS fallback alongside its VML (this app\'s renderer always generates '
+    'one), say so and explain that no code change is needed, rather than proposing one anyway. '
+    '(2) "Weak text contrast": compute a real WCAG AA-compliant replacement (contrast ratio at '
+    'least 4.5:1 for normal text) from the exact foreground/background colors given in context '
+    '— prefer the smallest change, adjusting only the text color unless that alone cannot reach '
+    'the ratio, and state the old color, the proposed color, the old ratio, and the resulting '
+    'ratio in your reply before proposing the action. (3) "Placeholder link" (href="#"): never '
+    'invent a destination URL just to clear the warning, the same rule as image URLs above — if '
+    'the user, an earlier turn of this conversation, or the document\'s own brief already gives '
+    'a real destination, propose it and ask for confirmation; otherwise return action type NONE '
+    'and ask the user for the destination URL, leaving the issue unresolved until they answer.'
+)
+
+
+def _build_system_prompt(safe_context):
+    """D4-E2 item 4 — the base instructions plus _VALIDATION_ISSUE_GUIDANCE
+    ONLY when there is an actual validation issue in play this turn. Never
+    removes guidance that is relevant THIS turn — only skips guidance that
+    could not possibly apply (no selected_validation_issue means no VML/
+    contrast/placeholder-link issue is being discussed)."""
+    if isinstance(safe_context, dict) and safe_context.get('selected_validation_issue'):
+        return _SYSTEM_PROMPT_BASE + _VALIDATION_ISSUE_GUIDANCE
+    return _SYSTEM_PROMPT_BASE
 
 
 def _action_schema():
@@ -271,6 +345,10 @@ _EDITOR_MODES = {'visual', 'code', 'preview', 'validate', 'ai'}
 # serializers.py's MAX_CONVERSATION_HISTORY_TURNS, re-applied here as the
 # same defense-in-depth posture, never trusting the caller's own cap held.
 _MAX_HISTORY_TURNS = 8
+# D4-E1 item 5 — bounded self-correction loop cap: at most this many
+# TOTAL completion rounds attempting to get a schema-valid action (the
+# spec's own "maximum recommended: 3 total attempts"). Never unlimited.
+_MAX_REPAIR_ATTEMPTS = 3
 
 # R4-B2 — same caps as ai_command_openai.py's own
 # _MAX_IMPORT_REGIONS/_MAX_IMPORT_SAMPLE_FINDINGS, kept in sync manually
@@ -368,8 +446,10 @@ def _build_safe_context(context):
         module_type = selected['type']
         raw_props = selected.get('props') if isinstance(selected.get('props'), dict) else {}
         allowed_keys = {field['key'] for field in module_capabilities.get_editable_fields(module_type)}
+        raw_id = selected.get('id')
         safe_selected = {
             'type': module_type,
+            'id': raw_id[:100] if isinstance(raw_id, str) else None,
             'props': {k: v for k, v in raw_props.items() if k in allowed_keys and isinstance(v, (str, int, float))},
         }
 
@@ -449,6 +529,19 @@ def _build_safe_context(context):
     safe_plan_summary = _build_safe_construction_plan_summary(context.get('construction_plan_summary'))
     if safe_plan_summary:
         safe_context['construction_plan_summary'] = safe_plan_summary
+
+    # D4-E2 item 2 — exact Builder-schema grounding for the resolved
+    # target module only (never the whole 53-module-type schema — see
+    # ai_command.py::build_active_target_context's own docstring). Only
+    # attached when a module is actually selected/resolved, matching
+    # every other conditional-presence field in this context. Carries
+    # module_id (when the frontend supplied one) so the model can state
+    # unambiguously that a resolved selection IS the target, without
+    # ever needing to ask the user to re-select it.
+    if safe_selected:
+        target_context = build_active_target_context(safe_selected['type'], module_id=safe_selected.get('id'))
+        if target_context:
+            safe_context['active_target_context'] = target_context
 
     return safe_context, safe_history
 
@@ -537,6 +630,77 @@ def _apply_context_limit(safe_context, safe_history, limit_chars):
     return history
 
 
+# D4-E1 item 7 — a lightweight, script/word-based heuristic answering
+# "does this text look like it's written in <language>", used ONLY to
+# decide whether a local model's OWN reply needs a bounded relocalization
+# pass (see LocalEmailCommandProvider.resolve()) — never for routing or
+# execution (intent_normalization.py's own detect_language()/
+# SUPPORTED_LANGUAGES are unchanged by this, and stay Tier-0's authority).
+# Script-based detection (Devanagari/Arabic/CJK) is highly reliable on
+# its own; Latin-script languages use a small stopword-overlap heuristic,
+# the same technique intent_normalization.py's own detector uses, kept
+# deliberately separate rather than shared/exported — this is a narrower,
+# best-effort, LOCALIZATION-only signal that answers a different question
+# ("what language IS this text", not "which of a few Tier-0-supported
+# languages, if any, does this match"). Honestly partial: a language
+# outside this list is simply reported as unknown, never as English.
+_DEVANAGARI_RE = re.compile(r'[ऀ-ॿ]')
+_ARABIC_RE = re.compile(r'[؀-ۿ]')
+_CJK_RE = re.compile(r'[぀-ヿ一-鿿가-힯]')
+_LATIN_WORD_RE = re.compile(r"[a-zà-öø-ÿ]+", re.IGNORECASE)
+
+_LATIN_LANGUAGE_STOPWORDS = {
+    'es': frozenset({'el', 'la', 'los', 'las', 'un', 'una', 'de', 'del', 'que', 'para', 'con', 'por', 'como', 'más', 'está', 'es', 'son', 'cambia'}),
+    'fr': frozenset({'le', 'la', 'les', 'un', 'une', 'de', 'du', 'des', 'que', 'pour', 'avec', 'par', 'comme', 'plus', 'est', 'sont', 'change'}),
+    'de': frozenset({'der', 'die', 'das', 'ein', 'eine', 'und', 'ist', 'sind', 'mit', 'für', 'auf', 'zu', 'von', 'nicht', 'ändere'}),
+    'pt': frozenset({'o', 'a', 'os', 'as', 'um', 'uma', 'de', 'do', 'da', 'que', 'para', 'com', 'por', 'como', 'mais', 'é', 'são'}),
+}
+
+
+def _detect_relevant_language(text):
+    """Best-effort: returns an ISO-639-1-ish code, or None when the text
+    is empty, too short to tell, or looks like English/an unrecognized
+    language. Never raises."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    if _DEVANAGARI_RE.search(text):
+        return 'hi'
+    if _ARABIC_RE.search(text):
+        return 'ar'
+    if _CJK_RE.search(text):
+        return 'ja'
+    words = {w.lower() for w in _LATIN_WORD_RE.findall(text)}
+    if not words:
+        return None
+    scores = {lang: len(words & stops) for lang, stops in _LATIN_LANGUAGE_STOPWORDS.items()}
+    best_lang, best_score = max(scores.items(), key=lambda pair: pair[1])
+    return best_lang if best_score >= 2 else None
+
+
+def _local_ai_client_timeout():
+    """D4-E2 item 2 — separates 'is the server even reachable' (connect)
+    from 'the model is still generating' (read/write/pool) instead of one
+    shared value. Uses httpx.Timeout — a control the `openai` SDK's
+    underlying HTTP client already exposes natively; never a second,
+    hand-rolled timeout mechanism. Both bounds are configurable via
+    settings (EMAILBUILDER_LOCAL_AI_CONNECT_TIMEOUT_SECONDS /
+    EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS — see settings.py's
+    own comment for the measured-latency rationale behind the defaults).
+    `pool` reuses the connect bound (acquiring a connection from the pool
+    is the same class of "should be near-instant or something is wrong"
+    wait as the initial TCP connect); `write` reuses the generation bound
+    (a large context JSON write to a slow/loaded local server is the same
+    class of wait as reading its response)."""
+    import httpx
+
+    return httpx.Timeout(
+        connect=settings.EMAILBUILDER_LOCAL_AI_CONNECT_TIMEOUT_SECONDS,
+        read=settings.EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS,
+        write=settings.EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS,
+        pool=settings.EMAILBUILDER_LOCAL_AI_CONNECT_TIMEOUT_SECONDS,
+    )
+
+
 class LocalEmailCommandProvider(EmailCommandProvider):
     """Every call is timeout-bounded and rate-limited independently of the
     view's own general throttle, same posture as OpenAIEmailCommandProvider.
@@ -562,7 +726,23 @@ class LocalEmailCommandProvider(EmailCommandProvider):
             # requirement without implying a real credential exists.
             api_key=settings.EMAILBUILDER_LOCAL_AI_API_KEY or 'local-no-key-required',
             base_url=settings.EMAILBUILDER_LOCAL_AI_BASE_URL,
-            timeout=settings.EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS,
+            timeout=_local_ai_client_timeout(),
+            # D4-E2 item 1 audit finding — the `openai` SDK defaults to
+            # max_retries=2 (3 total attempts), silently retrying a timed-
+            # out request at the TRANSPORT layer. Against a local model
+            # that is simply slow (not a transient network blip or a
+            # rate-limited cloud endpoint), that meant one logical call
+            # could actually wait up to 3x the configured timeout before
+            # ever raising — the exact, measured cause of "15s timeout"
+            # calls actually taking ~45-60s wall-clock in D4-E2's first
+            # live QA pass. This app already has its own, more useful
+            # retry mechanism at a higher level (_MAX_REPAIR_ATTEMPTS,
+            # which retries with the MODEL'S OWN validation-failure
+            # feedback, not a blind resend) — a second, blind transport-
+            # level retry underneath it is pure duplicated latency, never
+            # duplicated safety. Explicitly 0: one attempt, fail fast,
+            # exactly once per timeout configured.
+            max_retries=0,
         )
 
     def resolve(self, message, context):
@@ -588,7 +768,7 @@ class LocalEmailCommandProvider(EmailCommandProvider):
         history_messages = [{'role': turn['role'], 'content': turn['content']} for turn in safe_history]
 
         messages = [
-            {'role': 'system', 'content': _SYSTEM_PROMPT},
+            {'role': 'system', 'content': _build_system_prompt(safe_context)},
             {
                 'role': 'system',
                 'content': 'Current context (JSON, trusted, not user input): ' + json.dumps(safe_context),
@@ -600,63 +780,170 @@ class LocalEmailCommandProvider(EmailCommandProvider):
         messages.extend(history_messages)
         messages.append({'role': 'user', 'content': text})
 
+        from openai import APITimeoutError
+
         try:
             client = self._client_factory()
         except Exception as exc:  # noqa: BLE001 - never leak provider/network internals to the client
             logger.warning('emailbuilder.ai_command_local.call_failed error=%s', type(exc).__name__)
+            local_ai_diagnostics.record_fallback()
+            local_ai_diagnostics.record_llm_failure()
             raise EmailCommandProviderUnavailable('provider call failed') from exc
 
-        # R4-B3 §D — bounded tool loop. Every iteration is the SAME
-        # request shape (json_schema, same messages list grown by exactly
-        # one assistant + one tool-result message per round) — never a
-        # second inference mechanism, just the SAME call repeated with
-        # more context, capped at MAX_TOOL_LOOP_ITERATIONS. A model that
-        # never asks for a tool exits after iteration 1, identical to
-        # pre-R4-B3 behavior.
         raw = None
-        for _iteration in range(MAX_TOOL_LOOP_ITERATIONS):
-            try:
-                started = time.perf_counter()
-                completion = client.chat.completions.create(
-                    model=settings.EMAILBUILDER_LOCAL_AI_MODEL,
-                    max_completion_tokens=settings.EMAILBUILDER_AI_COMMAND_MAX_OUTPUT_TOKENS,
-                    timeout=settings.EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS,
-                    response_format={'type': 'json_schema', 'json_schema': _action_schema()},
-                    messages=messages,
-                )
-                elapsed_ms = (time.perf_counter() - started) * 1000
-            except Exception as exc:  # noqa: BLE001 - never leak provider/network internals to the client
-                logger.warning('emailbuilder.ai_command_local.call_failed error=%s', type(exc).__name__)
-                raise EmailCommandProviderUnavailable('provider call failed') from exc
+        elapsed_ms = 0.0
+        repaired = False
+        original_action_type = None
+        # D4-E1 item 5 — bounded self-correction: at most MAX_REPAIR_ATTEMPTS
+        # TOTAL completion rounds (each itself capable of its own bounded
+        # tool loop below) before giving up on the ACTION specifically —
+        # never an unlimited retry loop, and the model's own `reply` text
+        # is still returned either way. A malformed/unvalidatable action is
+        # never silently discarded without telling the SAME model exactly
+        # what was wrong first (see describe_action_validation_failure) —
+        # only after the bound is reached does this degrade the action to
+        # NONE (the reply/knowledge/explanation the model already gave
+        # stays intact; only the STRUCTURED MUTATION is dropped).
+        for repair_attempt in range(_MAX_REPAIR_ATTEMPTS):
+            # R4-B3 §D — bounded tool loop. Every iteration is the SAME
+            # request shape (json_schema, same messages list grown by
+            # exactly one assistant + one tool-result message per round)
+            # — never a second inference mechanism, just the SAME call
+            # repeated with more context, capped at
+            # MAX_TOOL_LOOP_ITERATIONS. A model that never asks for a tool
+            # exits after iteration 1, identical to pre-R4-B3 behavior.
+            for _iteration in range(MAX_TOOL_LOOP_ITERATIONS):
+                try:
+                    started = time.perf_counter()
+                    completion = client.chat.completions.create(
+                        model=settings.EMAILBUILDER_LOCAL_AI_MODEL,
+                        max_completion_tokens=settings.EMAILBUILDER_AI_COMMAND_MAX_OUTPUT_TOKENS,
+                        timeout=_local_ai_client_timeout(),
+                        response_format={'type': 'json_schema', 'json_schema': _action_schema()},
+                        messages=messages,
+                    )
+                    elapsed_ms += (time.perf_counter() - started) * 1000
+                except APITimeoutError as exc:
+                    # D4-E2 item 6 — tracked distinctly from every other
+                    # failure mode (see EmailCommandProviderTimeout's own
+                    # docstring). max_retries=0 on this client (see
+                    # _default_client_factory) means this fires after
+                    # exactly ONE wait of up to EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS,
+                    # never a silent multiple of it.
+                    logger.warning('emailbuilder.ai_command_local.call_timed_out')
+                    local_ai_diagnostics.record_fallback()
+                    local_ai_diagnostics.record_llm_timeout()
+                    raise EmailCommandProviderTimeout('provider call timed out') from exc
+                except Exception as exc:  # noqa: BLE001 - never leak provider/network internals to the client
+                    logger.warning('emailbuilder.ai_command_local.call_failed error=%s', type(exc).__name__)
+                    local_ai_diagnostics.record_fallback()
+                    local_ai_diagnostics.record_llm_failure()
+                    raise EmailCommandProviderUnavailable('provider call failed') from exc
 
-            try:
-                raw = json.loads(completion.choices[0].message.content)
-            except (json.JSONDecodeError, IndexError, AttributeError, TypeError) as exc:
-                raise EmailCommandProviderUnavailable('malformed provider response') from exc
+                try:
+                    raw = json.loads(completion.choices[0].message.content)
+                except (json.JSONDecodeError, IndexError, AttributeError, TypeError) as exc:
+                    local_ai_diagnostics.record_fallback()
+                    local_ai_diagnostics.record_llm_failure()
+                    raise EmailCommandProviderUnavailable('malformed provider response') from exc
 
-            tool_call = raw.get('tool_call') if isinstance(raw.get('tool_call'), dict) else None
-            tool_name = tool_call.get('name') if tool_call else None
-            if not tool_name or tool_name not in READ_TOOL_NAMES:
-                # No tool call (the common case), or the model produced
-                # an unrecognized name — either way, stop looping and
-                # answer with whatever `raw` already holds; an invalid
-                # tool name is never executed, never raises.
+                tool_call = raw.get('tool_call') if isinstance(raw.get('tool_call'), dict) else None
+                tool_name = tool_call.get('name') if tool_call else None
+                if not tool_name or tool_name not in READ_TOOL_NAMES:
+                    # No tool call (the common case), or the model produced
+                    # an unrecognized name — either way, stop looping and
+                    # answer with whatever `raw` already holds; an invalid
+                    # tool name is never executed, never raises.
+                    break
+
+                tool_result = execute_tool_call(tool_name, tool_call.get('args'), safe_context)
+                messages.append({'role': 'assistant', 'content': json.dumps({'tool_call': tool_call})})
+                messages.append({
+                    'role': 'system',
+                    'content': f'Tool result for {tool_name} (JSON, trusted, not user input): ' + json.dumps(tool_result),
+                })
+            else:
+                logger.info('emailbuilder.ai_command_local.tool_loop_cap_reached')
+
+            raw_action = raw.get('action') if isinstance(raw.get('action'), dict) else {'type': ActionType.NONE}
+            if repair_attempt == 0:
+                original_action_type = raw_action.get('type')
+            if raw_action.get('type') == ActionType.NONE:
+                break  # nothing to validate/repair
+
+            validated = validate_action(raw_action)
+            if validated is not None:
+                break  # a real, schema-valid action — done
+
+            if repair_attempt == _MAX_REPAIR_ATTEMPTS - 1:
+                # Bound reached — degrade the ACTION only (never the
+                # reply/explanation) to NONE, exactly like any other
+                # unsupported/ambiguous request this app already handles.
+                logger.info('emailbuilder.ai_command_local.repair_attempts_exhausted')
+                raw['action'] = {'type': ActionType.NONE}
                 break
 
-            tool_result = execute_tool_call(tool_name, tool_call.get('args'), safe_context)
-            messages.append({'role': 'assistant', 'content': json.dumps({'tool_call': tool_call})})
+            failure_description = describe_action_validation_failure(raw_action, validated)
+            repaired = True
+            messages.append({'role': 'assistant', 'content': json.dumps(raw)})
             messages.append({
                 'role': 'system',
-                'content': f'Tool result for {tool_name} (JSON, trusted, not user input): ' + json.dumps(tool_result),
+                'content': (
+                    'Your proposed action failed builder-schema validation: ' + failure_description
+                    + ' Return a corrected action. Correct ONLY the action structure/field names to make it '
+                    + 'valid — do not change what the user actually asked for, and do not add any field the '
+                    + 'user did not request.'
+                ),
             })
-        else:
-            logger.info('emailbuilder.ai_command_local.tool_loop_cap_reached')
 
         logger.info('emailbuilder.ai_command_local.success duration=%.1fms', elapsed_ms)
 
         raw_action = raw.get('action') if isinstance(raw.get('action'), dict) else {'type': ActionType.NONE}
+        scope_gated = False
+        validated_successfully = None
+        if raw_action.get('type') != ActionType.NONE:
+            validated = validate_action(raw_action)
+            if validated is not None:
+                validated_successfully = True
+                # D4-E1 item 6 — deterministic scope-creep gate, applied
+                # to the already-validated (clean, manifest-shaped) action
+                # — see ai_command.py::apply_scope_gate's own docstring.
+                # validate_action() itself is never touched or weakened;
+                # this only ever NARROWS an already-safe action further.
+                raw_action, stripped_fields = apply_scope_gate(text, validated)
+                if stripped_fields:
+                    scope_gated = True
+                    logger.info('emailbuilder.ai_command_local.scope_gate_stripped fields=%s', stripped_fields)
+            else:
+                validated_successfully = False
+                raw_action = {'type': ActionType.NONE}
+
+        reply_text = str(raw.get('reply') or '')
+        # D4-E1 item 7 — bounded local relocalization pass: if the user's
+        # message is confidently in a non-English language this app can
+        # detect, and the model's own reply does not look like it matched
+        # that language, ask the SAME local model (never OpenAI) to
+        # rephrase just the reply text — see localize_reply()'s own
+        # docstring for why this can only ever touch `reply`, never
+        # `action`. Best-effort: any failure silently keeps the model's
+        # original reply text.
+        input_language = _detect_relevant_language(text)
+        if input_language and input_language != 'en' and _detect_relevant_language(reply_text) != input_language:
+            relocalized = localize_reply(reply_text, input_language, self._client_factory)
+            if relocalized:
+                reply_text = relocalized
+
+        local_ai_diagnostics.record_call_result(
+            latency_ms=elapsed_ms,
+            proposed_action_type=original_action_type,
+            validated_successfully=validated_successfully,
+            repaired=repaired,
+            scope_gated=scope_gated,
+        )
+        local_ai_diagnostics.record_llm_success(latency_ms=elapsed_ms)
+
         return CommandResult(
-            reply=str(raw.get('reply') or ''),
+            reply=reply_text,
             action=raw_action,
             confidence=float(raw.get('confidence') or 0.0),
             provider='local',
@@ -676,7 +963,12 @@ class LocalEmailCommandProvider(EmailCommandProvider):
 # and the caller keeps the original English text — never blocks, never
 # raises, matches "if local model unavailable ... deterministic execution
 # may fall back to English text" (R4-B4 Closure §A).
-_LANGUAGE_NAMES = {'hi': 'Hindi', 'es': 'Spanish', 'fr': 'French'}
+# D4-E1 item 7 — widened beyond the original Tier-0 hi/es/fr set (still
+# also used, unchanged, by CanonicalIntentEmailCommandProvider's own
+# English-source translation — see that class's docstring) to also serve
+# LocalEmailCommandProvider.resolve()'s own bounded relocalization pass,
+# whose source text is the LOCAL MODEL's own reply, not always English.
+_LANGUAGE_NAMES = {'hi': 'Hindi', 'es': 'Spanish', 'fr': 'French', 'de': 'German', 'pt': 'Portuguese'}
 
 _LOCALIZATION_SYSTEM_PROMPT = (
     'Translate the following email-builder assistant message into {language}. '
@@ -706,7 +998,7 @@ def localize_reply(english_text, language, client_factory=None):
         completion = client.chat.completions.create(
             model=settings.EMAILBUILDER_LOCAL_AI_MODEL,
             max_completion_tokens=300,
-            timeout=settings.EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS,
+            timeout=_local_ai_client_timeout(),
             messages=[
                 {'role': 'system', 'content': _LOCALIZATION_SYSTEM_PROMPT.format(language=_LANGUAGE_NAMES[language])},
                 {'role': 'user', 'content': english_text},

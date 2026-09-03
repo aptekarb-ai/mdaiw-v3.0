@@ -1292,7 +1292,7 @@ export function AIEngineerPanel({
       if (referent.kind === 'module' && referent.id !== 'none' && referent.id !== selectedModule?.id) {
         const resolvedModule = findModuleById(content.modules, referent.id);
         resolvedModuleOverrideRef.current = resolvedModule
-          ? { type: resolvedModule.type, props: resolvedModule.props ?? {} }
+          ? { type: resolvedModule.type, id: resolvedModule.id, props: resolvedModule.props ?? {} }
           : null;
       } else {
         resolvedModuleOverrideRef.current = null;
@@ -1310,7 +1310,7 @@ export function AIEngineerPanel({
     // currently selected but the resolver found an unambiguous referent
     // elsewhere in the document (see the resolution block above).
     const selectedContext: AICommandSelectedModuleContext | null = selectedModule
-      ? { type: selectedModule.type, props: selectedModule.props ?? {} }
+      ? { type: selectedModule.type, id: selectedModule.id, props: selectedModule.props ?? {} }
       : resolvedModuleOverrideRef.current;
 
     // E9 — informational-only column context (never drives a real
@@ -1718,6 +1718,20 @@ export function AIEngineerPanel({
                 {message.text}
               </div>
             ))}
+
+            {/* D4-E2 Local-LLM Reachability + Performance Hardening item 8 —
+                reuses the existing `sending` loading state (no new signal,
+                no panel redesign) so a legitimate local-model request —
+                now potentially tens of seconds — never looks frozen. Fast
+                deterministic-native turns simply show this for a moment. */}
+            {sending && (
+              <div
+                className="ai-engineer-panel__message ai-engineer-panel__message--assistant"
+                role="status"
+              >
+                Local AI is reasoning…
+              </div>
+            )}
 
             {pending && (() => {
               const cssDetails = cssProposalDetails(

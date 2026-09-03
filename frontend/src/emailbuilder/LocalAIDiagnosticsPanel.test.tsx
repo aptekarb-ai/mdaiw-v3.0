@@ -19,6 +19,12 @@ function diagnosticsResponse(overrides: Partial<Record<string, unknown>> = {}) {
         structured_output: true, vision: false, context_window: 128000,
       },
       error: null, deterministic_fallback_ready: true,
+      session_stats: {
+        total_calls: 0, average_latency_ms: null, structured_action_attempts: 0,
+        structured_action_successes: 0, structured_action_success_rate: null,
+        validator_repair_corrections: 0, scope_gate_corrections: 0, deterministic_fallback_count: 0,
+        llm_calls_avoided_by_deterministic: 0, llm_calls_required: 0, semantic_gate_corrections: 0,
+      },
       ...overrides,
     },
   };
@@ -93,5 +99,50 @@ describe('LocalAIDiagnosticsPanel', () => {
     await user.click(screen.getByText('Local AI diagnostics'));
     await screen.findByText('Connected');
     expect(document.body.textContent).not.toMatch(/sk-|api[_-]?key\s*[:=]\s*\S+/i);
+  });
+
+  it('shows no "this session" block when zero calls have been made yet', async () => {
+    vi.mocked(requestLocalAIDiagnostics).mockResolvedValue(diagnosticsResponse());
+    const user = userEvent.setup();
+    render(<LocalAIDiagnosticsPanel />);
+    await user.click(screen.getByText('Local AI diagnostics'));
+    await screen.findByText('Connected');
+    expect(screen.queryByText('This session')).not.toBeInTheDocument();
+  });
+
+  it('D4-E1 item 11 — shows session stats once at least one call has been made', async () => {
+    vi.mocked(requestLocalAIDiagnostics).mockResolvedValue(diagnosticsResponse({
+      session_stats: {
+        total_calls: 5, average_latency_ms: 1234.5, structured_action_attempts: 4,
+        structured_action_successes: 3, structured_action_success_rate: 0.75,
+        validator_repair_corrections: 1, scope_gate_corrections: 2, deterministic_fallback_count: 0,
+        llm_calls_avoided_by_deterministic: 9, llm_calls_required: 6, semantic_gate_corrections: 3,
+      },
+    }));
+    const user = userEvent.setup();
+    render(<LocalAIDiagnosticsPanel />);
+    await user.click(screen.getByText('Local AI diagnostics'));
+    await screen.findByText('This session');
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(screen.getByText('1235 ms')).toBeInTheDocument();
+    expect(screen.getByText('75% (3/4)')).toBeInTheDocument();
+  });
+
+  it('D4-E2 item 10 — shows LLM-calls-avoided/required and semantic-gate correction counts', async () => {
+    vi.mocked(requestLocalAIDiagnostics).mockResolvedValue(diagnosticsResponse({
+      session_stats: {
+        total_calls: 5, average_latency_ms: 1234.5, structured_action_attempts: 4,
+        structured_action_successes: 3, structured_action_success_rate: 0.75,
+        validator_repair_corrections: 1, scope_gate_corrections: 2, deterministic_fallback_count: 0,
+        llm_calls_avoided_by_deterministic: 8, llm_calls_required: 6, semantic_gate_corrections: 4,
+      },
+    }));
+    const user = userEvent.setup();
+    render(<LocalAIDiagnosticsPanel />);
+    await user.click(screen.getByText('Local AI diagnostics'));
+    await screen.findByText('This session');
+    expect(screen.getByText('8')).toBeInTheDocument();
+    expect(screen.getByText('6')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
   });
 });

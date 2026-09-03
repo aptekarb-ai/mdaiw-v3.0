@@ -39,6 +39,11 @@ vi.mock('../api/client', () => ({
       configured: false, reachable: false, runtime: null, model: null, configured_model_available: null,
       available_models: [], api_key_configured: false, capabilities: null, error: null,
       deterministic_fallback_ready: true,
+      session_stats: {
+        total_calls: 0, average_latency_ms: null, structured_action_attempts: 0,
+        structured_action_successes: 0, structured_action_success_rate: null,
+        validator_repair_corrections: 0, scope_gate_corrections: 0, deterministic_fallback_count: 0,
+      },
     },
   }),
 }));
@@ -328,7 +333,7 @@ describe('AIEngineerPanel', () => {
     expect(screen.getByText('Failed')).toBeInTheDocument();
   });
 
-  it('sends only type/props for a selected module in the supported AI vocabulary', async () => {
+  it('sends type/id/props for a selected module in the supported AI vocabulary', async () => {
     mockSpeech();
     vi.mocked(requestAICommand).mockResolvedValue(response());
     const textModule = createModule('text', 0);
@@ -339,7 +344,7 @@ describe('AIEngineerPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
-      selected_module: { type: 'text', props: textModule.props },
+      selected_module: { type: 'text', id: textModule.id, props: textModule.props },
     }));
   });
 
@@ -354,7 +359,7 @@ describe('AIEngineerPanel', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
-      selected_module: { type: 'layout-2col-50-50', props: layoutModule.props },
+      selected_module: { type: 'layout-2col-50-50', id: layoutModule.id, props: layoutModule.props },
     }));
   });
 
@@ -1517,7 +1522,7 @@ describe('AIEngineerPanel — R4-B3 Referential Context Resolver integration', (
 
     await screen.findByText('Add a button module');
     expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
-      selected_module: { type: 'button', props: onlyButton.props },
+      selected_module: { type: 'button', id: onlyButton.id, props: onlyButton.props },
     }));
   });
 
@@ -1534,7 +1539,7 @@ describe('AIEngineerPanel — R4-B3 Referential Context Resolver integration', (
 
     await screen.findByText('Add a button module');
     expect(requestAICommand).toHaveBeenCalledWith(expect.objectContaining({
-      selected_module: { type: 'button', props: selected.props },
+      selected_module: { type: 'button', id: selected.id, props: selected.props },
     }));
   });
 

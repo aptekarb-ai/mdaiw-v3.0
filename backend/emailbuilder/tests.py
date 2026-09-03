@@ -1945,6 +1945,7 @@ from .ai_command import (  # noqa: E402
     ActionType,
     CanonicalIntentEmailCommandProvider,
     CommandResult,
+    DeterministicFirstEmailCommandProvider,
     FallbackEmailCommandProvider,
     RuleBasedEmailCommandProvider,
     _contrast_ratio,
@@ -3605,17 +3606,28 @@ class EmailAICommandViewTests(TestCase):
     def test_ai_configured_but_call_fails_falls_back_to_deterministic(self):
         """With a key configured but the provider itself raising (e.g. a
         malformed/failed response), the view must still degrade to the
-        deterministic router -- proves the FallbackEmailCommandProvider
-        wiring end-to-end without a real network call."""
+        deterministic router -- proves the DeterministicFirstEmailCommandProvider
+        wiring end-to-end without a real network call.
+
+        D4-E2 item 1 -- "add a button" is now answered by the deterministic
+        chain directly (a clearly-supported, non-NO_MATCH request), so the
+        broken LLM client is never even consulted; that is the intended,
+        stronger behavior (fewer LLM calls, not just a safe fallback), and
+        is covered separately by the DeterministicFirstEmailCommandProvider
+        routing tests. This test uses a message the deterministic chain
+        genuinely cannot answer (NO_MATCH), so the LLM tier IS consulted,
+        raises, and the already-computed deterministic NO_MATCH result is
+        what the view returns -- the actual "call fails, degrade safely"
+        path this test exists to prove."""
         self.client.force_login(self.user)
         broken_client = MagicMock()
         broken_client.chat.completions.create.side_effect = RuntimeError('boom')
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY='sk-test'):
             provider = get_default_email_command_provider()
-            provider.primary._client_factory = lambda: broken_client
-            result = provider.resolve('add a button', {})
+            provider.llm._client_factory = lambda: broken_client
+            result = provider.resolve('asdkfjqwlekj this is deliberately unrecognizable gibberish', {})
         self.assertEqual(result.provider, 'deterministic')
-        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+        self.assertEqual(result.action['type'], ActionType.NONE)
 
     # ------------------------------------------------------------------
     # Module-4 E9/E10 — bounded editor context + conversation history.
@@ -4459,6 +4471,18 @@ class LocalEmailCommandProviderTests(TestCase):
                 self.assertNotIn('secret internal detail', str(exc))
 
     def test_action_with_unsupported_module_type_is_rejected_by_shared_gate(self):
+        # D4-E1 — LocalEmailCommandProvider.resolve() now ALSO runs
+        # validate_action() internally (see that module's own bounded
+        # repair loop / scope gate), so an unsupported-module-type action
+        # is already neutralized to {'type': 'NONE'} by the time it
+        # reaches this test — never a half-valid INSERT_MODULE. The
+        # safety property this test names ("rejected by shared gate") is
+        # unchanged and, if anything, enforced earlier: re-validating an
+        # already-neutralized NONE action is a safe no-op (returns
+        # {'type': 'NONE'}, not None — NONE is itself a valid, do-nothing
+        # ActionType), so the assertion now checks the OUTCOME (never an
+        # applicable INSERT_MODULE survives) rather than the old
+        # implementation detail of a raw, unvalidated passthrough.
         client = MagicMock()
         client.chat.completions.create.return_value = self._fake_completion({
             'reply': 'ok', 'confidence': 0.9,
@@ -4470,7 +4494,11 @@ class LocalEmailCommandProviderTests(TestCase):
         provider = LocalEmailCommandProvider(client_factory=lambda: client)
         with override_settings(EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1', EMAILBUILDER_LOCAL_AI_MODEL='llama3.1'):
             result = provider.resolve('add a hero', {})
-        self.assertIsNone(validate_action(result.action))
+        self.assertEqual(result.action['type'], 'NONE')
+        # Re-validating the already-neutralized action must never produce
+        # an applicable INSERT_MODULE either — the caller-side gate stays
+        # the final authority regardless of what the provider itself did.
+        self.assertNotEqual(validate_action(result.action).get('type'), 'INSERT_MODULE')
 
     # --- R4-B2 — parity with OpenAIEmailCommandProviderTests's own context
     # coverage. Before R4-B2, LocalEmailCommandProvider's own
@@ -4681,14 +4709,23 @@ class ProviderSelectionTests(TestCase):
         self.assertIsInstance(provider, CanonicalIntentEmailCommandProvider)
         self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
         self.assertNotIsInstance(provider, FallbackEmailCommandProvider)
+        self.assertNotIsInstance(provider, DeterministicFirstEmailCommandProvider)
 
-    def test_local_selected_and_configured_wraps_with_fallback(self):
+    def test_local_selected_and_configured_wraps_with_deterministic_first_router(self):
+        # D4-E2 item 1 — get_default_email_command_provider() now returns
+        # DeterministicFirstEmailCommandProvider (deterministic chain tried
+        # FIRST, LLM consulted only on genuine NO_MATCH) rather than the
+        # old always-LLM-first FallbackEmailCommandProvider. This is an
+        # intentional, documented routing-priority change, not a regression
+        # — the deterministic chain itself (CanonicalIntentEmailCommandProvider
+        # wrapping RuleBasedEmailCommandProvider) is unchanged and still
+        # reachable, now as `.deterministic` instead of `.fallback`.
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='local', EMAILBUILDER_LOCAL_AI_BASE_URL='http://localhost:11434/v1'):
             provider = get_default_email_command_provider()
-        self.assertIsInstance(provider, FallbackEmailCommandProvider)
-        self.assertIsInstance(provider.primary, LocalEmailCommandProvider)
-        self.assertIsInstance(provider.fallback, CanonicalIntentEmailCommandProvider)
-        self.assertIsInstance(provider.fallback.fallback, RuleBasedEmailCommandProvider)
+        self.assertIsInstance(provider, DeterministicFirstEmailCommandProvider)
+        self.assertIsInstance(provider.llm, LocalEmailCommandProvider)
+        self.assertIsInstance(provider.deterministic, CanonicalIntentEmailCommandProvider)
+        self.assertIsInstance(provider.deterministic.fallback, RuleBasedEmailCommandProvider)
 
     def test_openai_selected_but_not_configured_is_deterministic_only(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY=''):
@@ -4696,11 +4733,12 @@ class ProviderSelectionTests(TestCase):
         self.assertIsInstance(provider, CanonicalIntentEmailCommandProvider)
         self.assertIsInstance(provider.fallback, RuleBasedEmailCommandProvider)
 
-    def test_openai_selected_and_configured_wraps_with_fallback(self):
+    def test_openai_selected_and_configured_wraps_with_deterministic_first_router(self):
         with override_settings(EMAILBUILDER_AI_COMMAND_PROVIDER='openai', OPENAI_API_KEY='sk-test'):
             provider = get_default_email_command_provider()
-        self.assertIsInstance(provider, FallbackEmailCommandProvider)
-        self.assertIsInstance(provider.primary, OpenAIEmailCommandProvider)
+        self.assertIsInstance(provider, DeterministicFirstEmailCommandProvider)
+        self.assertIsInstance(provider.llm, OpenAIEmailCommandProvider)
+        self.assertIsInstance(provider.deterministic, CanonicalIntentEmailCommandProvider)
 
     def test_end_to_end_deterministic_still_works_with_no_provider_configured(self):
         """The zero-paid-token baseline -- no OPENAI_API_KEY, no local
@@ -5744,17 +5782,34 @@ class AICommandSystemPromptGuardrailTests(TestCase):
         self.assertIn('the old color, the proposed color, the old ratio, and the resulting ratio', prompt)
 
     def test_local_prompt_forbids_inventing_link_urls(self):
-        self.assertIn('never invent a destination URL', ai_command_local_module._SYSTEM_PROMPT)
-        self.assertIn('ask the user for the destination URL', ai_command_local_module._SYSTEM_PROMPT)
+        # D4-E2 item 4 — this guidance moved from the always-sent base
+        # prompt into _VALIDATION_ISSUE_GUIDANCE, appended by
+        # _build_system_prompt() only when selected_validation_issue is
+        # present (see that function's own docstring) — the base prompt's
+        # OWN top-of-prompt "never invent image URLs" rule stays unconditional.
+        self.assertIn('never invent a destination URL', ai_command_local_module._VALIDATION_ISSUE_GUIDANCE)
+        self.assertIn('ask the user for the destination URL', ai_command_local_module._VALIDATION_ISSUE_GUIDANCE)
 
     def test_local_prompt_requires_real_vml_new_outlook_honesty(self):
-        self.assertIn('never claim it will make New Outlook', ai_command_local_module._SYSTEM_PROMPT)
+        self.assertIn('never claim it will make New Outlook', ai_command_local_module._VALIDATION_ISSUE_GUIDANCE)
 
     def test_local_prompt_requires_computed_contrast_with_before_after_reporting(self):
-        prompt = ai_command_local_module._SYSTEM_PROMPT
+        prompt = ai_command_local_module._VALIDATION_ISSUE_GUIDANCE
         self.assertIn('WCAG AA-compliant replacement', prompt)
         self.assertIn('4.5:1', prompt)
         self.assertIn('the old color, the proposed color, the old ratio, and the resulting ratio', prompt)
+
+    def test_build_system_prompt_appends_validation_issue_guidance_only_when_present(self):
+        # D4-E2 item 4 — the field-presence-driven trim itself: absent
+        # without a validation issue, present (in full, never partially)
+        # when one is in context.
+        without_issue = ai_command_local_module._build_system_prompt({'selected_validation_issue': None})
+        self.assertNotIn('Three specific validation issues', without_issue)
+        with_issue = ai_command_local_module._build_system_prompt({
+            'selected_validation_issue': {'id': 'x', 'title': 'Weak text contrast', 'detail': 'x'},
+        })
+        self.assertIn('Three specific validation issues', with_issue)
+        self.assertIn('never claim it will make New Outlook', with_issue)
 
 
 class LocalEmailCommandProviderComposeTests(TestCase):

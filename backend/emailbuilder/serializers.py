@@ -251,6 +251,13 @@ class SelectedModuleContextSerializer(serializers.Serializer):
     V1 had for its narrower list."""
 
     type = serializers.ChoiceField(choices=list(module_capabilities.get_all_module_types()))
+    # D4-E2 item 2 — additive, optional module identifier so the AI
+    # Engineer's active-target context can carry module_id (see
+    # ai_command.py::build_active_target_context). Never used to resolve
+    # WHICH module is selected — ReferenceResolver.ts (frontend) remains
+    # the sole authority on that; this is purely descriptive metadata
+    # passed through unchanged.
+    id = serializers.CharField(required=False, allow_null=True, allow_blank=True, default=None)
     props = serializers.DictField(required=False, default=dict)
 
 

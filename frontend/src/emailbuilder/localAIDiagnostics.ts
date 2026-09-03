@@ -16,6 +16,27 @@ export interface LocalAICapabilities {
   context_window: number | null;
 }
 
+// D4-E1 item 11 — in-process, session-scoped call statistics (reset on
+// process restart; "current test session," not a persisted metric).
+export interface LocalAISessionStats {
+  total_calls: number;
+  average_latency_ms: number | null;
+  structured_action_attempts: number;
+  structured_action_successes: number;
+  structured_action_success_rate: number | null;
+  validator_repair_corrections: number;
+  scope_gate_corrections: number;
+  deterministic_fallback_count: number;
+  // D4-E2 item 10 — how many turns the deterministic router answered
+  // without ever calling the optional LLM tier, vs how many genuinely
+  // needed it (DeterministicFirstEmailCommandProvider).
+  llm_calls_avoided_by_deterministic: number;
+  llm_calls_required: number;
+  // D4-E2 item 5 — residual LLM-proposed field values overridden by
+  // apply_semantic_consistency_gate().
+  semantic_gate_corrections: number;
+}
+
 export interface LocalAIDiagnostics {
   configured: boolean;
   reachable: boolean;
@@ -27,6 +48,7 @@ export interface LocalAIDiagnostics {
   capabilities: LocalAICapabilities | null;
   error: string | null;
   deterministic_fallback_ready: boolean;
+  session_stats: LocalAISessionStats;
 }
 
 export interface RequestLocalAIDiagnosticsResponse {

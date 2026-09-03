@@ -332,6 +332,40 @@ EMAILBUILDER_LOCAL_AI_RUNTIME = os.environ.get('EMAILBUILDER_LOCAL_AI_RUNTIME', 
 # runtime whose exact tokenizer this app cannot know in advance.
 EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS = int(os.environ.get('EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS', '6000'))
 
+# D4-E2 Local-LLM Reachability + Performance Hardening item 2 — the local
+# provider previously reused EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS (15s
+# default), a value sized for a hosted/cloud API (ai_command_openai.py,
+# which keeps using it unchanged — this split is LOCAL-only). A local
+# self-hosted model conflates two very different failure modes under one
+# short timeout: "the server isn't even up" (should fail in ~seconds) and
+# "the model is still generating tokens" (can legitimately take tens of
+# seconds on modest hardware). The `openai` SDK (httpx-based) already
+# exposes exactly this split via `httpx.Timeout(connect=..., read=...)` —
+# see ai_command_local.py::_local_ai_client_timeout() — so this is
+# configuration, not a second, hand-rolled timeout mechanism.
+#
+# EMAILBUILDER_LOCAL_AI_CONNECT_TIMEOUT_SECONDS stays short: a loopback/
+# LAN TCP connect to an already-running local server either succeeds
+# almost instantly or the server is down — no reason to wait long to find
+# out. EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS covers the actual
+# read/generation wait. Default chosen from measured, real qwen2.5-coder
+# latency on a representative 16GB dev workstation (D4-E1/D4-E2 live QA):
+# 11 real single-call completions ranged 27.2s-80.7s (mean ~59.5s, median
+# ~58.6s) once the model was already loaded in memory; a one-time cold
+# model-load could push a FIRST call to ~290s, which this default does
+# NOT try to cover automatically (that is a one-off startup cost, not
+# steady-state latency) — an administrator whose runtime reloads the
+# model per-request should raise this value explicitly rather than have
+# every request pay a worst-case default. 90s clears the entire observed
+# steady-state range (worst case 80.7s) with real margin without jumping
+# straight to an arbitrary large number.
+EMAILBUILDER_LOCAL_AI_CONNECT_TIMEOUT_SECONDS = float(
+    os.environ.get('EMAILBUILDER_LOCAL_AI_CONNECT_TIMEOUT_SECONDS', '5'),
+)
+EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS = float(
+    os.environ.get('EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS', '90'),
+)
+
 # Django upload-size ceiling — comfortably covers FACE_MAX_FRAMES frames at
 # FACE_FRAME_MAX_BYTES each, so an oversized multipart request is rejected by
 # Django itself before any per-file validation or model inference runs.

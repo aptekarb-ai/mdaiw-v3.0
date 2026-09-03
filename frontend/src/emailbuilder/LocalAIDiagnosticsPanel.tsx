@@ -83,6 +83,53 @@ export function LocalAIDiagnosticsPanel() {
             </div>
           </dl>
         )}
+        {diagnostics && diagnostics.session_stats.total_calls > 0 && (
+          <>
+            <p className="ai-engineer-panel__diagnostics-subheading">This session</p>
+            <dl className="ai-engineer-panel__diagnostics-list">
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Calls made</dt>
+                <dd>{diagnostics.session_stats.total_calls}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Average latency</dt>
+                <dd>{diagnostics.session_stats.average_latency_ms != null ? `${Math.round(diagnostics.session_stats.average_latency_ms)} ms` : '—'}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Structured-action success rate</dt>
+                <dd>
+                  {diagnostics.session_stats.structured_action_success_rate != null
+                    ? `${Math.round(diagnostics.session_stats.structured_action_success_rate * 100)}% (${diagnostics.session_stats.structured_action_successes}/${diagnostics.session_stats.structured_action_attempts})`
+                    : '—'}
+                </dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Validator corrections</dt>
+                <dd>{diagnostics.session_stats.validator_repair_corrections}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Scope-gate corrections</dt>
+                <dd>{diagnostics.session_stats.scope_gate_corrections}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Deterministic fallbacks</dt>
+                <dd>{diagnostics.session_stats.deterministic_fallback_count}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>LLM calls avoided (deterministic-first)</dt>
+                <dd>{diagnostics.session_stats.llm_calls_avoided_by_deterministic}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>LLM calls required</dt>
+                <dd>{diagnostics.session_stats.llm_calls_required}</dd>
+              </div>
+              <div className="ai-engineer-panel__diagnostics-row">
+                <dt>Semantic-gate corrections</dt>
+                <dd>{diagnostics.session_stats.semantic_gate_corrections}</dd>
+              </div>
+            </dl>
+          </>
+        )}
       </div>
     </details>
   );

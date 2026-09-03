@@ -34,7 +34,10 @@ from .ai_command import (
     CommandResult,
     EmailCommandProvider,
     EmailCommandProviderUnavailable,
+    apply_scope_gate,
+    build_active_target_context,
     execute_tool_call,
+    validate_action,
 )
 from . import construction_planner, module_capabilities
 from .attachment_untrusted_wrapper import wrap_untrusted_document_content
@@ -67,7 +70,33 @@ _SYSTEM_PROMPT = (
     '"Shop Now", "Learn More") is fine, but do not fabricate specific facts. If the '
     'instruction is ambiguous, unsupported, or targets something other than the current '
     'selection, return action type NONE and ask a brief clarifying question in `reply`. Reply '
-    'in the same language the user wrote in. The context JSON may include editor_mode (which '
+    'in the same language the user wrote in, unless they explicitly asked for a different one. '
+    'D4-E2 — the context JSON may include active_target_context (present only when a module is '
+    'selected/resolved): module_id (its identifier, already resolved — if selected_module is present '
+    'in context, that module IS the target; never ask the user which module they mean, and never ask '
+    'them to re-select it, unless active_target_context is genuinely absent), editable_props (the EXACT '
+    'list of editable field names, value types, and allowed values for THAT module type, taken directly '
+    'from the real builder schema — a patch key not listed there does not exist on this module, never '
+    'invent one; a common mistake is proposing "content" when the real field is named "text", always use '
+    'the exact key from active_target_context.editable_props, never a plausible-sounding synonym), '
+    'editable_settings (dotted keys like "desktop.paddingTop" — these belong under UPDATE_MODULE_SETTINGS\'s '
+    'nested patch.desktop object, never as a flat property; a request like "make this padding 24px" is '
+    'UPDATE_MODULE_SETTINGS with patch {"desktop": {"paddingTop": 24, "paddingRight": 24, "paddingBottom": 24, '
+    '"paddingLeft": 24}}, never UPDATE_MODULE_PROPS with an invented flat "padding" field), and '
+    'supported_actions (the action types this specific module actually supports — never propose an action '
+    'type absent from this list for the selected module). D4-E1 — stay scoped to exactly what the user asked: if the '
+    'user asks to change one property (e.g. "make this red"), propose a patch containing ONLY the '
+    'field(s) that property requires — never also change unrelated fields (text, link, alignment, '
+    'padding, ...) the user did not mention, even if you think they might want it too; a scope-creep '
+    'proposal is rejected by this application before the user ever sees it. D4-E1 — reason like a '
+    'professional email developer before answering: (1) what does the user want, in concrete terms; '
+    '(2) which part of the email does it refer to (use context/active_target_context to ground this, '
+    'never guess between multiple real candidates — ask instead); (3) can the current builder represent '
+    'it exactly, partially, or not at all; (4) if exactly, which existing module/property/action '
+    'implements it; (5) if only partially, what will differ from what was asked, stated plainly; (6) '
+    'does the change carry any Outlook/VML, responsive, accessibility, or platform-specific risk worth '
+    'a one-line mention. Keep this reasoning internal — the user-facing `reply` is the concise, '
+    'professional conclusion, never a raw step-by-step transcript. The context JSON may include editor_mode (which '
     'tab the user is on), selected_column (which column is focused — informational only, you '
     'cannot yet target a column directly, only the currently selected module), and '
     'selected_validation_issue (a specific compatibility/accessibility issue the user was just '
@@ -99,7 +128,11 @@ _SYSTEM_PROMPT = (
     'and is not unsupported due to missing information, but no existing module or safe combination of modules '
     'can represent it, building a new module type would be needed, which this conversation cannot do). Never '
     'claim this builder can do something a construction_plan_summary entry, or your own knowledge of the '
-    'allowed module types, says it cannot. Prior turns of this SAME '
+    'allowed module types, says it cannot. D4-E1 — when explaining an UNSUPPORTED or REQUIRES_NEW_MODULE '
+    'limitation, never answer with only "I cannot do that" — say what you CAN do first, then name the gap '
+    'plainly. Bad: "Cannot perform action." Better: "I can reproduce the text, spacing, and CTA exactly, but '
+    'the current builder has no video module — I can build the rest of the email and leave the video section '
+    'as a documented unsupported requirement." Prior turns of this SAME '
     'conversation may be included as ordinary user/'
     'assistant messages before the current one — use them to resolve a follow-up like "make it '
     'darker" or "can you fix it" against what was just discussed, but never assume anything '
@@ -121,7 +154,12 @@ _SYSTEM_PROMPT = (
     'R4-B3 — when you must ask a clarifying question, ground it in whatever real context you were '
     'actually given; never fall back to a generic prompt when specific context is available. If '
     "selected_module or selected_validation_issue is present, that IS what the user means — don't ask "
-    'which module/issue they mean. If knowledge or import_reconstruction entries are present and '
+    'which module/issue they mean, and never ask the user to re-select it. D4-E2 — this holds even when '
+    'the message itself names a property generically (e.g. "change the color" with no module named): '
+    'active_target_context.module_id, if present, is the authoritative, already-resolved target — treat '
+    'it exactly as if the user had pointed at that module. Only ask which module is meant when '
+    'active_target_context is absent AND no other context (conversation history, a named module type) '
+    'resolves it. If knowledge or import_reconstruction entries are present and '
     "relevant, use their specifics (exact colors, ratios, category names) instead of a textbook answer. "
     'Bad: "Select a module on the canvas first." Better, when context exists: "I can make that change, '
     "but I can't tell whether you're referring to the hero text or its button. Which one should I "
@@ -274,8 +312,10 @@ def _build_safe_context(context):
         module_type = selected['type']
         raw_props = selected.get('props') if isinstance(selected.get('props'), dict) else {}
         allowed_keys = {field['key'] for field in module_capabilities.get_editable_fields(module_type)}
+        raw_id = selected.get('id')
         safe_selected = {
             'type': module_type,
+            'id': raw_id[:100] if isinstance(raw_id, str) else None,
             'props': {k: v for k, v in raw_props.items() if k in allowed_keys and isinstance(v, (str, int, float))},
         }
 
@@ -345,6 +385,15 @@ def _build_safe_context(context):
     safe_plan_summary = _build_safe_construction_plan_summary(context.get('construction_plan_summary'))
     if safe_plan_summary:
         safe_context['construction_plan_summary'] = safe_plan_summary
+
+    # D4-E2 item 2 — parity with the local provider's own exact Builder-
+    # schema grounding (see ai_command_local.py::_build_safe_context's
+    # comment; build_active_target_context() itself is a genuinely SHARED
+    # import from ai_command.py, never duplicated).
+    if safe_selected:
+        target_context = build_active_target_context(safe_selected['type'], module_id=safe_selected.get('id'))
+        if target_context:
+            safe_context['active_target_context'] = target_context
 
     return safe_context, safe_history
 
@@ -581,6 +630,17 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
         logger.info('emailbuilder.ai_command_openai.success duration=%.1fms', elapsed_ms)
 
         raw_action = raw.get('action') if isinstance(raw.get('action'), dict) else {'type': ActionType.NONE}
+        # D4-E1 item 6 — parity with the local provider's own deterministic
+        # scope-creep gate (apply_scope_gate is a genuinely SHARED import
+        # from ai_command.py, never duplicated). validate_action() itself
+        # is unchanged/unweakened — this only ever narrows an already-
+        # valid action further, and only when validation succeeds at all.
+        if raw_action.get('type') != ActionType.NONE:
+            validated = validate_action(raw_action)
+            if validated is not None:
+                raw_action, stripped_fields = apply_scope_gate(text, validated)
+                if stripped_fields:
+                    logger.info('emailbuilder.ai_command_openai.scope_gate_stripped fields=%s', stripped_fields)
         return CommandResult(
             reply=str(raw.get('reply') or ''),
             action=raw_action,

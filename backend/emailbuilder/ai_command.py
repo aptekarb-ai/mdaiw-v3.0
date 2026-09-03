@@ -404,6 +404,19 @@ class EmailCommandProviderUnavailable(Exception):
     router never raises this and never depends on anything external."""
 
 
+class EmailCommandProviderTimeout(EmailCommandProviderUnavailable):
+    """D4-E2 Local-LLM Reachability + Performance Hardening item 6 —
+    a strict subclass so every EXISTING `except EmailCommandProviderUnavailable`
+    call site (there are several, each expecting "provider cannot answer,
+    fall back") keeps working completely unchanged. Raised ONLY for a
+    genuine request timeout (the model was reachable but did not finish
+    generating in time), never for "server unreachable"/"malformed
+    response"/"rate limited" — those remain plain EmailCommandProviderUnavailable.
+    Lets DeterministicFirstEmailCommandProvider distinguish "the LLM
+    tried and ran out of time" from every other failure mode, so it can
+    say so honestly instead of silently returning a generic decline."""
+
+
 def _resolve_color(word_or_hex):
     if not isinstance(word_or_hex, str):
         return None
@@ -849,6 +862,262 @@ def validate_action(action):
         return {'type': action_type}
 
     return None
+
+
+# D4-E1 item 2 — exact Builder-schema grounding, shared by both LLM
+# providers (imported, never duplicated — this is validate_action-
+# adjacent, manifest-derived logic, not per-provider prompt-construction
+# logic like _build_safe_context). Deliberately narrow: describes only
+# the ONE currently-relevant module type, never the whole 53-module-type
+# schema — callers attach this only when a module is actually selected/
+# resolved (see ai_command_local.py's own use of it).
+def build_active_target_context(module_type, module_id=None):
+    """D4-E2 item 2 — extends D4-E1's build_capability_contract() (same
+    function, same manifest-driven data, now also carrying the
+    module_id/selected/editable_settings/supported_actions fields the
+    active-target contract needs) rather than a second, competing
+    resolver. ReferenceResolver.ts (frontend) remains the SOLE authority
+    on WHICH module is the target — this function only describes WHAT
+    that already-resolved target can do, built live from the exact same
+    generated manifest validate_action() itself reads. Returns None for
+    an unknown/absent module type (nothing to ground)."""
+    if not module_type or module_type not in module_capabilities.get_all_module_types():
+        return None
+
+    editable_props = []
+    for field in module_capabilities.get_editable_fields(module_type):
+        entry = {'key': field['key'], 'value_type': field.get('valueType')}
+        if field.get('options'):
+            entry['allowed_values'] = [opt.get('value') for opt in field['options'] if isinstance(opt, dict)]
+        if field.get('min') is not None:
+            entry['min'] = field['min']
+        if field.get('max') is not None:
+            entry['max'] = field['max']
+        editable_props.append(entry)
+
+    # D4-E2 item 3 — the settings-side of the action contract, built from
+    # the SAME allowlists _validate_settings_patch() itself reads for
+    # UPDATE_MODULE_SETTINGS (never a second, competing settings schema).
+    # Dotted keys (e.g. "desktop.paddingTop") tell the model explicitly
+    # that these live under a NESTED path, not a flat props key — the
+    # exact "padding -> UPDATE_MODULE_SETTINGS.patch.desktop.paddingTop"
+    # relationship item 3 asks to make explicit.
+    editable_settings = []
+    for key in sorted(_SETTINGS_BOOLEAN_FIELDS):
+        editable_settings.append({'key': key, 'value_type': 'boolean'})
+    for key, allowed in _SETTINGS_ENUM_FIELDS.items():
+        editable_settings.append({'key': key, 'value_type': 'select', 'allowed_values': sorted(allowed)})
+    for group, nested in _SETTINGS_NESTED_NUMERIC_FIELDS.items():
+        for nested_key, bounds in nested.items():
+            editable_settings.append({
+                'key': f'{group}.{nested_key}', 'value_type': 'number', 'min': bounds[0], 'max': bounds[1],
+            })
+
+    capability = module_capabilities.get_module_capability(module_type) or {}
+    is_layout = bool(capability.get('isLayout'))
+    has_repeatable_field = bool(module_capabilities.get_repeatable_field(module_type))
+
+    # D4-E2 item 2 — supported_actions is a pure DERIVATION from the same
+    # capability facts above (+ ActionType.IMPLEMENTED, the same allow-
+    # list validate_action() itself enforces) — never a second,
+    # hand-maintained action list that could drift from what the
+    # validator actually accepts.
+    supported_actions = [ActionType.UPDATE_MODULE_PROPS, ActionType.DELETE_MODULE, ActionType.DUPLICATE_MODULE, ActionType.APPLY_GLOBAL_STYLE]
+    if editable_settings:
+        supported_actions.append(ActionType.UPDATE_MODULE_SETTINGS)
+    if is_layout:
+        supported_actions.append(ActionType.RESTRUCTURE_LAYOUT)
+    if has_repeatable_field:
+        supported_actions.append(ActionType.UPDATE_REPEATABLE_FIELD)
+    if _is_vml_button_module(module_type):
+        supported_actions.append(ActionType.APPLY_VML_PATTERN)
+    if _is_vml_background_module(module_type):
+        supported_actions.append(ActionType.APPLY_OUTLOOK_WRAPPER)
+
+    return {
+        'module_id': module_id,
+        'module_type': module_type,
+        'selected': True,
+        'editable_props': editable_props,
+        'editable_settings': editable_settings,
+        'has_repeatable_field': has_repeatable_field,
+        'is_layout': is_layout,
+        'supported_actions': supported_actions,
+        # Universal facts about EVERY action this app can ever propose —
+        # stated once here rather than repeated in every system prompt.
+        'supports_delete_duplicate': True,
+        'every_action_requires_user_apply': True,
+    }
+
+
+def describe_action_validation_failure(action, validated):
+    """D4-E1 item 5 — a short, precise, model-readable description of why
+    `action` failed validate_action() (which produced `validated`), for
+    the bounded local-model repair loop. Returns None when nothing was
+    wrong (validated is not None) — callers should never build a repair
+    message in that case. Every fact disclosed here (real field/action-
+    type names) is already public in build_active_target_context()/the
+    system prompt's own allowed-type list — this never leaks anything
+    the model couldn't already have known."""
+    if validated is not None:
+        return None
+    if not isinstance(action, dict):
+        return 'The proposed action was not a JSON object.'
+
+    action_type = action.get('type')
+    if action_type not in ActionType.values:
+        allowed = ', '.join(sorted(ActionType.IMPLEMENTED))
+        return f'"{action_type}" is not a valid action type. Valid action types: {allowed}.'
+
+    if action_type in (ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY):
+        module_type = action.get('module_type')
+        if module_type not in module_capabilities.get_all_module_types():
+            return f'"{module_type}" is not a real module type.'
+        proposed_keys = sorted((action.get('patch') or {}).keys())
+        valid_keys = sorted(f['key'] for f in module_capabilities.get_editable_fields(module_type))
+        return (
+            f'None of the proposed patch field name(s) {proposed_keys} are editable on module type '
+            f'"{module_type}". Valid field names for this exact module type: {valid_keys}. Correct only the '
+            f'field names and/or values to match one of these — do not change what the user asked for.'
+        )
+
+    if action_type == ActionType.UPDATE_MODULE_SETTINGS:
+        return (
+            'The proposed UPDATE_MODULE_SETTINGS patch did not match the module\'s settings schema '
+            '(padding/visibility/gutter-style fields only, per-breakpoint). Correct only the field structure.'
+        )
+
+    return f'The proposed "{action_type}" action did not pass builder-schema validation. Check field names, value types, and required keys.'
+
+
+# D4-E1 item 6 — deterministic scope-creep gate, shared by both providers.
+# Never touches validate_action() itself (the safety authority stays
+# exactly as it was) — this runs AFTER validate_action() already
+# succeeded, and only ever REMOVES patch keys the user's own message
+# gives no textual signal for; it never adds, invents, or changes a
+# value. Conservative by design: a key whose concept can't be classified,
+# or a message with no classifiable concept at all, is left untouched —
+# "don't strip" is always the safe default when signal is weak.
+_FIELD_KEY_CONCEPT_HINTS = (
+    ('color', 'color'), ('colour', 'color'),
+    ('href', 'link'), ('url', 'link'),
+    ('padding', 'spacing'), ('margin', 'spacing'), ('gap', 'spacing'),
+    ('align', 'align'),
+    ('fontsize', 'size'), ('size', 'size'),
+    ('radius', 'radius'),
+    ('fontfamily', 'font'), ('font', 'font'),
+    ('visib', 'visibility'), ('hidden', 'visibility'),
+    ('src', 'image'), ('image', 'image'), ('asset', 'image'),
+    ('text', 'text'), ('label', 'text'), ('content', 'text'), ('headline', 'text'), ('caption', 'text'), ('title', 'text'),
+)
+
+_MESSAGE_CONCEPT_KEYWORDS = {
+    # D4-E1 item 7/12 — a bounded, honestly-partial multilingual keyword
+    # set (English plus the most common word for the concept in Hindi/
+    # Spanish/French/German — the required D4-E1 QA languages). This is
+    # NOT full-coverage translation, and never claims to be: a message in
+    # a language/phrasing not covered here simply detects zero concepts,
+    # which the conservative default already handles safely (no strip —
+    # see apply_scope_gate's own docstring). Extending this list is a
+    # pure data change, never a logic change.
+    'color': (
+        'color', 'colour', 'background colour', 'background color', 'red', 'green', 'blue', 'yellow', 'orange',
+        'purple', 'pink', 'black', 'white', 'gray', 'grey',
+        'रंग', 'रोजो', 'हरा', 'नीला',  # hi: color, red(loan), green, blue
+        'rojo', 'verde', 'azul',  # es: red, green, blue ('color' itself is a shared cognate)
+        'couleur', 'rouge', 'vert', 'bleu',  # fr
+        'farbe', 'rot', 'grün', 'blau',  # de
+    ),
+    'text': (
+        'text', 'copy', 'wording', 'caption', 'headline', 'say', 'says', 'reads', 'read', 'label it', 'rename',
+        'टेक्स्ट', 'पाठ',  # hi
+        'texto',  # es
+        'texte',  # fr
+        'text',  # de (same word)
+    ),
+    'link': (
+        'link', 'url', 'href', 'destination', 'goes to', 'point to', 'points to',
+        'लिंक',  # hi
+        'enlace',  # es
+        'lien',  # fr
+        'verlinkung', 'link',  # de
+    ),
+    'spacing': (
+        'padding', 'spacing', 'margin', ' gap', 'space around', 'space between',
+        'पैडिंग', 'स्पेसिंग',  # hi
+        'relleno', 'espaciado',  # es
+        'espacement', 'marge',  # fr
+        'abstand', 'polsterung',  # de
+    ),
+    'align': (
+        'align', 'center', 'centre', 'left-align', 'right-align', 'justify',
+        'संरेखण', 'बीच में',  # hi
+        'alineación', 'centrar',  # es
+        'alignement', 'centrer',  # fr
+        'ausrichtung', 'zentrieren',  # de
+    ),
+    'size': ('size', 'bigger', 'smaller', 'larger', 'font size'),
+    'radius': ('radius', 'rounded', 'corner', 'round the'),
+    'font': (' font', 'typeface', 'font family'),
+    'visibility': ('hide', 'show ', 'visible', 'visibility'),
+    'image': ('image', 'picture', 'photo', 'logo'),
+}
+
+
+def _concept_for_field_key(key):
+    lowered = key.lower()
+    for substring, concept in _FIELD_KEY_CONCEPT_HINTS:
+        if substring in lowered:
+            return concept
+    return None
+
+
+def _requested_concepts(message):
+    lowered = (message or '').lower()
+    return {concept for concept, keywords in _MESSAGE_CONCEPT_KEYWORDS.items() if any(kw in lowered for kw in keywords)}
+
+
+def apply_scope_gate(message, action):
+    """Returns (possibly-narrowed) `action`, and a list of stripped field
+    keys (empty when nothing was stripped) — the caller decides how to
+    log/report that. Only ever narrows an already-validated
+    UPDATE_MODULE_PROPS/APPLY_GLOBAL_STYLE/REPLACE_UNSUPPORTED_PROPERTY
+    patch; every other action type passes through unchanged (nothing
+    else carries a free-form multi-field patch a scope gate applies to)."""
+    if not isinstance(action, dict):
+        return action, []
+    if action.get('type') not in (
+        ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY,
+    ):
+        return action, []
+    patch = action.get('patch')
+    if not isinstance(patch, dict) or not patch:
+        return action, []
+
+    requested = _requested_concepts(message)
+    if not requested:
+        # No classifiable concept anywhere in the message — too weak a
+        # signal to strip anything against; pass the whole patch through.
+        return action, []
+
+    kept, stripped = {}, []
+    for key, value in patch.items():
+        concept = _concept_for_field_key(key)
+        if concept is None or concept in requested:
+            kept[key] = value
+        else:
+            stripped.append(key)
+
+    if not kept:
+        # Stripping would empty the patch entirely — over-aggressive
+        # concept detection is more likely than a genuinely all-off-topic
+        # proposal; conservatively pass the original patch through rather
+        # than discarding the model's entire answer.
+        return action, []
+
+    if not stripped:
+        return action, []
+    return {**action, 'patch': kept}, stripped
 
 
 def _patch_has_asset_marker(module_type, patch):
@@ -1335,7 +1604,11 @@ _WEAK_CONTRAST_FIX_PATTERN = re.compile(
 # command. Patterns are checked in order — more specific phrases (e.g.
 # "vml ... namespace") are listed before the bare "vml" catch-all so a
 # fully-specific question still resolves to the more precise rule.
-_EXPLAIN_PATTERN = re.compile(r'\b(explain|what\s+is|what\'?s|why\s+does|why\s+is|tell\s+me\s+about)\b', re.IGNORECASE)
+_EXPLAIN_PATTERN = re.compile(
+    r'\b(explain|what\s+is|what\'?s|why\s+does|why\s+is|why\s+did|why\s+might|why\s+would|why\s+can\'?t|'
+    r'what\s+causes|how\s+come|tell\s+me\s+about|can\s+you\s+explain)\b',
+    re.IGNORECASE,
+)
 # Sub-phase 5 — extended from 16 to ~60 topic patterns as the knowledge
 # base grew from 14 to 50 rules. ORDERING DISCIPLINE (unchanged from
 # Sub-phase 3, now load-bearing at this size): a client+concern COMBO
@@ -2659,44 +2932,148 @@ def _extract_style_patch(lowered, module_type, current_props):
     return patch or None
 
 
+# D4-E2 item 1 — Intelligence Router. The distinction this function draws
+# is the load-bearing one: a message the deterministic chain confidently
+# ACTED on, DECLINED with real/specific information, or ANSWERED from the
+# knowledge base must never be silently retried through an LLM — only a
+# genuine "nothing in my vocabulary applies" outcome should reach the LLM
+# tier at all. _CLARIFY_REPLY and _EXPLAIN_CLARIFY_REPLY are, BY
+# CONSTRUCTION, the only two reply strings this file ever returns for
+# exactly that "I don't know how to help with this" case (every other
+# NONE-action branch returns a SPECIFIC, situation-naming reply — "select
+# a module first", "that padding value is out of range", "I don't
+# recognize a {type} module", the real knowledge-base answer, etc. — see
+# this file's own dozens of CommandResult(...) call sites). Checking
+# reply identity against these two constants is therefore a precise,
+# zero-duplication way to ask "did the deterministic chain genuinely have
+# nothing to say" without re-implementing or re-running any of its regex
+# matching a second time.
+def _is_no_match_result(result):
+    return result.action.get('type') == ActionType.NONE and result.reply in (_CLARIFY_REPLY, _EXPLAIN_CLARIFY_REPLY)
+
+
+# D4-E2 item 5 — semantic consistency safety net for the residual
+# LLM-routed path. Bounded to the SAME deterministically-checkable value
+# kinds item 4 already resolves (color, alignment, spacing/padding,
+# explicitly-quoted text, explicit URLs) — never universal semantic
+# validation. Runs AFTER validate_action()/apply_scope_gate() have
+# already produced a safe, schema-valid action; only ever OVERRIDES a
+# value the model itself already proposed for a field it already touched
+# — never adds a new field, never touches validate_action() itself.
+_QUOTED_TEXT_RE = re.compile(r'["“”‘’\'](.{1,200}?)["“”‘’\']')
+_EXPLICIT_URL_RE = re.compile(r'\bhttps?://\S+\b', re.IGNORECASE)
+
+
+def apply_semantic_consistency_gate(message, action):
+    """Returns (possibly-corrected `action`, list of correction descriptions)."""
+    if not isinstance(action, dict):
+        return action, []
+    action_type = action.get('type')
+    corrections = []
+
+    if action_type in (ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY):
+        module_type = action.get('module_type')
+        patch = action.get('patch')
+        if not isinstance(patch, dict) or not patch:
+            return action, []
+        new_patch = dict(patch)
+        for key, value in patch.items():
+            field = module_capabilities.get_editable_field(module_type, key) if module_type else None
+            value_type = field.get('valueType') if field else None
+            if value_type == 'color':
+                requested = _find_color((message or '').lower())
+                if requested and requested != value:
+                    new_patch[key] = requested
+                    corrections.append(f'{key}: {value!r} -> {requested!r} (message named an explicit color)')
+            elif value_type == 'align':
+                from .intent_normalization import find_alignment_value
+
+                requested = find_alignment_value((message or '').lower(), 'en')
+                if requested and requested != value:
+                    new_patch[key] = requested
+                    corrections.append(f'{key}: {value!r} -> {requested!r} (message named an explicit alignment)')
+            elif value_type == 'text':
+                quoted = _QUOTED_TEXT_RE.search(message or '')
+                if quoted:
+                    requested = _clean_text_value(quoted.group(1))
+                    if requested and requested != value:
+                        new_patch[key] = requested
+                        corrections.append(f'{key}: {value!r} -> {requested!r} (message quoted an explicit text value)')
+            elif value_type == 'url':
+                explicit = _EXPLICIT_URL_RE.search(message or '')
+                if explicit:
+                    requested = _clean_url_value(explicit.group(0))
+                    if requested and requested != value:
+                        new_patch[key] = requested
+                        corrections.append(f'{key}: {value!r} -> {requested!r} (message contained an explicit URL)')
+        if corrections:
+            return {**action, 'patch': new_patch}, corrections
+        return action, []
+
+    if action_type == ActionType.UPDATE_MODULE_SETTINGS:
+        patch = action.get('patch')
+        if not isinstance(patch, dict) or not isinstance(patch.get('desktop'), dict):
+            return action, []
+        desktop = patch['desktop']
+        padding_keys = [k for k in desktop if k.startswith('padding')]
+        if padding_keys and _SPACING_PATTERN.search((message or '').lower()):
+            numbers = _SPACING_NUMBER_PATTERN.findall((message or '').lower())
+            if numbers:
+                requested_px = float(numbers[0])
+                new_desktop = dict(desktop)
+                changed = False
+                for key in padding_keys:
+                    if desktop[key] != requested_px:
+                        new_desktop[key] = requested_px
+                        changed = True
+                if changed:
+                    corrections.append(f'desktop padding -> {requested_px}px (message named an explicit value)')
+                    return {**action, 'patch': {**patch, 'desktop': new_desktop}}, corrections
+        return action, []
+
+    return action, []
+
+
 def get_default_email_command_provider():
     """3-way provider selection (Phase A): deterministic | local | openai.
-    Mirrors yukti/providers.py::get_default_provider()'s posture exactly —
-    the deterministic router is ALWAYS the fallback, regardless of which
-    (if any) optional provider is selected/configured.
 
       - EMAILBUILDER_AI_COMMAND_PROVIDER == 'openai' AND OPENAI_API_KEY set
-        -> OpenAI, falling back to deterministic.
+        -> deterministic-first, OpenAI only on genuine NO_MATCH.
       - EMAILBUILDER_AI_COMMAND_PROVIDER == 'local' AND
-        EMAILBUILDER_LOCAL_AI_BASE_URL set -> local OpenAI-compatible
-        endpoint (Ollama/llama.cpp/LM Studio/etc.), falling back to
-        deterministic.
+        EMAILBUILDER_LOCAL_AI_BASE_URL set -> deterministic-first, the
+        local OpenAI-compatible endpoint (Ollama/llama.cpp/LM Studio/etc.)
+        only on genuine NO_MATCH.
       - Anything else (unset, misconfigured, or explicitly
         'deterministic') -> the deterministic router alone. No API key or
         local server is ever required for normal operation.
 
-    R4-B3 §A — the deterministic `fallback` is always wrapped in
-    CanonicalIntentEmailCommandProvider, so a non-English message that
-    matches one of the small set of directly-executable canonical
-    intents (see intent_normalization.EXECUTABLE_INTENTS) is handled
-    without ever needing an LLM tier — same "deterministic is the
-    baseline, AI is optional" posture, now genuinely language-
-    independent for that bounded vocabulary."""
+    D4-E2 item 1 — Intelligence Router: the deterministic chain
+    (CanonicalIntentEmailCommandProvider wrapping RuleBasedEmailCommandProvider
+    — UNCHANGED, not duplicated) now gets the FIRST bounded attempt at
+    every message, for every provider mode; an optional LLM tier is
+    consulted ONLY when that chain returns a genuine NO_MATCH (see
+    _is_no_match_result and DeterministicFirstEmailCommandProvider's own
+    docstring for the precise, load-bearing distinction from a
+    deterministic DECLINE or EXPLANATION, which must never be silently
+    retried through an LLM). This still keeps "deterministic is the
+    baseline, AI is optional" true in the strongest possible sense: with
+    neither provider configured, behavior is identical to before this
+    checkpoint."""
     from django.conf import settings
 
-    fallback = CanonicalIntentEmailCommandProvider(fallback=RuleBasedEmailCommandProvider())
+    deterministic = CanonicalIntentEmailCommandProvider(fallback=RuleBasedEmailCommandProvider())
 
     if settings.EMAILBUILDER_AI_COMMAND_PROVIDER == 'openai' and settings.OPENAI_API_KEY:
         from .ai_command_openai import OpenAIEmailCommandProvider
 
-        return FallbackEmailCommandProvider(primary=OpenAIEmailCommandProvider(), fallback=fallback)
+        return DeterministicFirstEmailCommandProvider(llm=OpenAIEmailCommandProvider(), deterministic=deterministic)
 
     if settings.EMAILBUILDER_AI_COMMAND_PROVIDER == 'local' and settings.EMAILBUILDER_LOCAL_AI_BASE_URL:
         from .ai_command_local import LocalEmailCommandProvider
 
-        return FallbackEmailCommandProvider(primary=LocalEmailCommandProvider(), fallback=fallback)
+        return DeterministicFirstEmailCommandProvider(llm=LocalEmailCommandProvider(), deterministic=deterministic)
 
-    return fallback
+    return deterministic
 
 
 class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
@@ -2784,6 +3161,80 @@ class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
         if translated is None:
             return result
         return CommandResult(reply=translated, action=result.action, confidence=result.confidence, provider=result.provider)
+
+
+class DeterministicFirstEmailCommandProvider(EmailCommandProvider):
+    """D4-E2 item 1 — Intelligence Router. Tries `deterministic` FIRST,
+    always. Only consults `llm` when `deterministic` returns a genuine
+    NO_MATCH (see `_is_no_match_result`) — never for a DECLINE (a
+    specific, informative reason the router already gave — "select a
+    module first", "I don't recognize a {type} module", an out-of-range
+    value, etc.) and never for an EXPLANATION (a real answer pulled from
+    the knowledge base). Those two outcomes are returned as-is: retrying
+    them through an LLM would risk turning an authoritative "no" or a
+    correct answer into a worse, hallucinated one, for zero benefit.
+
+    Concretely this means a message like "Why did you change the column
+    widths?" — which contains the words "change column width" but is a
+    QUESTION, not an instruction — is handled correctly with no routing
+    change of its own: RuleBasedEmailCommandProvider's own patterns (see
+    _EXPLAIN_PATTERN, widened in this same checkpoint to catch "why did")
+    already classify it as an explanation-seeking message before any
+    width-change pattern gets a chance to match, so `deterministic`
+    itself returns an EXPLANATION or a specific decline, never NO_MATCH —
+    this router never even considers sending it to the LLM.
+
+    If `llm` itself raises EmailCommandProviderUnavailable (down,
+    misconfigured, malformed response), the already-computed deterministic
+    NO_MATCH result is returned rather than a hard failure — same fail-
+    open posture as the old FallbackEmailCommandProvider. D4-E2 Local-LLM
+    Reachability Hardening item 6 — a genuine timeout (EmailCommandProviderTimeout,
+    a subclass) is handled distinctly: rather than silently returning the
+    same generic decline as if the LLM had never been tried, the reply
+    says plainly that local AI reasoning did not finish in time, then
+    still falls back to the same safe NONE action — never pretending the
+    LLM understood the request, never leaving the action any less safe."""
+
+    def __init__(self, llm, deterministic):
+        self.llm = llm
+        self.deterministic = deterministic
+
+    def resolve(self, message, context):
+        from . import local_ai_diagnostics
+
+        result = self.deterministic.resolve(message, context)
+        if not _is_no_match_result(result):
+            local_ai_diagnostics.record_llm_call_avoided()
+            return result
+
+        local_ai_diagnostics.record_llm_call_required()
+        try:
+            llm_result = self.llm.resolve(message, context)
+        except EmailCommandProviderTimeout:
+            return CommandResult(
+                reply='Local AI reasoning did not complete in time for this request. ' + result.reply,
+                action={'type': ActionType.NONE}, confidence=0.0, provider='deterministic',
+            )
+        except EmailCommandProviderUnavailable:
+            return result
+        corrected_action, corrections = apply_semantic_consistency_gate(message, llm_result.action)
+        if corrections:
+            # Item 11 — never weaken validate_action(): a semantic-gate
+            # correction still passes back through the SAME validator
+            # (bounds/enum/allowlist checks included) before it can ever
+            # reach the caller. If the corrected patch is somehow invalid
+            # (e.g. a spoken padding value outside the allowed range), the
+            # correction is discarded and the original, already-validated
+            # llm_result is returned unchanged — a failed improvement
+            # attempt must never downgrade an already-safe result.
+            re_validated = validate_action(corrected_action)
+            if re_validated is not None:
+                local_ai_diagnostics.record_semantic_gate_corrections(len(corrections))
+                return CommandResult(
+                    reply=llm_result.reply, action=re_validated,
+                    confidence=llm_result.confidence, provider=llm_result.provider,
+                )
+        return llm_result
 
 
 class FallbackEmailCommandProvider(EmailCommandProvider):

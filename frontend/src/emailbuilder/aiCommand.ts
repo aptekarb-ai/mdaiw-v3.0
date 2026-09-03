@@ -146,6 +146,14 @@ export const DOCUMENT_SCOPE_ACTION_TYPES = new Set<AICommandAction['type']>([
 
 export interface AICommandSelectedModuleContext {
   type: AICommandModuleType;
+  // D4-E2 item 2 — the module's own id, passed through so the backend's
+  // active-target context can carry module_id. Optional/additive: the
+  // AI Engineer already worked correctly without it (via type + props
+  // alone); this only lets the model state unambiguously that an
+  // already-resolved selection IS the target, without asking the user
+  // to re-select it. ReferenceResolver.ts remains the sole authority on
+  // WHICH module is selected — this field is never used to resolve that.
+  id?: string;
   props: Record<string, unknown>;
 }
 
