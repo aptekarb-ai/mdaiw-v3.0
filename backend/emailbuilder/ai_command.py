@@ -217,6 +217,15 @@ COLOR_WORDS = {
     'black': '#333333', 'charcoal': '#333333',
     'red': '#B42318',
     'gray': '#66777D', 'grey': '#66777D',
+    # D4-E3F — three of the nine commonly-requested email-builder colors
+    # this checkpoint verifies (red/green/blue/black/white/gray were
+    # already present; yellow/orange/purple were not, in ANY language,
+    # including English — not a multilingual gap specifically, a genuine
+    # missing-value gap this checkpoint's own explicit color list
+    # surfaced). Chosen as legible, moderate tones consistent with the
+    # existing entries' own posture (e.g. 'red' is #B42318, not a raw
+    # #FF0000) — real, usable values, not literal CSS keyword colors.
+    'yellow': '#F2B705', 'orange': '#E8590C', 'purple': '#7C3AED',
 }
 _HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 _UNSAFE_URL_PREFIXES = ('javascript:', 'data:', 'vbscript:')
@@ -1082,9 +1091,19 @@ _MESSAGE_CONCEPT_KEYWORDS = {
         'color', 'colour', 'background colour', 'background color', 'red', 'green', 'blue', 'yellow', 'orange',
         'purple', 'pink', 'black', 'white', 'gray', 'grey',
         'रंग', 'रोजो', 'हरा', 'नीला',  # hi: color, red(loan), green, blue
+        # D4-E3F — extended to the full nine-color set this checkpoint
+        # verifies, reusing the SAME real words already curated in
+        # intent_normalization.py's COLOR_WORDS_BY_LANGUAGE (one curated
+        # vocabulary, two purposes: concept-detection here, value-
+        # resolution there) — never a second, independently-invented list.
+        'लाल', 'काला', 'सफ़ेद', 'सफेद', 'पीला', 'नारंगी', 'बैंगनी',  # hi: red, black, white, yellow, orange, purple
+        'lal', 'hara', 'neela', 'nila', 'kala', 'safed', 'peela', 'narangi', 'baingani',  # hi-latn (Hinglish)
         'rojo', 'verde', 'azul',  # es: red, green, blue ('color' itself is a shared cognate)
+        'negro', 'blanco', 'gris', 'amarillo', 'naranja', 'morado', 'púrpura',  # es
         'couleur', 'rouge', 'vert', 'bleu',  # fr
+        'noir', 'blanc', 'gris', 'jaune', 'violet',  # fr
         'farbe', 'rot', 'grün', 'blau',  # de
+        'schwarz', 'weiß', 'weiss', 'grau', 'gelb', 'lila', 'violett',  # de
     ),
     'text': (
         'text', 'copy', 'wording', 'caption', 'headline', 'say', 'says', 'reads', 'read', 'label it', 'rename',
@@ -1103,7 +1122,10 @@ _MESSAGE_CONCEPT_KEYWORDS = {
     'spacing': (
         'padding', 'spacing', 'margin', ' gap', 'space around', 'space between',
         'पैडिंग', 'स्पेसिंग',  # hi
-        'relleno', 'espaciado',  # es
+        # D4-E3F — 'espacio' ("space", the plain noun) added: 'espaciado'/
+        # 'relleno' alone missed the natural, arguably more common Spanish
+        # phrasing "más espacio"/"menos espacio" ("more/less space").
+        'relleno', 'espaciado', 'espacio',  # es
         'espacement', 'marge',  # fr
         'abstand', 'polsterung',  # de
     ),
@@ -1710,8 +1732,20 @@ _SET_IMAGE_PATTERN = re.compile(
 # some space inside" / "increase internal spacing to 20" examples) but
 # always requires one of padding/spacing/space as the noun, so it can
 # never collide with an unrelated numeric command.
+# D4-E3F — widened to ALSO match _MESSAGE_CONCEPT_KEYWORDS['spacing']'s
+# real, curated hi/es/fr/de vocabulary (defined above — see that table's
+# own comments), so a message using a genuine non-English spacing word
+# (with no English "padding" loanword) now reaches this branch's
+# deterministic extraction too. The three original bare English words
+# stay EXPLICIT here (never derived solely from the concept-keywords
+# tuple, which was curated for a different purpose and does not itself
+# contain bare "space" as a standalone entry — only the multi-word
+# "space around"/"space between" phrases — deriving the trigger from it
+# alone silently DROPPED "space" as a standalone match, a real
+# regression this explicit union avoids).
 _SPACING_PATTERN = re.compile(
-    r'\b(?:padding|spacing|space)\b',
+    r'\b(?:padding|spacing|space|' +
+    '|'.join(re.escape(word.strip()) for word in _MESSAGE_CONCEPT_KEYWORDS['spacing']) + r')\b',
     re.IGNORECASE,
 )
 _SPACING_NUMBER_PATTERN = re.compile(r'(\d+(?:\.\d+)?)\s*(?:px)?', re.IGNORECASE)
@@ -1749,6 +1783,28 @@ _COMPOUND_ACTION_HINT_PATTERN = re.compile(
     r'\band\s+(fix|correct|change|update|make\s+it|improve|increase|decrease|add|remove|adjust)\b',
     re.IGNORECASE,
 )
+# D4-E3F — the SAME "connector + imperative verb" shape as
+# _COMPOUND_ACTION_HINT_PATTERN above, in the other three languages this
+# checkpoint verifies (Hindi/Spanish/German) — a real, curated, bounded
+# vocabulary, not a phrase-specific shortcut for any one QA sentence.
+# French intentionally omitted: no French compound-question-plus-mutation
+# scenario is required by this checkpoint, and this codebase's own
+# established posture (see the module docstring's "honestly-partial
+# vocabulary" note) is to add real coverage only where it is actually
+# needed/verified, never speculative completeness.
+_COMPOUND_ACTION_HINT_PATTERN_BY_LANGUAGE = {
+    'hi': re.compile(r'और\s+(ठीक\s+करो|ठीक\s+कर\s+दो|बदल\s+दो|सुधार\s+दो)'),
+    'es': re.compile(r'\by\s+(arréglalo|arreglalo|corrígelo|corrigelo|cámbialo|cambialo|mejóralo|mejoralo)\b', re.IGNORECASE),
+    'de': re.compile(r'\bund\s+(repariere|korrigiere|ändere|verbessere)\b', re.IGNORECASE),
+}
+
+
+def _has_compound_action_hint(text, lowered, language):
+    if _COMPOUND_ACTION_HINT_PATTERN.search(lowered):
+        return True
+    pattern = _COMPOUND_ACTION_HINT_PATTERN_BY_LANGUAGE.get(language)
+    haystack = text if language == 'hi' else lowered
+    return bool(pattern and pattern.search(haystack))
 # Sub-phase 5 — extended from 16 to ~60 topic patterns as the knowledge
 # base grew from 14 to 50 rules. ORDERING DISCIPLINE (unchanged from
 # Sub-phase 3, now load-bearing at this size): a client+concern COMBO
@@ -1871,11 +1927,26 @@ def _find_all_module_types(lowered):
 
 
 def _find_color(lowered):
+    """D4-E3F — every existing call site already passes already-lowered
+    text; passing that SAME string straight into intent_normalization's
+    find_color_value() is always safe (Devanagari has no case, and
+    find_color_value lowercases its own Latin-script comparisons
+    internally regardless — see that function's own docstring), so this
+    extension needs no new parameter and changes behavior for NO existing
+    caller except by finding MORE (never fewer, never different) colors
+    than before. The canonical name it returns is resolved to a hex value
+    through the SAME COLOR_WORDS dict every English word already uses —
+    never a second, per-language hex mapping."""
     if match := re.search(r'#[0-9a-fA-F]{6}', lowered):
         return match.group(0).upper()
     for phrase in sorted(COLOR_WORDS, key=len, reverse=True):
         if re.search(rf'\b{re.escape(phrase)}\b', lowered):
             return COLOR_WORDS[phrase]
+    from .intent_normalization import find_color_value
+
+    canonical_name = find_color_value(lowered)
+    if canonical_name and canonical_name in COLOR_WORDS:
+        return COLOR_WORDS[canonical_name]
     return None
 
 
@@ -2386,7 +2457,18 @@ def apply_canonical_intent(intent, context, message=''):
     if intent == CanonicalIntent.SET_LINK:
         return compute_set_link_result(selected_type, text)
     if intent == CanonicalIntent.CHANGE_SPACING:
-        return compute_spacing_result(selected_type, lowered)
+        # D4-E3F — was compute_spacing_result(selected_type, lowered)
+        # directly: a real, live-QA-caught bug, since THIS is the code
+        # path a non-English CHANGE_SPACING message reaches through
+        # CanonicalIntentEmailCommandProvider (checked BEFORE
+        # RuleBasedEmailCommandProvider ever runs) — calling the plain,
+        # non-combining function here meant a message like German "Mach
+        # den Button grün und erhöhe den Abstand auf 20px." had its
+        # color request silently dropped, even though the EXACT SAME
+        # message phrased in English or Hindi correctly produced a
+        # BATCH_UPDATE. Now calls the SAME shared combiner the English/
+        # loanword path uses — see that function's own docstring.
+        return compute_spacing_result_with_props_combining(selected_type, lowered, text)
     if intent == CanonicalIntent.CHANGE_ALIGNMENT:
         if not selected_type:
             return CommandResult(reply=_NO_SELECTION_REPLY, action={'type': ActionType.NONE}, confidence=0.3)
@@ -2536,16 +2618,37 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
         # shape must still produce a real proposed correction, not just
         # an explanation with the "fix it" half silently dropped. This
         # deterministic explain-branch only ever answers pure questions —
-        # when _COMPOUND_ACTION_HINT_PATTERN also matches, this branch
-        # steps aside (falls through the rest of resolve() unchanged) so
-        # the message can reach a genuine NO_MATCH and route to the LLM
-        # tier, which can produce both the grounded explanation (the same
-        # rule is independently retrieved for it via retrieve_relevant_
+        # when a compound-action hint also matches, this branch steps
+        # aside (falls through the rest of resolve() unchanged) so the
+        # message can reach a genuine NO_MATCH and route to the LLM tier,
+        # which can produce both the grounded explanation (the same rule
+        # is independently retrieved for it via retrieve_relevant_
         # knowledge — see that function's own docstring) AND a proposed
         # action in one turn. A bare question with no compound-action hint
         # is completely unaffected — still answered here, deterministically,
         # with zero LLM involvement, exactly as before.
-        if _EXPLAIN_PATTERN.search(lowered) and not _COMPOUND_ACTION_HINT_PATTERN.search(lowered):
+        #
+        # D4-E3F — _EXPLAIN_PATTERN itself is English-only; is_explanation_seeking()
+        # (intent_normalization.py, the SAME canonical multilingual layer
+        # this checkpoint's color/spacing/alignment resolution already
+        # reuses) is checked as a second, OR'd signal so a genuinely non-
+        # English question (or question+mutation) is correctly classified
+        # too — never misread as a plain, silently-partial mutation
+        # attempt. _find_explain_rule() itself (the KNOWLEDGE-BASE lookup)
+        # remains English-only — a disclosed, separate, much larger
+        # undertaking (60+ hand-curated topic patterns) out of this
+        # checkpoint's scope; a non-English question therefore still
+        # safely reaches genuine NO_MATCH -> the LLM tier here (same
+        # eventual outcome as before this change), while a non-English
+        # QUESTION+MUTATION message is now correctly kept together rather
+        # than silently treated as explanation-only.
+        from .intent_normalization import detect_language, is_explanation_seeking
+
+        detected_language = detect_language(lowered)
+        is_question = _EXPLAIN_PATTERN.search(lowered) or (
+            detected_language != 'en' and is_explanation_seeking(text, detected_language)
+        )
+        if is_question and not _has_compound_action_hint(text, lowered, detected_language):
             rule = _find_explain_rule(lowered)
             if rule is not None:
                 from . import local_ai_diagnostics
@@ -2926,50 +3029,20 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
             return compute_column_ratio_result(selected_type, lowered)
 
         # R4-B4 §1/§3 — CHANGE_SPACING ("give this 20px padding" / "add
-        # some space inside" / "increase internal spacing to 20").
-        # D4-E3 item 7/8 — a message can ask for a spacing change AND a
-        # props change (color/text/align/size) in the SAME turn ("make
-        # this button green, increase the padding to 20px, and center
-        # it") — spacing lives under UPDATE_MODULE_SETTINGS, the rest
-        # under UPDATE_MODULE_PROPS, two normally-separate action types.
-        # Reuses compute_spacing_result() unchanged for the settings half
-        # (never a duplicated padding-parsing path); only combines it
-        # with _extract_style_patch()'s props half, via BATCH_UPDATE,
-        # when BOTH are genuinely present — a spacing-only message is
-        # completely unaffected, still returned exactly as before.
+        # some space inside" / "increase internal spacing to 20"). D4-E3
+        # item 7/8 / D4-E3F — the spacing-plus-props BATCH_UPDATE combiner
+        # (color/align/text combined with padding when genuinely present,
+        # with an explicit "partial understanding" disclosure when a
+        # requested concept can't be resolved) now lives in ONE shared
+        # function, compute_spacing_result_with_props_combining(), so
+        # this ENGLISH-and-loanword entry point and
+        # apply_canonical_intent()'s CanonicalIntent.CHANGE_SPACING
+        # branch (the entry point a non-English message reaches through
+        # CanonicalIntentEmailCommandProvider, checked BEFORE this
+        # provider ever runs) behave identically — see that function's
+        # own docstring for the real bug this consolidation fixes.
         if _SPACING_PATTERN.search(lowered):
-            spacing_result = compute_spacing_result(selected_type, lowered)
-            if selected_type and spacing_result.action.get('type') == ActionType.UPDATE_MODULE_SETTINGS:
-                # D4-E3 item 7/8 — deliberately NOT the full _extract_style_patch()
-                # here: its fontSize heuristic matches bare "bigger"/"increase"/
-                # "smaller"/"decrease" with no font-specific qualifier, which
-                # would misfire on "increase the padding to 20px" (a SPACING
-                # instruction, not a font-size one) and silently bundle in an
-                # unrequested size change. Only color/alignment are unambiguous
-                # enough to safely combine with a spacing request this way.
-                props_patch = _extract_unambiguous_props_patch(lowered, selected_type)
-                set_text_match = _SET_TEXT_PATTERN.search(text)
-                if set_text_match:
-                    text_field = next(
-                        (f for f in module_capabilities.get_editable_fields(selected_type)
-                         if f['key'] == 'text' and f['valueType'] == 'text'),
-                        None,
-                    )
-                    if text_field:
-                        props_patch = {**(props_patch or {}), 'text': set_text_match.group(1).strip()}
-                if props_patch:
-                    return CommandResult(
-                        reply=(
-                            f'I will update the selected {selected_type} module and adjust its padding. '
-                            'Please confirm.'
-                        ),
-                        action={
-                            'type': ActionType.BATCH_UPDATE, 'target': 'selected', 'module_type': selected_type,
-                            'props_patch': props_patch, 'settings_patch': spacing_result.action['patch'],
-                        },
-                        confidence=0.85,
-                    )
-            return spacing_result
+            return compute_spacing_result_with_props_combining(selected_type, lowered, text)
 
         # R4-B4 §1/§2 — SET_IMAGE. Checked BEFORE the generic style-patch
         # fallback below (which has no image_asset handling at all) —
@@ -3121,9 +3194,16 @@ def _extract_style_patch(lowered, module_type, current_props):
             patch['fontSize'] = base - 4
 
     if 'align' in allowed and _ALIGN_PATTERN.search(lowered):
-        from .intent_normalization import find_alignment_value
+        from .intent_normalization import detect_language, find_alignment_value
 
-        alignment_value = find_alignment_value(lowered, 'en')
+        # D4-E3F — was hardcoded to language='en', which actually BLOCKED
+        # find_alignment_value's own "always also check English words"
+        # fallback (only fires when language != 'en') — meaning this call
+        # site could never recognize a non-English alignment word, even
+        # though the function it calls supports exactly that. Mirrors
+        # apply_canonical_intent()'s own CHANGE_ALIGNMENT branch, which
+        # already detects language correctly for its OWN supplemental check.
+        alignment_value = find_alignment_value(lowered, detect_language(lowered))
         if alignment_value:
             patch['align'] = alignment_value
 
@@ -3152,14 +3232,151 @@ def _extract_unambiguous_props_patch(lowered, module_type):
         elif 'backgroundColor' in allowed:
             patch['backgroundColor'] = color
 
-    if 'align' in allowed and _ALIGN_PATTERN.search(lowered):
-        from .intent_normalization import find_alignment_value
+    if 'align' in allowed:
+        from .intent_normalization import detect_language, find_alignment_value
 
-        alignment_value = find_alignment_value(lowered, 'en')
+        # D4-E3F — unlike _extract_style_patch's own alignment branch
+        # above, this function deliberately does NOT gate on the
+        # English-only _ALIGN_PATTERN first: this is the narrow,
+        # single-purpose combiner for the spacing-plus-props BATCH_UPDATE
+        # path (see this function's own docstring), and a message like
+        # German "zentriere es" has no English "align"/"center" substring
+        # for _ALIGN_PATTERN to find at all — find_alignment_value already
+        # safely returns None when nothing matches, so calling it
+        # unconditionally costs nothing and only adds coverage. Was also
+        # hardcoded to language='en' — same bug, same fix, as the
+        # instance above.
+        alignment_value = find_alignment_value(lowered, detect_language(lowered))
         if alignment_value:
             patch['align'] = alignment_value
 
     return patch or None
+
+
+# D4-E3F — "partial understanding must never be silent." Reuses
+# _requested_concepts()/_MESSAGE_CONCEPT_KEYWORDS — the SAME concept
+# detector the scope gate already relies on — as the "did the message
+# ALSO ask about X" signal; never a second, competing concept system.
+# Bounded to the two concepts _extract_unambiguous_props_patch itself
+# can ever resolve (color, alignment) — a concept neither this app nor
+# that function has a resolver for is never flagged as "unresolved"
+# here, since this only reports on what its caller actually attempted.
+def _describe_unresolved_concepts(message, resolved_concepts):
+    requested = _requested_concepts(message)
+    return sorted(c for c in ('color', 'align') if c in requested and c not in resolved_concepts)
+
+
+_UNRESOLVED_CONCEPT_LABELS = {'color': 'color', 'align': 'alignment'}
+
+
+def _build_partial_understanding_reply(selected_type, understood, unresolved_concepts):
+    """Builds the explicit disclosure this checkpoint requires whenever a
+    compound request has SOME concepts resolved and others not — the
+    caller must never silently apply only the resolved half (see this
+    function's own call site's comment). `understood` is a list of
+    (label, value) tuples already successfully resolved; `unresolved_concepts`
+    comes from _describe_unresolved_concepts()."""
+    lines = ['Understood:']
+    for label, value in understood:
+        lines.append(f' • {label} -> {value}')
+    lines.append("I couldn't confidently resolve:")
+    for concept in unresolved_concepts:
+        label = _UNRESOLVED_CONCEPT_LABELS.get(concept, concept)
+        lines.append(f' • {selected_type or "module"} {label}' if selected_type else f' • {label}')
+    lines.append('Please tell me the specific value(s) you want (e.g. a recognized color name), and I will include them.')
+    return '\n'.join(lines)
+
+
+# D4-E3F — the spacing-plus-props BATCH_UPDATE combiner (D4-E3 item 7/8,
+# hardened by this checkpoint's "partial understanding must never be
+# silent" rule), extracted into ONE shared function so it is reachable
+# from BOTH entry points a spacing request can arrive through:
+#   1. RuleBasedEmailCommandProvider.resolve()'s own _SPACING_PATTERN
+#      branch (the ENGLISH-and-loanword path, checked for every message).
+#   2. apply_canonical_intent()'s CanonicalIntent.CHANGE_SPACING branch
+#      (the path a genuinely non-English message reaches THROUGH
+#      CanonicalIntentEmailCommandProvider, which — critically — is
+#      checked and can short-circuit BEFORE RuleBasedEmailCommandProvider
+#      ever runs; see get_default_email_command_provider()'s own
+#      docstring). A REAL bug this checkpoint's own live QA caught: before
+#      this extraction, a German message matching a CHANGE_SPACING phrase
+#      (e.g. "Mach den Button grün und erhöhe den Abstand auf 20px.")
+#      was intercepted by CanonicalIntentEmailCommandProvider and handed
+#      straight to the OLD, non-combining compute_spacing_result() —
+#      silently dropping the co-occurring color request, exactly the
+#      "silent partial understanding" failure mode this checkpoint exists
+#      to close, just reached through a code path the original D4-E3
+#      item 7/8 combiner never accounted for. Never a second, duplicated
+#      combining implementation — both call sites now call this ONE
+#      function, so the fix applies uniformly regardless of which
+#      provider layer a given message happens to route through first.
+def compute_spacing_result_with_props_combining(selected_type, lowered, text):
+    spacing_result = compute_spacing_result(selected_type, lowered)
+    if not selected_type or spacing_result.action.get('type') != ActionType.UPDATE_MODULE_SETTINGS:
+        return spacing_result
+
+    # D4-E3 item 7/8 — deliberately NOT the full _extract_style_patch()
+    # here: its fontSize heuristic matches bare "bigger"/"increase"/
+    # "smaller"/"decrease" with no font-specific qualifier, which would
+    # misfire on "increase the padding to 20px" (a SPACING instruction,
+    # not a font-size one) and silently bundle in an unrequested size
+    # change. Only color/alignment are unambiguous enough to safely
+    # combine with a spacing request this way.
+    props_patch = _extract_unambiguous_props_patch(lowered, selected_type)
+    set_text_match = _SET_TEXT_PATTERN.search(text)
+    if set_text_match:
+        text_field = next(
+            (f for f in module_capabilities.get_editable_fields(selected_type)
+             if f['key'] == 'text' and f['valueType'] == 'text'),
+            None,
+        )
+        if text_field:
+            props_patch = {**(props_patch or {}), 'text': set_text_match.group(1).strip()}
+
+    # D4-E3F — "partial understanding must never be silent." If the
+    # message ALSO seems to request color/alignment (via
+    # _requested_concepts — the SAME concept detector the scope gate
+    # already relies on) but no value for it could be resolved, this
+    # must NEVER silently fall through to a spacing-only (or partially-
+    # resolved) proposal — the user asked for two things; applying only
+    # one without saying so is exactly the failure mode this checkpoint
+    # exists to close. Uses the EXISTING clarification contract (action
+    # NONE, an explanatory reply) rather than a new UI.
+    resolved_concepts = set()
+    if props_patch:
+        if any(key in props_patch for key in ('backgroundColor', 'color', 'textColor')):
+            resolved_concepts.add('color')
+        if 'align' in props_patch:
+            resolved_concepts.add('align')
+    unresolved_concepts = _describe_unresolved_concepts(text, resolved_concepts)
+    if unresolved_concepts:
+        padding_px = spacing_result.action['patch']['desktop']['paddingTop']
+        padding_label = int(padding_px) if padding_px == int(padding_px) else padding_px
+        understood = [('Padding', f'{padding_label}px on all sides')]
+        if props_patch:
+            if 'text' in props_patch:
+                understood.append(('Text', repr(props_patch['text'])))
+            for key in ('backgroundColor', 'color', 'textColor'):
+                if key in props_patch:
+                    understood.append((key, props_patch[key]))
+            if 'align' in props_patch:
+                understood.append(('Alignment', props_patch['align']))
+        return CommandResult(
+            reply=_build_partial_understanding_reply(selected_type, understood, unresolved_concepts),
+            action={'type': ActionType.NONE}, confidence=0.4,
+        )
+
+    if props_patch:
+        return CommandResult(
+            reply=f'I will update the selected {selected_type} module and adjust its padding. Please confirm.',
+            action={
+                'type': ActionType.BATCH_UPDATE, 'target': 'selected', 'module_type': selected_type,
+                'props_patch': props_patch, 'settings_patch': spacing_result.action['patch'],
+            },
+            confidence=0.85,
+        )
+
+    return spacing_result
 
 
 # D4-E2 item 1 — Intelligence Router. The distinction this function draws

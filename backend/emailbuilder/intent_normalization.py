@@ -94,7 +94,7 @@ class CanonicalIntent:
     })
 
 
-SUPPORTED_LANGUAGES = ('en', 'hi', 'es', 'fr')
+SUPPORTED_LANGUAGES = ('en', 'hi', 'es', 'fr', 'de')
 
 # Unicode block check — cheap, dependency-free, unambiguous for Hindi
 # specifically (no other supported language uses Devanagari script).
@@ -126,6 +126,21 @@ _LANGUAGE_STOPWORDS = {
         # spell identically) that would otherwise misclassify an
         # ordinary English "change the X" command as French.
     }),
+    # D4-E3F — German added to this module's own SUPPORTED_LANGUAGES
+    # (previously only known to ai_command_local.py's SEPARATE, later-
+    # stage reply-relocalization detector — see that module's own
+    # _LATIN_LANGUAGE_STOPWORDS['de'], reused here as the seed so this
+    # is the same curated German vocabulary, not a second, independently-
+    # invented one). Without this, a German message fell through
+    # detect_language()'s default to 'en', which then blocked
+    # CanonicalIntentEmailCommandProvider's own `language != 'en'` gate
+    # from ever considering it — the concrete, confirmed root cause of
+    # German canonical-intent messages (e.g. spacing-only phrasing with
+    # no English "padding" loanword) never reaching Tier 0 at all.
+    'de': frozenset({
+        'der', 'die', 'das', 'ein', 'eine', 'und', 'ist', 'sind', 'mit', 'für', 'auf', 'zu', 'von', 'nicht',
+        'ändere', 'mach', 'mache', 'erhöhe', 'diesen', 'diese', 'dieses',
+    }),
 }
 
 
@@ -138,7 +153,9 @@ def detect_language(text):
         return 'en'
     if _DEVANAGARI_RE.search(text):
         return 'hi'
-    words = set(re.findall(r"[a-zàâäéèêëïîôöùûüç']+", text.lower()))
+    # D4-E3F — added ß (German eszett, e.g. "weiß") to the tokenizer
+    # character class; ä/ö/ü were already covered (shared with French).
+    words = set(re.findall(r"[a-zàâäéèêëïîôöùûüçß']+", text.lower()))
     scores = {lang: len(words & stops) for lang, stops in _LANGUAGE_STOPWORDS.items()}
     best_lang, best_score = max(scores.items(), key=lambda item: item[1])
     return best_lang if best_score > 0 else 'en'
@@ -168,6 +185,10 @@ _INTENT_PHRASES = {
         'hi': ('स्पेसिंग बदलो', 'पैडिंग बदलो'),
         'es': ('cambia el espaciado', 'cambia el relleno', 'más espacio', 'menos espacio'),
         'fr': ('change l\'espacement', 'change le remplissage', 'plus d\'espace', 'moins d\'espace'),
+        # D4-E3F — real German spacing/padding vocabulary, not an accent-
+        # folded variant (German is not in the es/fr accent-folding branch
+        # — see normalize_intent()'s own comment on why).
+        'de': ('abstand ändern', 'mehr abstand', 'weniger abstand', 'erhöhe den abstand', 'innenabstand ändern', 'polsterung ändern'),
     },
     CanonicalIntent.CHANGE_ALIGNMENT: {
         'en': ('center it', 'center this', 'align left', 'align right', 'change the alignment'),
@@ -179,12 +200,16 @@ _INTENT_PHRASES = {
         'hi': ('बीच में', 'संरेखण बदलो'),
         'es': ('céntralo', 'alinea a la izquierda', 'alinea a la derecha', 'cambia la alineación'),
         'fr': ('centre-le', 'aligne à gauche', 'aligne à droite', 'change l\'alignement'),
+        # D4-E3F
+        'de': ('zentriere es', 'zentriere dies', 'linksbündig', 'rechtsbündig', 'ausrichtung ändern'),
     },
     CanonicalIntent.SET_BACKGROUND: {
         'en': ('set the background', 'change the background', 'background color', 'background image'),
         'hi': ('बैकग्राउंड बदलो', 'पृष्ठभूमि बदलो'),
         'es': ('cambia el fondo', 'color de fondo', 'imagen de fondo'),
         'fr': ('change le fond', 'couleur de fond', 'image de fond'),
+        # D4-E3F
+        'de': ('hintergrund ändern', 'hintergrundfarbe', 'hintergrundbild'),
     },
     CanonicalIntent.ENABLE_OUTLOOK_FALLBACK: {
         'en': ('outlook fallback', 'work in outlook', 'fix outlook', 'enable vml', 'classic outlook'),
@@ -317,6 +342,14 @@ _POLITE_REQUEST_RE = {
         r'|^\s*peux[-\s]tu\b',
         re.IGNORECASE,
     ),
+    # D4-E3F — "Kannst du/Könntest du ... machen/reparieren/ändern/..." —
+    # same carve-out purpose as every other language here: a polite
+    # ACTION request must not be misclassified as explanation-seeking
+    # merely because it starts with a question-shaped opener.
+    'de': re.compile(
+        r'^\s*(kannst|könntest)\s+du\s+(machen|reparieren|korrigieren|verbessern|ändern|benutzen|setzen|geben|zentrieren)\b',
+        re.IGNORECASE,
+    ),
 }
 
 # Genuine explanation-seeking: a question-word opener, "explain"/"tell
@@ -349,6 +382,10 @@ _EXPLANATION_SEEKING_RE = {
     # below still catches the large majority of real questions.
     'es': re.compile(r'^\s*¿|\bpor\s+qué\b|\bqué\b|\bcómo\b|\bexplica\b|\?\s*$', re.IGNORECASE),
     'fr': re.compile(r'\bpourquoi\b|\bqu\'est-ce\b|\bcomment\b|\bexplique\b|\?\s*$', re.IGNORECASE),
+    # D4-E3F — 'warum' (why), 'was' (what), 'wie' (how), 'erklär(e)'
+    # (explain); trailing '?' catches phrasings this fixed word list
+    # can't fully enumerate, same posture as every other language here.
+    'de': re.compile(r'^\s*(warum|was|wie|kann|können|ist|sind)\b|\berklär(e|en)?\b|\?\s*$', re.IGNORECASE),
 }
 
 
@@ -425,6 +462,8 @@ ALIGNMENT_WORDS = {
     'hi': {'बाएं': 'left', 'बायें': 'left', 'बीच': 'center', 'केंद्र': 'center', 'दाएं': 'right', 'दायें': 'right'},
     'es': {'izquierda': 'left', 'centro': 'center', 'centrado': 'center', 'derecha': 'right'},
     'fr': {'gauche': 'left', 'centre': 'center', 'centré': 'center', 'droite': 'right'},
+    # D4-E3F
+    'de': {'links': 'left', 'mitte': 'center', 'zentriert': 'center', 'zentriere': 'center', 'rechts': 'right'},
 }
 
 
@@ -447,6 +486,100 @@ def find_alignment_value(text, language):
         for word, value in ALIGNMENT_WORDS['en'].items():
             if re.search(rf'\b{re.escape(word)}\b', lowered):
                 return value
+    return None
+
+
+# D4-E3F — Multilingual Semantic Resolution. Same shape and purpose as
+# ALIGNMENT_WORDS/find_alignment_value directly above: a small, bounded,
+# per-language WORD -> CANONICAL VALUE lookup, extended here to color.
+# The canonical value is a plain English colour NAME (never a hex code —
+# hex resolution stays the SOLE responsibility of ai_command.py's own
+# COLOR_WORDS dict, so there is exactly one name->hex mapping in this
+# codebase, never a second one duplicated per language). Covers the nine
+# colours explicitly required for this checkpoint (red, green, blue,
+# black, white, gray/grey, yellow, orange, purple); English itself needs
+# no entry here since ai_command.py's _find_color() already recognizes
+# English words directly via COLOR_WORDS.
+#
+# Several of these hi/es/fr/de words were ALREADY curated, independently,
+# in this codebase's scope-gate concept-keyword table (see ai_command.py's
+# _MESSAGE_CONCEPT_KEYWORDS['color'] — 'हरा'/'verde'/'vert'/'grün' etc.)
+# to detect "this message is TALKING ABOUT color," but that table never
+# resolved WHICH color — this is the missing resolution step, reusing the
+# same real vocabulary rather than inventing a second, competing one.
+COLOR_WORDS_BY_LANGUAGE = {
+    'hi': {
+        'लाल': 'red', 'हरा': 'green', 'नीला': 'blue', 'काला': 'black', 'सफ़ेद': 'white', 'सफेद': 'white',
+        'ग्रे': 'gray', 'धूसर': 'gray', 'पीला': 'yellow', 'नारंगी': 'orange', 'बैंगनी': 'purple',
+    },
+    # D4-E3F — Hinglish/romanized Hindi (Devanagari typed in Latin
+    # script, e.g. "hara" for हरा) is realistic, common input for this
+    # domain (see this checkpoint's own required "Hinglish green +
+    # padding" scenario) and needs case-insensitive LOWERED matching —
+    # deliberately a SEPARATE table key from 'hi' (whose own Devanagari
+    # entries are matched against un-lowered text, since Devanagari has
+    # no case) rather than merged into it, so find_color_value's per-
+    # language case-handling stays correct for both scripts at once.
+    'hi-latn': {
+        'lal': 'red', 'hara': 'green', 'haraa': 'green', 'neela': 'blue', 'nila': 'blue', 'kala': 'black',
+        'kaala': 'black', 'safed': 'white', 'sufed': 'white', 'peela': 'yellow', 'pila': 'yellow',
+        'narangi': 'orange', 'naarangi': 'orange', 'baingani': 'purple',
+    },
+    'es': {
+        'rojo': 'red', 'verde': 'green', 'azul': 'blue', 'negro': 'black', 'blanco': 'white', 'gris': 'gray',
+        'amarillo': 'yellow', 'naranja': 'orange', 'morado': 'purple', 'púrpura': 'purple',
+    },
+    'fr': {
+        'rouge': 'red', 'vert': 'green', 'bleu': 'blue', 'noir': 'black', 'blanc': 'white', 'gris': 'gray',
+        'jaune': 'yellow', 'orange': 'orange', 'violet': 'purple',
+    },
+    'de': {
+        'rot': 'red', 'grün': 'green', 'blau': 'blue', 'schwarz': 'black', 'weiß': 'white', 'weiss': 'white',
+        'grau': 'gray', 'gelb': 'yellow', 'orange': 'orange', 'lila': 'purple', 'violett': 'purple',
+    },
+}
+
+
+def find_color_value(text):
+    """Returns a canonical English colour NAME ('red'/'green'/'blue'/
+    'black'/'white'/'gray'/'yellow'/'orange'/'purple'), or None. Unlike
+    find_alignment_value, takes no `language` argument: checks every
+    supported non-English language's table unconditionally (they are
+    small, curated, word-boundary-matched, and have no realistic cross-
+    language collisions in this domain), which makes this function
+    robust for a genuinely mixed-language message (Hinglish, or any
+    other code-switched input) without needing a single detected
+    language label first — the same posture SUPPORTED colour resolution
+    needs, since a caller cannot always cleanly bucket a real message
+    into exactly one language. Callers needing the FINAL hex value pass
+    this name to ai_command.py's own COLOR_WORDS dict — this function
+    never returns a hex code itself."""
+    if not isinstance(text, str) or not text.strip():
+        return None
+    lowered = text.lower()
+    for language in ('hi', 'hi-latn', 'es', 'fr', 'de'):
+        for word, canonical_name in COLOR_WORDS_BY_LANGUAGE[language].items():
+            haystack = text if language == 'hi' else lowered
+            if language == 'hi':
+                # A real, confirmed Python `re` limitation, discovered
+                # while building this function: `\b` requires a \w/non-\w
+                # transition, but Python's `\w` does NOT include Unicode
+                # combining marks (category Mn) — and a Devanagari
+                # dependent vowel sign (मात्रा, e.g. the ा in हरा) IS a
+                # combining mark. A word ending in one (हरा, नीला, पीला,
+                # नारंगी, बैंगनी — most of this table) therefore never
+                # satisfies `\bword\b`, even though the SAME word matched
+                # via a plain substring check — `\b` silently finds
+                # nothing for exactly the words this table most needs.
+                # Sidesteps `\w`/`\b` entirely: a match is accepted only
+                # when flanked by whitespace, common punctuation
+                # (including Hindi's own danda '।'), or the string's own
+                # start/end — never by Python's incomplete Devanagari
+                # \w classification.
+                if re.search(rf'(?:^|(?<=[\s,.!?।]))' + re.escape(word) + r'(?:$|(?=[\s,.!?।]))', haystack):
+                    return canonical_name
+            elif re.search(rf'\b{re.escape(word)}\b', haystack):
+                return canonical_name
     return None
 
 
