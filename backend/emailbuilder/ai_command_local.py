@@ -41,9 +41,11 @@ from .ai_command import (
     MAX_COMPOSITION_CHILDREN_PER_COLUMN,
     MAX_COMPOSITION_ITEMS,
     MAX_GENERATED_MODULES,
+    MAX_MULTI_MODULE_OPERATIONS,
     MAX_TOOL_LOOP_ITERATIONS,
     READ_TOOL_NAMES,
     apply_scope_gate,
+    _target_segments_from_context,
     build_active_target_context,
     describe_action_validation_failure,
     execute_tool_call,
@@ -87,7 +89,33 @@ _SYSTEM_PROMPT_BASE = (
     'property half and settings_patch — {"desktop": {"paddingTop"/"paddingRight"/'
     '"paddingBottom"/"paddingLeft": <px>}} — for the spacing half; use this ONLY when both '
     'halves are genuinely requested together, never when only one kind of change was asked '
-    'for), a document-level change (enable/disable Email Reset CSS, '
+    'for), D4-E3G — a CROSS-MODULE compound update, when the user asks for changes to '
+    'DIFFERENT modules in one message (e.g. "make the hero heading smaller and the CTA green") '
+    'AND context includes resolved_targets (present only when the frontend already resolved 2+ '
+    'distinct real module ids for this message): action type MULTI_MODULE_UPDATE, with an '
+    '`operations` array, one entry per module actually being changed, each entry '
+    '{"target_module_id": <copied EXACTLY from one resolved_targets[].id — NEVER invented, NEVER '
+    'a module type name or description used as an id>, "module_type": <that same target\'s type>, '
+    '"props_patch": <or null>, "settings_patch": <or null>}. Use resolved_targets[].matched_phrase '
+    'to tell which part of the user\'s message that specific operation should be built from — never '
+    'apply a field one target\'s own phrase did not ask for onto a DIFFERENT target\'s operation, '
+    'even if that field is mentioned elsewhere in the message for a different module (the same '
+    'scope-creep rule as every single-module action, just applied per-operation). D4-E3G hardening '
+    '— each resolved_targets[] entry ALSO carries editable_props (the exact field names that '
+    'target actually supports — a color word like "green" can ONLY go into one of these, never a '
+    'field this list does not name) and props (that target\'s OWN current values, e.g. its current '
+    'fontSize, for a relative request like "make it bigger") — use these to ground exactly which '
+    'field a concept belongs to instead of guessing between text/textColor/backgroundColor/color. '
+    'A deterministic planner already resolves every color/alignment/spacing/explicit-font-size cross'
+    '-module request BEFORE this model is ever consulted — reaching you with resolved_targets '
+    'present means the deterministic planner could not fully resolve the concepts involved, so '
+    'expect genuine reasoning (e.g. "make it match the other one", "why is this inconsistent, fix '
+    'it") rather than a plain color/spacing word. If '
+    'resolved_targets is present but you cannot confidently build a valid operation for every '
+    'target it lists, return action type NONE and explain what is missing — never emit a '
+    'MULTI_MODULE_UPDATE with an operation for only some of the named targets and silently drop '
+    'the rest. If resolved_targets is absent, never use MULTI_MODULE_UPDATE — treat the message as '
+    'targeting only the current selection, exactly as before this capability existed. A document-level change (enable/disable Email Reset CSS, '
     'set/enable/disable/clear Custom CSS, set the email title, set the email subject, or '
     'set/clear the favicon URL — action types SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, '
     'SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS, SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, '
@@ -116,7 +144,10 @@ _SYSTEM_PROMPT_BASE = (
     'UPDATE_MODULE_SETTINGS with patch {"desktop": {"paddingTop": 24, "paddingRight": 24, "paddingBottom": 24, '
     '"paddingLeft": 24}}, never UPDATE_MODULE_PROPS with an invented flat "padding" field), and '
     'supported_actions (the action types this specific module actually supports — never propose an action '
-    'type absent from this list for the selected module). D4-E1 — stay scoped to exactly what the user asked: if the '
+    'type absent from this list for the selected module), and resolved_targets (D4-E3G — present only for a '
+    'genuine cross-module compound request; a bounded list of {id, type, label, matched_phrase} for the OTHER '
+    'real modules this specific message named besides/instead of the current selection — see the '
+    'MULTI_MODULE_UPDATE description above for how to use it). D4-E1 — stay scoped to exactly what the user asked: if the '
     'user asks to change one property (e.g. "make this red"), propose a patch containing ONLY the '
     'field(s) that property requires — never also change unrelated fields (text, link, alignment, '
     'padding, ...) the user did not mention, even if you think they might want it too; a scope-creep '
@@ -269,6 +300,21 @@ def _action_schema():
         'required': ['module_type', 'patch', 'children', 'repeatable_items'],
         'additionalProperties': False,
     }
+    # D4-E3G — one MULTI_MODULE_UPDATE operation. `target_module_id` MUST
+    # be one of context.resolved_targets[].id — never an invented id, and
+    # never a module type/description used as if it were an id (see
+    # _SYSTEM_PROMPT_BASE's own MULTI_MODULE_UPDATE guidance).
+    multi_module_operation_entry = {
+        'type': 'object',
+        'properties': {
+            'target_module_id': {'type': 'string'},
+            'module_type': {'type': 'string', 'enum': all_types},
+            'props_patch': {'type': ['object', 'null']},
+            'settings_patch': {'type': ['object', 'null']},
+        },
+        'required': ['target_module_id', 'module_type', 'props_patch', 'settings_patch'],
+        'additionalProperties': False,
+    }
     return {
         'name': 'email_ai_command',
         'strict': True,
@@ -313,10 +359,22 @@ def _action_schema():
                         # action type, never BATCH_UPDATE with one half null.
                         'props_patch': {'type': ['object', 'null']},
                         'settings_patch': {'type': ['object', 'null']},
+                        # D4-E3G — MULTI_MODULE_UPDATE's cross-module
+                        # operations list. Every target_module_id here MUST
+                        # come from context.resolved_targets (never
+                        # invented) — validate_action() independently drops
+                        # any operation whose target_module_id/module_type
+                        # does not survive re-validation, so this is
+                        # defense-in-depth, not the only gate.
+                        'operations': {
+                            'type': ['array', 'null'],
+                            'items': multi_module_operation_entry,
+                            'maxItems': MAX_MULTI_MODULE_OPERATIONS,
+                        },
                     },
                     'required': [
                         'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
-                        'props_patch', 'settings_patch',
+                        'props_patch', 'settings_patch', 'operations',
                     ],
                     'additionalProperties': False,
                 },
@@ -606,7 +664,53 @@ def _build_safe_context(context):
         if target_context:
             safe_context['active_target_context'] = target_context
 
+    # D4-E3G — bounded, already-vouched-for cross-module targets (see
+    # ResolvedTargetContextSerializer/referenceResolver.ts's
+    # resolveMultipleReferences). Present ONLY when the frontend already
+    # resolved 2+ distinct real module ids for this message — the ONLY
+    # ids MULTI_MODULE_UPDATE's `operations[].target_module_id` may ever
+    # legally use (validate_action() drops any operation whose
+    # target_module_id/module_type does not survive re-validation, so an
+    # invented id here is never actually harmful, just wasted — but the
+    # model is instructed never to invent one anyway).
+    safe_resolved_targets = _build_safe_resolved_targets(context.get('resolved_targets'))
+    if safe_resolved_targets:
+        safe_context['resolved_targets'] = safe_resolved_targets
+
     return safe_context, safe_history
+
+
+def _build_safe_resolved_targets(raw):
+    if not isinstance(raw, list):
+        return []
+    safe = []
+    for entry in raw[:MAX_MULTI_MODULE_OPERATIONS]:
+        if not isinstance(entry, dict):
+            continue
+        target_id = entry.get('id')
+        module_type = entry.get('type')
+        label = entry.get('label')
+        matched_phrase = entry.get('matched_phrase')
+        if not all(isinstance(v, str) and v for v in (target_id, module_type, label, matched_phrase)):
+            continue
+        if module_type not in module_capabilities.get_all_module_types():
+            continue
+        # D4-E3G hardening §9 — the SAME allowed-keys/primitive-only
+        # filter _build_safe_context already applies to selected_module's
+        # own props, applied per-target here: grounds the LLM tier in
+        # exactly which fields THIS target actually has and their current
+        # values, so it never has to guess whether "green" belongs to
+        # text/textColor/backgroundColor when this target's own capability
+        # manifest and current props already answer that.
+        raw_props = entry.get('props') if isinstance(entry.get('props'), dict) else {}
+        allowed_keys = {field['key'] for field in module_capabilities.get_editable_fields(module_type)}
+        safe_props = {k: v for k, v in raw_props.items() if k in allowed_keys and isinstance(v, (str, int, float))}
+        safe.append({
+            'id': target_id[:200], 'type': module_type, 'label': label[:200], 'matched_phrase': matched_phrase[:500],
+            'props': safe_props,
+            'editable_props': sorted(allowed_keys),
+        })
+    return safe
 
 
 _PLAN_CLASSIFICATIONS = frozenset({
@@ -973,10 +1077,17 @@ class LocalEmailCommandProvider(EmailCommandProvider):
                 # — see ai_command.py::apply_scope_gate's own docstring.
                 # validate_action() itself is never touched or weakened;
                 # this only ever NARROWS an already-safe action further.
-                raw_action, stripped_fields = apply_scope_gate(text, validated)
+                raw_action, stripped_fields = apply_scope_gate(text, validated, target_segments=_target_segments_from_context(context))
                 if stripped_fields:
                     scope_gated = True
                     logger.info('emailbuilder.ai_command_local.scope_gate_stripped fields=%s', stripped_fields)
+                    # D4-E3G hardening §16 — model-scope-creep-specific
+                    # counter, distinct from build_deterministic_multi_
+                    # module_plan's own user_requested_unsupported_
+                    # operations (see local_ai_diagnostics.py's own
+                    # docstring on why these two failure directions are
+                    # never conflated).
+                    local_ai_diagnostics.record_scope_creep_stripped(len(stripped_fields))
             else:
                 validated_successfully = False
                 raw_action = {'type': ActionType.NONE}

@@ -9,8 +9,9 @@ from django.test import SimpleTestCase
 
 from . import ai_command
 from .ai_command import (
-    ActionType, RuleBasedEmailCommandProvider, apply_scope_gate, apply_semantic_consistency_gate,
-    build_active_target_context, describe_action_validation_failure, resolve_asset_references, validate_action,
+    ActionType, CanonicalIntentEmailCommandProvider, RuleBasedEmailCommandProvider, apply_scope_gate,
+    apply_semantic_consistency_gate, build_active_target_context, describe_action_validation_failure,
+    resolve_asset_references, validate_action,
 )
 
 
@@ -435,3 +436,672 @@ class QuestionVsQuestionPlusMutationTests(SimpleTestCase):
         # in the sentence — _COMPOUND_ACTION_HINT_PATTERN requires the
         # literal "and <verb>" construction, absent here.
         self.assertIsNone(ai_command._COMPOUND_ACTION_HINT_PATTERN.search('why did you change the column widths?'))
+
+
+class MultiModuleUpdateActionTests(SimpleTestCase):
+    """D4-E3G — MULTI_MODULE_UPDATE: validate_action()/describe_action_
+    validation_failure()'s new branches. Every operation is constructed
+    directly (the shape a resolved-targets-aware LLM tier would propose
+    after client-side reference resolution already vouched for each
+    target_module_id), mirroring BatchUpdateActionTests's own style."""
+
+    def test_two_operations_across_different_module_types_both_survive(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': 'mod-hero-1', 'module_type': 'hero-text-only', 'props_patch': {'align': 'center'}, 'settings_patch': None},
+                {'target_module_id': 'mod-button-1', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None},
+            ],
+        }
+        validated = validate_action(action)
+        self.assertEqual(validated['type'], ActionType.MULTI_MODULE_UPDATE)
+        self.assertEqual(len(validated['operations']), 2)
+        self.assertEqual({op['target_module_id'] for op in validated['operations']}, {'mod-hero-1', 'mod-button-1'})
+
+    def test_operation_missing_target_module_id_is_dropped_others_survive(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': '', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None},
+                {'target_module_id': 'mod-text-1', 'module_type': 'text', 'props_patch': {'align': 'center'}, 'settings_patch': None},
+            ],
+        }
+        validated = validate_action(action)
+        self.assertEqual(len(validated['operations']), 1)
+        self.assertEqual(validated['operations'][0]['target_module_id'], 'mod-text-1')
+
+    def test_operation_with_unreal_module_type_is_dropped(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': 'mod-1', 'module_type': 'not-a-real-type', 'props_patch': {'x': 'y'}, 'settings_patch': None},
+            ],
+        }
+        self.assertEqual(validate_action(action), {'type': ActionType.NONE})
+
+    def test_operation_with_both_halves_empty_is_dropped(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': 'mod-button-1', 'module_type': 'button', 'props_patch': None, 'settings_patch': None},
+            ],
+        }
+        self.assertEqual(validate_action(action), {'type': ActionType.NONE})
+
+    def test_all_operations_invalid_reduces_to_none(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': '', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None},
+            ],
+        }
+        self.assertEqual(validate_action(action), {'type': ActionType.NONE})
+
+    def test_empty_operations_list_reduces_to_none(self):
+        self.assertEqual(validate_action({'type': ActionType.MULTI_MODULE_UPDATE, 'operations': []}), {'type': ActionType.NONE})
+
+    def test_operations_beyond_the_bound_are_dropped_not_silently_expanded(self):
+        operations = [
+            {'target_module_id': f'mod-{i}', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None}
+            for i in range(ai_command.MAX_MULTI_MODULE_OPERATIONS + 3)
+        ]
+        validated = validate_action({'type': ActionType.MULTI_MODULE_UPDATE, 'operations': operations})
+        self.assertEqual(len(validated['operations']), ai_command.MAX_MULTI_MODULE_OPERATIONS)
+
+    def test_invalid_props_field_stripped_per_operation_via_existing_validators(self):
+        # An operation whose props_patch mixes one real and one nonexistent
+        # field for that module_type must have ONLY the nonexistent field
+        # dropped — reuses _validate_patch unchanged, never a second,
+        # parallel validator.
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': 'mod-button-1', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043', 'notARealField': 'x'}, 'settings_patch': None},
+            ],
+        }
+        validated = validate_action(action)
+        self.assertEqual(validated['operations'][0]['props_patch'], {'backgroundColor': '#76C043'})
+
+    def test_describe_validation_failure_names_multi_module_update_fields(self):
+        action = {'type': ActionType.MULTI_MODULE_UPDATE, 'operations': []}
+        message = describe_action_validation_failure(action, None)
+        self.assertIn('MULTI_MODULE_UPDATE', message)
+        self.assertIn('target_module_id', message)
+
+
+class MultiModuleUpdateScopeGateTests(SimpleTestCase):
+    """D4-E3G §15 — each MULTI_MODULE_UPDATE operation must be
+    independently scope-gated: a whole-message concept set applied
+    uniformly would fail to catch a scope-creeping field on an operation
+    whose OWN referenced phrase never asked for it."""
+
+    def test_each_operation_gated_against_its_own_segment(self):
+        # The message overall mentions both size and color, but the hero
+        # segment only asked for size — a color field slipped onto the
+        # hero operation must be stripped, while the CTA operation's own
+        # (legitimately requested) color field survives untouched.
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {
+                    'target_module_id': 'mod-hero-1', 'module_type': 'hero-text-only',
+                    'props_patch': {'headingSize': 'small', 'backgroundColor': '#76C043'}, 'settings_patch': None,
+                },
+                {
+                    'target_module_id': 'mod-button-1', 'module_type': 'button',
+                    'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None,
+                },
+            ],
+        }
+        target_segments = {
+            'mod-hero-1': 'make the hero heading smaller',
+            'mod-button-1': 'make the CTA green',
+        }
+        gated, stripped = apply_scope_gate(
+            'make the hero heading smaller and the CTA green', action, target_segments=target_segments,
+        )
+        hero_op = next(op for op in gated['operations'] if op['target_module_id'] == 'mod-hero-1')
+        button_op = next(op for op in gated['operations'] if op['target_module_id'] == 'mod-button-1')
+        self.assertNotIn('backgroundColor', hero_op['props_patch'])
+        self.assertIn('headingSize', hero_op['props_patch'])
+        self.assertEqual(button_op['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertIn('backgroundColor', stripped)
+
+    def test_no_target_segments_falls_back_to_whole_message_conservatively(self):
+        # Without segments, both size and color are "requested somewhere"
+        # in the whole message, so nothing is stripped from either
+        # operation — strictly conservative, not incorrect, and exactly
+        # the documented fallback behavior.
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {
+                    'target_module_id': 'mod-hero-1', 'module_type': 'hero-text-only',
+                    'props_patch': {'headingSize': 'small', 'backgroundColor': '#76C043'}, 'settings_patch': None,
+                },
+            ],
+        }
+        gated, stripped = apply_scope_gate('make the hero heading smaller and the CTA green', action)
+        self.assertEqual(gated, action)
+        self.assertEqual(stripped, [])
+
+    def test_operation_with_no_segment_entry_falls_back_to_whole_message(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {
+                    'target_module_id': 'mod-footer-1', 'module_type': 'footer-simple-legal',
+                    'props_patch': {'align': 'center'}, 'settings_patch': None,
+                },
+            ],
+        }
+        # target_segments has no entry at all for mod-footer-1 — falls
+        # back to the whole message, which does mention alignment, so
+        # nothing is stripped.
+        gated, stripped = apply_scope_gate(
+            'center the footer text', action, target_segments={'mod-other-1': 'something else entirely'},
+        )
+        self.assertEqual(gated, action)
+        self.assertEqual(stripped, [])
+
+    def test_scope_creep_field_injected_into_one_operation_only_strips_that_field(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {
+                    'target_module_id': 'mod-button-1', 'module_type': 'button',
+                    'props_patch': {'backgroundColor': '#76C043', 'text': 'UNREQUESTED SCOPE CREEP'}, 'settings_patch': None,
+                },
+            ],
+        }
+        target_segments = {'mod-button-1': 'make the CTA green'}
+        gated, stripped = apply_scope_gate('make the CTA green', action, target_segments=target_segments)
+        button_op = gated['operations'][0]
+        self.assertNotIn('text', button_op['props_patch'])
+        self.assertIn('backgroundColor', button_op['props_patch'])
+        self.assertIn('text', stripped)
+
+    def test_non_dict_action_passes_through(self):
+        self.assertEqual(apply_scope_gate('anything', None), (None, []))
+
+    def test_empty_operations_passes_through_unchanged(self):
+        action = {'type': ActionType.MULTI_MODULE_UPDATE, 'operations': []}
+        gated, stripped = apply_scope_gate('anything', action)
+        self.assertEqual(gated, action)
+        self.assertEqual(stripped, [])
+
+
+class MultiModuleUpdateSemanticConsistencyGateTests(SimpleTestCase):
+    """D4-E3G — apply_semantic_consistency_gate()'s MULTI_MODULE_UPDATE
+    branch: an explicit value named for ONE operation's own segment must
+    never bleed into correcting a different operation's patch."""
+
+    def test_explicit_padding_value_only_corrects_the_operation_it_was_named_for(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {
+                    'target_module_id': 'mod-footer-1', 'module_type': 'footer-simple-legal',
+                    'props_patch': None,
+                    'settings_patch': {'desktop': {'paddingTop': 8, 'paddingRight': 8, 'paddingBottom': 8, 'paddingLeft': 8}},
+                },
+                {
+                    'target_module_id': 'mod-hero-1', 'module_type': 'hero-text-only',
+                    'props_patch': None,
+                    'settings_patch': {'desktop': {'paddingTop': 8, 'paddingRight': 8, 'paddingBottom': 8, 'paddingLeft': 8}},
+                },
+            ],
+        }
+        target_segments = {
+            'mod-footer-1': 'set the footer padding to 20px',
+            'mod-hero-1': 'center the hero text',
+        }
+        corrected, corrections = apply_semantic_consistency_gate(
+            'set the footer padding to 20px and center the hero text', action, target_segments=target_segments,
+        )
+        footer_op = next(op for op in corrected['operations'] if op['target_module_id'] == 'mod-footer-1')
+        hero_op = next(op for op in corrected['operations'] if op['target_module_id'] == 'mod-hero-1')
+        self.assertEqual(footer_op['settings_patch']['desktop']['paddingTop'], 20)
+        self.assertEqual(hero_op['settings_patch']['desktop']['paddingTop'], 8)  # untouched — its own segment named no explicit px value
+        self.assertTrue(corrections)
+
+    def test_no_corrections_needed_returns_action_unchanged(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': 'mod-button-1', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None},
+            ],
+        }
+        corrected, corrections = apply_semantic_consistency_gate('make the CTA green', action)
+        self.assertEqual(corrected, action)
+        self.assertEqual(corrections, [])
+
+
+class MultiModuleUpdateAssetResolutionTests(SimpleTestCase):
+    """D4-E3G — resolve_asset_references()'s MULTI_MODULE_UPDATE branch:
+    each operation's props_patch is checked/resolved independently,
+    reusing _patch_has_asset_marker/_resolve_patch_assets unchanged."""
+
+    def test_no_asset_marker_anywhere_passes_through_unchanged_without_touching_request(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': 'mod-button-1', 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None},
+            ],
+        }
+        # object() has no asset-lookup capability at all — proves the
+        # function never touches `request` unless an asset marker is
+        # actually present in at least one operation's patch.
+        self.assertEqual(resolve_asset_references(action, object()), action)
+
+    def test_non_dict_operation_entries_pass_through_untouched(self):
+        action = {'type': ActionType.MULTI_MODULE_UPDATE, 'operations': ['not-a-dict']}
+        resolved = resolve_asset_references(action, object())
+        self.assertEqual(resolved['operations'], ['not-a-dict'])
+
+    def test_empty_operations_passes_through(self):
+        action = {'type': ActionType.MULTI_MODULE_UPDATE, 'operations': []}
+        self.assertEqual(resolve_asset_references(action, object()), action)
+
+
+class CrossModuleGuardTests(SimpleTestCase):
+    """D4-E3G, updated by the hardening pass — CanonicalIntentEmailCommandProvider's
+    own cross-module guard: 2+ resolved_targets must NEVER reach the
+    single-module fallback chain (canonical-intent OR
+    RuleBasedEmailCommandProvider) — it routes exclusively through
+    build_deterministic_multi_module_plan() first, and falls to genuine
+    NO_MATCH (-> LLM tier) only when that planner finds literally nothing
+    classifiable anywhere. See that provider's own docstring for why this
+    is the one choke point every production request passes through
+    (get_default_email_command_provider always wraps
+    RuleBasedEmailCommandProvider in this class)."""
+
+    def _provider(self):
+        return CanonicalIntentEmailCommandProvider(fallback=RuleBasedEmailCommandProvider())
+
+    def _resolved_targets(self):
+        return [
+            {'id': 'mod-hero-1', 'type': 'hero-text-only', 'label': 'the hero', 'matched_phrase': 'the hero heading smaller'},
+            {'id': 'mod-button-1', 'type': 'button', 'label': 'the button', 'matched_phrase': 'the CTA green'},
+        ]
+
+    def test_two_or_more_resolved_targets_never_reach_the_single_module_chain(self):
+        # hero has no font-size capability at all (verified against the
+        # real manifest — see build_deterministic_multi_module_plan's own
+        # tests), so this specific pair is a PARTIAL plan: the button half
+        # resolves, the hero half is a genuine capability gap. The guard's
+        # job is proven here by what it does NOT do: it never falls
+        # through to a single-module UPDATE_MODULE_PROPS/BATCH_UPDATE
+        # mutation, and it answers with a REAL deterministic clarification
+        # (never the generic _CLARIFY_REPLY _is_no_match_result() keys
+        # off of — that would incorrectly send this to the LLM tier when
+        # the deterministic planner already had a confident, complete
+        # answer: "partially understood, here's exactly what and why").
+        context = {
+            'selected_module': {'type': 'button', 'props': {'text': 'Shop Now', 'backgroundColor': '#0082AD'}},
+            'resolved_targets': self._resolved_targets(),
+        }
+        result = self._provider().resolve('make the hero heading smaller and the CTA green', context)
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertFalse(ai_command._is_no_match_result(result))
+        self.assertIn('backgroundColor', result.reply)
+        self.assertIn('size', result.reply)
+
+    def test_fully_resolvable_cross_module_message_produces_zero_llm_multi_module_update(self):
+        # The positive case: both targets fully resolve deterministically
+        # -> a real MULTI_MODULE_UPDATE, confidently answered, never
+        # routed to the LLM tier (is_no_match_result is False).
+        context = {
+            'selected_module': {'type': 'button', 'props': {'text': 'Shop Now', 'backgroundColor': '#0082AD'}},
+            'resolved_targets': [
+                {'id': 'mod-button-1', 'type': 'button', 'label': 'the first button', 'matched_phrase': 'make the first CTA green'},
+                {'id': 'mod-hero-1', 'type': 'hero-text-only', 'label': 'the hero', 'matched_phrase': 'increase the spacing below the hero'},
+            ],
+        }
+        result = self._provider().resolve('make the first CTA green and increase the spacing below the hero', context)
+        self.assertEqual(result.action['type'], ActionType.MULTI_MODULE_UPDATE)
+        self.assertEqual(len(result.action['operations']), 2)
+        self.assertFalse(ai_command._is_no_match_result(result))
+
+    def test_a_message_that_would_otherwise_deterministically_match_still_no_matches(self):
+        # "make this button green" alone would normally deterministically
+        # resolve to UPDATE_MODULE_PROPS against the selected module — the
+        # guard must still win when 2+ resolved_targets are present, even
+        # though the message text itself looks like an ordinary
+        # single-module color request.
+        context = {
+            'selected_module': {'type': 'button', 'props': {'text': 'Shop Now', 'backgroundColor': '#0082AD'}},
+            'resolved_targets': self._resolved_targets(),
+        }
+        result = self._provider().resolve('make this button green', context)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        self.assertNotEqual(result.action.get('type'), ActionType.UPDATE_MODULE_PROPS)
+
+    def test_zero_or_one_resolved_targets_leaves_deterministic_chain_unaffected(self):
+        context = {'selected_module': {'type': 'button', 'props': {'text': 'Shop Now', 'backgroundColor': '#0082AD'}}}
+        result = self._provider().resolve('make this button green', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_MODULE_PROPS)
+
+        context_with_one = {**context, 'resolved_targets': self._resolved_targets()[:1]}
+        result_one = self._provider().resolve('make this button green', context_with_one)
+        self.assertEqual(result_one.action['type'], ActionType.UPDATE_MODULE_PROPS)
+
+    def test_malformed_resolved_targets_never_raises_and_never_trips_the_guard(self):
+        context = {
+            'selected_module': {'type': 'button', 'props': {'text': 'Shop Now', 'backgroundColor': '#0082AD'}},
+            'resolved_targets': 'not-a-list',
+        }
+        result = self._provider().resolve('make this button green', context)
+        self.assertEqual(result.action['type'], ActionType.UPDATE_MODULE_PROPS)
+
+
+def _target(id_, type_, label, phrase, props=None):
+    return {'id': id_, 'type': type_, 'label': label, 'matched_phrase': phrase, 'props': props or {}}
+
+
+class DeterministicMultiModulePlannerTests(SimpleTestCase):
+    """D4-E3G hardening — build_deterministic_multi_module_plan()/
+    _command_result_from_multi_module_plan(): the "deterministic first"
+    cross-module planner. Every test here proves either a REAL 0-LLM
+    MULTI_MODULE_UPDATE, or an honest, non-silent clarification — never a
+    partial plan disguised as a complete one. Ground-truth capability
+    facts used below (confirmed against the real module_capabilities
+    manifest during this checkpoint's own audit): hero/footer module
+    types have NO font-size field of any kind; footer types have NO
+    color-family field at all (only `align`); button/text types have
+    `fontSize`."""
+
+    def test_returns_none_when_fewer_than_two_targets(self):
+        self.assertIsNone(ai_command.build_deterministic_multi_module_plan('make this green', [_target('m1', 'button', 'b', 'x')]))
+        self.assertIsNone(ai_command.build_deterministic_multi_module_plan('make this green', []))
+
+    def test_returns_none_when_not_even_one_target_has_a_classifiable_concept(self):
+        # "match the other CTA" names no concept this planner's keyword
+        # tables recognize at all — genuine semantic reasoning territory,
+        # correctly punted to the LLM tier (caller's job, not this
+        # function's — it just returns None).
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'why is this inconsistent'),
+            _target('btn1', 'button', 'the button', 'make it match the other CTA'),
+        ]
+        self.assertIsNone(ai_command.build_deterministic_multi_module_plan('why is this inconsistent, make it match the other CTA', targets))
+
+    def test_explain_wording_never_triggers_an_unrequested_mutation(self):
+        # A REAL bug this hardening pass's own live QA caught: "Explain
+        # the Outlook SPACING issue in these sections" mentions "spacing"
+        # only as the noun naming what is being diagnosed — the OLD
+        # (pre-fix) planner silently proposed a default-16px padding
+        # mutation nobody asked for. Must now return None entirely (no
+        # classifiable concept anywhere — "fix what can safely be fixed"
+        # names no concept either) so the caller routes to genuine
+        # semantic reasoning instead.
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'Explain the Outlook spacing issue in these sections'),
+            _target('footer1', 'footer-simple-legal', 'the footer', 'fix what can safely be fixed'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'Explain the Outlook spacing issue in these sections and fix what can safely be fixed', targets,
+        )
+        self.assertIsNone(plan)
+
+    def test_explain_plus_genuine_compound_action_hint_still_resolves(self):
+        # The other half of the same distinction: "Why is this button
+        # inconsistent, AND FIX IT" (a real compound-action hint) must
+        # still be treated as a genuine mutation request when the
+        # concept itself IS classifiable — proven here with an explicit
+        # color word so the fix lands deterministically.
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'why is this section inconsistent'),
+            _target('btn1', 'button', 'the button', 'why is this button green, and make it blue'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'why is this section inconsistent and why is this button green, and make it blue', targets,
+        )
+        self.assertIsNotNone(plan)
+        button_entry = next((t for t in plan['per_target'] if t['target_module_id'] == 'btn1'), None)
+        self.assertIsNotNone(button_entry)
+        self.assertIn('color', button_entry['resolved_concepts'])
+
+    def test_b_first_cta_green_and_spacing_below_hero_fully_resolves(self):
+        targets = [
+            _target('btn1', 'button', 'the first button', 'make the first CTA green'),
+            _target('hero1', 'hero-text-only', 'the hero', 'increase the spacing below the hero'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'make the first CTA green and increase the spacing below the hero', targets,
+        )
+        self.assertIsNotNone(plan)
+        self.assertTrue(plan['fully_understood'])
+        self.assertEqual(len(plan['operations']), 2)
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['btn1']['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertIsNone(by_id['btn1']['settings_patch'])
+        self.assertIsNone(by_id['hero1']['props_patch'])
+        self.assertEqual(by_id['hero1']['settings_patch']['desktop']['paddingTop'], 16.0)
+
+    def test_c_both_cta_buttons_blue_fully_resolves(self):
+        segment = 'change both CTA buttons to blue'
+        targets = [
+            _target('btn1', 'button', 'the first button', segment),
+            _target('btn2', 'button', 'the second button', segment),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(segment, targets)
+        self.assertTrue(plan['fully_understood'])
+        self.assertEqual(len(plan['operations']), 2)
+        self.assertTrue(all(op['props_patch'] == {'backgroundColor': '#0082AD'} for op in plan['operations']))
+
+    def test_d_center_footer_text_and_hero_spacing_fully_resolves(self):
+        # The exact false-positive this hardening pass found and fixed:
+        # "footer TEXT" is a noun naming the footer's content, not a
+        # request to CHANGE the text — must never block this plan.
+        targets = [
+            _target('footer1', 'footer-simple-legal', 'the footer', 'center the footer text'),
+            _target('hero1', 'hero-text-only', 'the hero', 'increase the spacing below the hero'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'center the footer text and increase the spacing below the hero', targets,
+        )
+        self.assertTrue(plan['fully_understood'])
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['footer1']['props_patch'], {'align': 'center'})
+
+    def test_e_same_to_second_cta_propagates_only_the_resolved_concept(self):
+        targets = [
+            _target('btn1', 'button', 'the first button', 'make the first CTA green'),
+            _target('btn2', 'button', 'the second button', 'do the same to the second CTA'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'make the first CTA green and do the same to the second CTA', targets,
+        )
+        self.assertTrue(plan['fully_understood'])
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['btn1']['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertEqual(by_id['btn2']['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertIsNone(by_id['btn2']['settings_patch'])
+
+    def test_same_with_no_preceding_resolution_is_unresolved_not_silently_skipped(self):
+        # "do the same" with nothing real before it in the plan to copy —
+        # must surface as unresolved, never silently produce zero
+        # operations for a target the user explicitly named.
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'do the same to the hero'),
+            _target('btn1', 'button', 'the button', 'make it green'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan('do the same to the hero and make it green', targets)
+        self.assertIsNotNone(plan)
+        hero_entry = next(t for t in plan['per_target'] if t['target_module_id'] == 'hero1')
+        self.assertIn('same-as-reference', hero_entry['unresolved_concepts'])
+        self.assertFalse(plan['fully_understood'])
+
+    def test_f_first_green_second_blue_fully_resolves_independently(self):
+        targets = [
+            _target('btn1', 'button', 'the first button', 'make the first button green'),
+            _target('btn2', 'button', 'the second button', 'the second button blue'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan('make the first button green and the second button blue', targets)
+        self.assertTrue(plan['fully_understood'])
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['btn1']['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertEqual(by_id['btn2']['props_patch'], {'backgroundColor': '#0082AD'})
+
+    def test_a_hero_heading_smaller_is_a_genuine_capability_gap_never_silently_dropped(self):
+        # Ground truth (verified against module_capabilities directly):
+        # no hero module type has ANY font-size-family field. This is a
+        # real, honest capability gap, not a planner defect — the CTA
+        # half still resolves, but the whole plan must clarify rather
+        # than silently apply only the button half.
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'make the hero heading smaller'),
+            _target('btn1', 'button', 'the button', 'make the CTA green'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan('make the hero heading smaller and make the CTA green', targets)
+        self.assertIsNotNone(plan)
+        self.assertFalse(plan['fully_understood'])
+        hero_entry = next(t for t in plan['per_target'] if t['target_module_id'] == 'hero1')
+        self.assertIn('size', hero_entry['unresolved_concepts'])
+        button_entry = next(t for t in plan['per_target'] if t['target_module_id'] == 'btn1')
+        self.assertEqual(button_entry['unresolved_concepts'], [])
+
+        result = ai_command._command_result_from_multi_module_plan(plan)
+        self.assertEqual(result.action['type'], ActionType.NONE)
+        # Never silently drops the understood button half either — both
+        # facts are visible in the reply.
+        self.assertIn('backgroundColor', result.reply)
+        self.assertIn('size', result.reply)
+        self.assertIn('support', result.reply.lower())
+
+    def test_malformed_and_unreal_entries_are_skipped_never_crash(self):
+        targets = [
+            'not-a-dict',
+            {'id': '', 'type': 'button', 'label': 'x', 'matched_phrase': 'make it green'},
+            {'id': 'm1', 'type': 'not-a-real-type', 'label': 'x', 'matched_phrase': 'make it green'},
+            _target('btn1', 'button', 'the button', 'make it green'),
+            _target('btn2', 'button', 'the other button', 'make it blue'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan('make it green, make it blue', targets)
+        self.assertIsNotNone(plan)
+        self.assertEqual(len(plan['operations']), 2)
+
+    def test_operations_are_already_validate_action_clean(self):
+        # The planner's own output must survive an UNCHANGED, independent
+        # pass through validate_action() (the same re-check every action
+        # from every provider gets in views.py) — proves it never needs a
+        # second, looser validation path.
+        targets = [
+            _target('btn1', 'button', 'the first button', 'make the first CTA green'),
+            _target('hero1', 'hero-text-only', 'the hero', 'increase the spacing below the hero'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'make the first CTA green and increase the spacing below the hero', targets,
+        )
+        action = {'type': ActionType.MULTI_MODULE_UPDATE, 'operations': plan['operations']}
+        revalidated = validate_action(action)
+        self.assertEqual(revalidated, action)
+
+    def test_command_result_never_offers_apply_for_a_partial_plan(self):
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'make the hero heading smaller'),
+            _target('btn1', 'button', 'the button', 'make the CTA green'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan('make the hero heading smaller and make the CTA green', targets)
+        result = ai_command._command_result_from_multi_module_plan(plan)
+        self.assertNotEqual(result.action['type'], ActionType.MULTI_MODULE_UPDATE)
+
+    def test_full_plan_never_double_counts_cross_module_plans_itself(self):
+        # views.py is the ONE place cross_module_plans/plan_operations_
+        # generated/rejected are recorded (see EmailAICommandViewTests'
+        # own end-to-end test in tests.py for proof they DO increment
+        # there) — _command_result_from_multi_module_plan must NEVER also
+        # record them itself, or every deterministic plan would be
+        # double-counted (recorded once here, once again in views.py,
+        # since this function's CommandResult always reaches that same
+        # post-validate_action() code path).
+        from . import local_ai_diagnostics
+
+        local_ai_diagnostics.reset_session_stats_for_tests()
+        targets = [
+            _target('btn1', 'button', 'the first button', 'make the first CTA green'),
+            _target('hero1', 'hero-text-only', 'the hero', 'increase the spacing below the hero'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'make the first CTA green and increase the spacing below the hero', targets,
+        )
+        result = ai_command._command_result_from_multi_module_plan(plan)
+        self.assertEqual(result.action['type'], ActionType.MULTI_MODULE_UPDATE)
+        stats = local_ai_diagnostics.get_session_stats()
+        self.assertEqual(stats['cross_module_plans'], 0)
+        self.assertEqual(stats['plan_operations_generated'], 0)
+
+    def test_partial_plan_diagnostics_recorded_as_unsupported_not_scope_creep(self):
+        from . import local_ai_diagnostics
+
+        local_ai_diagnostics.reset_session_stats_for_tests()
+        targets = [
+            _target('hero1', 'hero-text-only', 'the hero', 'make the hero heading smaller'),
+            _target('btn1', 'button', 'the button', 'make the CTA green'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan('make the hero heading smaller and make the CTA green', targets)
+        ai_command._command_result_from_multi_module_plan(plan)
+        stats = local_ai_diagnostics.get_session_stats()
+        self.assertEqual(stats['user_requested_unsupported_operations'], 1)
+        self.assertEqual(stats['scope_creep_operations_stripped'], 0)
+        self.assertEqual(stats['cross_module_plans'], 0)
+
+
+class DeterministicMultiModulePlannerMultilingualTests(SimpleTestCase):
+    """D4-E3G hardening §11 — the SAME deterministic planner, fed
+    per-target segments in Hindi/Hinglish/Spanish/German, must produce an
+    EQUIVALENT fully-resolved plan to the English case — never a second,
+    per-language implementation (color/align/spacing resolution already
+    reuse the D4-E3F canonical multilingual layer; this proves the planner
+    built on top of them inherits that coverage, not just the single-
+    module path)."""
+
+    def test_hindi_first_cta_green_and_hero_spacing(self):
+        targets = [
+            _target('hero1', 'hero-text-only', 'hero', 'Hero ke neeche spacing badhao'),
+            _target('btn1', 'button', 'button', 'first CTA green kar do'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'Hero ke neeche spacing badhao aur first CTA green kar do', targets,
+        )
+        self.assertIsNotNone(plan)
+        self.assertTrue(plan['fully_understood'])
+        self.assertEqual(len(plan['operations']), 2)
+
+    def test_hinglish_first_cta_and_20px_hero_spacing(self):
+        targets = [
+            _target('btn1', 'button', 'button', 'First CTA ko green karo'),
+            _target('hero1', 'hero-text-only', 'hero', 'hero ke neeche 20px space add karo'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'First CTA ko green karo aur hero ke neeche 20px space add karo', targets,
+        )
+        self.assertTrue(plan['fully_understood'])
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['hero1']['settings_patch']['desktop']['paddingTop'], 20.0)
+
+    def test_spanish_primer_boton_verde_y_espacio_hero(self):
+        targets = [
+            _target('btn1', 'button', 'button', 'Cambia el primer botón a verde'),
+            _target('hero1', 'hero-text-only', 'hero', 'aumenta el espacio debajo del hero'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'Cambia el primer botón a verde y aumenta el espacio debajo del hero', targets,
+        )
+        self.assertTrue(plan['fully_understood'])
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['btn1']['props_patch'], {'backgroundColor': '#76C043'})
+
+    def test_german_ersten_cta_gruen_und_abstand_hero(self):
+        targets = [
+            _target('btn1', 'button', 'button', 'Mach den ersten CTA grün'),
+            _target('hero1', 'hero-text-only', 'hero', 'vergrößere den Abstand unter dem Hero'),
+        ]
+        plan = ai_command.build_deterministic_multi_module_plan(
+            'Mach den ersten CTA grün und vergrößere den Abstand unter dem Hero', targets,
+        )
+        self.assertTrue(plan['fully_understood'])
+        by_id = {op['target_module_id']: op for op in plan['operations']}
+        self.assertEqual(by_id['btn1']['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertEqual(by_id['hero1']['settings_patch']['desktop']['paddingTop'], 16.0)

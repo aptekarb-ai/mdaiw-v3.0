@@ -245,6 +245,42 @@ _session_stats = {
     # during real conversations, not merely sitting in the registry
     # unused — see rules.py/retrieval.py.
     'knowledge_grounded_responses': 0,
+    # D4-E3G §17 — real runtime evidence for the cross-module planning
+    # feature, never vanity metrics: how many turns actually produced a
+    # validated MULTI_MODULE_UPDATE plan at all, how many of those were
+    # resolved WITHOUT an LLM call (deterministic per-target color/align
+    # resolution), how many needed the LLM tier, how many individual
+    # operations survived validate_action()'s MULTI_MODULE_UPDATE branch
+    # vs. how many were dropped (scope-creep/invalid-target/unsupported-
+    # field), and how many turns arrived with resolved_targets present
+    # (the frontend found 2+ real cross-module targets) but the backend
+    # still could not build ANY valid operation from them.
+    'cross_module_plans': 0,
+    'deterministic_cross_module_plans': 0,
+    'llm_assisted_cross_module_plans': 0,
+    'plan_operations_generated': 0,
+    'plan_operations_rejected': 0,
+    'unresolved_target_references': 0,
+    # D4-E3G hardening §16 — a DIFFERENT signal from `plan_operations_
+    # rejected` above (which counts fields validate_action()/apply_scope_
+    # gate() silently and SAFELY stripped because the user never asked for
+    # them — model scope creep). This counts the opposite failure
+    # direction: a concept the user DID explicitly ask for, on a real
+    # resolved target, that this application's capability manifest simply
+    # cannot represent (e.g. "make the hero heading smaller" — no hero
+    # module type has a font-size field) — see
+    # _command_result_from_multi_module_plan's own docstring for why this
+    # is always surfaced as a clarification, never a silent drop.
+    'user_requested_unsupported_operations': 0,
+    # D4-E3G hardening §16 — the model-scope-creep-specific half of
+    # `plan_operations_rejected`: fields apply_scope_gate() stripped from
+    # an LLM-proposed MULTI_MODULE_UPDATE operation because the user's own
+    # message never asked for them, tracked separately from
+    # user_requested_unsupported_operations so the two very different
+    # failure directions (deterministic planner: "you asked for something
+    # unsupported" vs. LLM tier: "the model tried to change something you
+    # never asked for") are never conflated in diagnostics.
+    'scope_creep_operations_stripped': 0,
 }
 
 # Kept OUTSIDE _session_stats (list, not a number) so
@@ -350,6 +386,66 @@ def record_llm_failure():
         logger.info('emailbuilder.local_ai_diagnostics.record_llm_failure_failed')
 
 
+def record_cross_module_plan(*, operation_count, rejected_count, llm_assisted):
+    """D4-E3G §17 — called once per turn where validate_action() returned
+    a real (non-empty-operations) MULTI_MODULE_UPDATE action — see
+    views.py's own call site, the ONE place that has both the raw
+    provider result and the post-validate_action() result available.
+    `operation_count` is how many operations survived; `rejected_count`
+    is how many the raw proposal had beyond that (0 for a clean proposal
+    — never negative, never inferred). `llm_assisted` is False only when
+    result.provider == 'deterministic' AND the plan was produced without
+    ever calling the LLM tier for this turn. Best-effort — never raises."""
+    try:
+        _session_stats['cross_module_plans'] += 1
+        if llm_assisted:
+            _session_stats['llm_assisted_cross_module_plans'] += 1
+        else:
+            _session_stats['deterministic_cross_module_plans'] += 1
+        _session_stats['plan_operations_generated'] += int(operation_count or 0)
+        _session_stats['plan_operations_rejected'] += int(rejected_count or 0)
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_cross_module_plan_failed')
+
+
+def record_unresolved_target_references():
+    """D4-E3G §17 — called once per turn where the request arrived with
+    resolved_targets present (the frontend already found 2+ real
+    cross-module targets) but the backend still could not build ANY
+    valid MULTI_MODULE_UPDATE operation from them (every candidate
+    dropped by validate_action(), or neither provider tier proposed one
+    at all) — the direct evidence for how often cross-module resolution
+    reaches the backend but produces nothing actionable. Best-effort —
+    never raises."""
+    try:
+        _session_stats['unresolved_target_references'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_unresolved_target_references_failed')
+
+
+def record_user_requested_unsupported_operations(count):
+    """D4-E3G hardening §16 — called with the number of USER-REQUESTED
+    concepts a resolved target's own capability manifest could not
+    represent at all (never fields the user didn't ask for — that's
+    record_scope_creep_stripped below). Best-effort — never raises."""
+    try:
+        _session_stats['user_requested_unsupported_operations'] += int(count or 0)
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_user_requested_unsupported_operations_failed')
+
+
+def record_scope_creep_stripped(count):
+    """D4-E3G hardening §16 — called with the number of fields
+    apply_scope_gate() stripped from an LLM-proposed MULTI_MODULE_UPDATE
+    operation (never a deterministically-built one — those cannot contain
+    scope creep by construction, see build_deterministic_multi_module_
+    plan's own docstring). Best-effort — never raises."""
+    try:
+        _session_stats['scope_creep_operations_stripped'] += int(count or 0)
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_scope_creep_stripped_failed')
+
+
 def record_knowledge_rules_used(rule_ids):
     """D4-E3 item 5 — called whenever a response (deterministic explain-
     branch OR LLM-tier `knowledge` context injection) was grounded in one
@@ -391,6 +487,14 @@ def get_session_stats():
         'max_llm_latency_ms': _session_stats['max_llm_latency_ms'] or None,
         'knowledge_grounded_responses': _session_stats['knowledge_grounded_responses'],
         'recent_knowledge_rule_ids': list(_recent_knowledge_rule_ids),
+        'cross_module_plans': _session_stats['cross_module_plans'],
+        'deterministic_cross_module_plans': _session_stats['deterministic_cross_module_plans'],
+        'llm_assisted_cross_module_plans': _session_stats['llm_assisted_cross_module_plans'],
+        'plan_operations_generated': _session_stats['plan_operations_generated'],
+        'plan_operations_rejected': _session_stats['plan_operations_rejected'],
+        'unresolved_target_references': _session_stats['unresolved_target_references'],
+        'user_requested_unsupported_operations': _session_stats['user_requested_unsupported_operations'],
+        'scope_creep_operations_stripped': _session_stats['scope_creep_operations_stripped'],
     }
 
 

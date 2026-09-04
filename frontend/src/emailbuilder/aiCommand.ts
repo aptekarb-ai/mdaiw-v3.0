@@ -63,6 +63,24 @@ export type AICommandAction =
       type: 'BATCH_UPDATE'; target: 'selected'; module_type: AICommandModuleType;
       props_patch: Record<string, unknown> | null; settings_patch: Record<string, unknown> | null;
     }
+  // D4-E3G — a cross-module compound request ("make the hero heading
+  // smaller, the CTA green, and center the footer text"). Each
+  // `operations` entry targets a DIFFERENT real module id, already
+  // resolved client-side by referenceResolver.ts's
+  // resolveMultipleReferences before this was ever sent to the backend
+  // (see aiCommand's own resolved_targets request field) — the backend
+  // never invents a module id here. Applied through the SAME
+  // applyRepairPatch batch-commit primitive BATCH_UPDATE already uses,
+  // just with multiple distinct module ids instead of one — still
+  // exactly ONE history/Undo entry (see EmailBuilderWorkspacePage.tsx's
+  // handleApplyAiAction).
+  | {
+      type: 'MULTI_MODULE_UPDATE';
+      operations: Array<{
+        target_module_id: string; module_type: AICommandModuleType;
+        props_patch: Record<string, unknown> | null; settings_patch: Record<string, unknown> | null;
+      }>;
+    }
   // Sub-phase 6, work package D — the six actions reserved (named but
   // never implemented) in Phase A. Each routes through an EXISTING
   // mutator (updateModuleSettings/insertNestedModule/updateColumnWidths/
@@ -276,12 +294,39 @@ export interface AICommandRequest {
   // behaving unchanged, same convention as every prior additive context
   // field.
   copy_source?: AICommandCopySourceContext | null;
+  // D4-E3G — present only when referenceResolver.ts's
+  // resolveMultipleReferences has already resolved 2+ distinct
+  // cross-module targets for this message (see AIEngineerPanel.tsx's
+  // wiring). Every existing caller/test that omits this keeps compiling
+  // and behaving unchanged, same convention as every prior additive
+  // context field.
+  resolved_targets?: AICommandResolvedTargetContext[];
 }
 
 export interface AICommandCopySourceContext {
   property: 'padding' | 'backgroundColor' | 'align' | 'columnRatio';
   value: unknown;
   source_label: string;
+}
+
+// D4-E3G — mirrors backend/emailbuilder/serializers.py's
+// ResolvedTargetContextSerializer exactly (snake_case field names match
+// the wire format). `matched_phrase` is used server-side ONLY to
+// independently scope-gate/correct that one operation against its own
+// segment (see ai_command.py's apply_scope_gate()/
+// apply_semantic_consistency_gate() target_segments parameter) — never to
+// drive the mutation itself.
+export interface AICommandResolvedTargetContext {
+  id: string;
+  type: AICommandModuleType;
+  label: string;
+  matched_phrase: string;
+  // D4-E3G hardening — this ONE resolved module's own current editable
+  // props (same shape as AICommandSelectedModuleContext.props), used by
+  // the backend's deterministic cross-module planner for relative
+  // requests ("make it bigger") and by the LLM tier (residual reasoning
+  // path) for per-target capability grounding. Never the whole document.
+  props?: Record<string, unknown>;
 }
 
 // Phase A — 3-way provider identifier, extended from V1's
@@ -348,6 +393,10 @@ export function describeAction(action: AICommandAction): string {
       const settingsKeys = action.settings_patch ? Object.keys(action.settings_patch) : [];
       const parts = [...propsKeys, ...settingsKeys];
       return `Update the selected ${action.module_type} module (${parts.join(', ') || 'no changes'})`;
+    }
+    case 'MULTI_MODULE_UPDATE': {
+      const moduleTypes = action.operations.map((op) => op.module_type);
+      return `Update ${action.operations.length} modules: ${moduleTypes.join(', ')}`;
     }
     case 'APPLY_VML_PATTERN':
       return `Enable the Classic Outlook VML fallback for the selected ${action.module_type} module`;

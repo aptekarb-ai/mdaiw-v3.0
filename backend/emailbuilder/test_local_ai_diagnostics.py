@@ -159,3 +159,61 @@ class LocalAIDiagnosticsEndpointTests(TestCase):
         with override_settings(EMAILBUILDER_LOCAL_AI_API_KEY='super-secret-endpoint-value'):
             response = self.client.get(self.url)
         self.assertNotIn('super-secret-endpoint-value', response.content.decode())
+
+
+class CrossModulePlanDiagnosticsTests(SimpleTestCase):
+    """D4-E3G §17 — record_cross_module_plan()/record_unresolved_target_
+    references() feed real runtime events, never vanity metrics. Pure
+    unit tests against the diagnostics module's own session-stats
+    dict — never asserts on network/provider behavior."""
+
+    def setUp(self):
+        diagnostics.reset_session_stats_for_tests()
+
+    def test_deterministic_plan_increments_deterministic_not_llm_assisted(self):
+        diagnostics.record_cross_module_plan(operation_count=2, rejected_count=0, llm_assisted=False)
+        stats = diagnostics.get_session_stats()
+        self.assertEqual(stats['cross_module_plans'], 1)
+        self.assertEqual(stats['deterministic_cross_module_plans'], 1)
+        self.assertEqual(stats['llm_assisted_cross_module_plans'], 0)
+        self.assertEqual(stats['plan_operations_generated'], 2)
+        self.assertEqual(stats['plan_operations_rejected'], 0)
+
+    def test_llm_assisted_plan_increments_llm_assisted_not_deterministic(self):
+        diagnostics.record_cross_module_plan(operation_count=3, rejected_count=1, llm_assisted=True)
+        stats = diagnostics.get_session_stats()
+        self.assertEqual(stats['cross_module_plans'], 1)
+        self.assertEqual(stats['deterministic_cross_module_plans'], 0)
+        self.assertEqual(stats['llm_assisted_cross_module_plans'], 1)
+        self.assertEqual(stats['plan_operations_generated'], 3)
+        self.assertEqual(stats['plan_operations_rejected'], 1)
+
+    def test_multiple_plans_accumulate(self):
+        diagnostics.record_cross_module_plan(operation_count=2, rejected_count=0, llm_assisted=False)
+        diagnostics.record_cross_module_plan(operation_count=2, rejected_count=1, llm_assisted=True)
+        stats = diagnostics.get_session_stats()
+        self.assertEqual(stats['cross_module_plans'], 2)
+        self.assertEqual(stats['plan_operations_generated'], 4)
+        self.assertEqual(stats['plan_operations_rejected'], 1)
+
+    def test_unresolved_target_references_tracked_separately(self):
+        diagnostics.record_unresolved_target_references()
+        diagnostics.record_unresolved_target_references()
+        stats = diagnostics.get_session_stats()
+        self.assertEqual(stats['unresolved_target_references'], 2)
+        self.assertEqual(stats['cross_module_plans'], 0)
+
+    def test_reset_clears_every_new_counter(self):
+        diagnostics.record_cross_module_plan(operation_count=1, rejected_count=1, llm_assisted=True)
+        diagnostics.record_unresolved_target_references()
+        diagnostics.reset_session_stats_for_tests()
+        stats = diagnostics.get_session_stats()
+        for key in (
+            'cross_module_plans', 'deterministic_cross_module_plans', 'llm_assisted_cross_module_plans',
+            'plan_operations_generated', 'plan_operations_rejected', 'unresolved_target_references',
+        ):
+            self.assertEqual(stats[key], 0)
+
+    def test_never_raises_on_bad_input(self):
+        diagnostics.record_cross_module_plan(operation_count=None, rejected_count=None, llm_assisted=False)
+        diagnostics.record_cross_module_plan(operation_count='not-a-number', rejected_count=1, llm_assisted=True)

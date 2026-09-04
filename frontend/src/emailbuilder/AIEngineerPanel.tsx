@@ -13,7 +13,7 @@ import { isSpeechSynthesisSupported, useSpeechSynthesis } from '../hooks/useSpee
 import {
   describeAction, DOCUMENT_SCOPE_ACTION_TYPES,
   type AIActionHistoryEntry, type AICommandAction, type AICommandCopySourceContext, type AICommandImportReconstructionContext,
-  type AICommandProviderId, type AICommandSelectedModuleContext, type RepairActionItem,
+  type AICommandProviderId, type AICommandResolvedTargetContext, type AICommandSelectedModuleContext, type RepairActionItem,
 } from './aiCommand';
 import { detectCustomCssWarnings } from './emailCss';
 import { renderEmailDocument } from './htmlRenderer';
@@ -35,7 +35,9 @@ import {
   loadReconstructionSession, updateReconstructionSessionProgress, type ReconstructionSessionData,
 } from './reconstructionSessionStorage';
 import { findModuleById } from './layoutModel';
-import { resolveCopySourceRequest, resolveReference, type LastReferent } from './referenceResolver';
+import {
+  resolveCopySourceRequest, resolveMultipleReferences, resolveReference, type LastReferent,
+} from './referenceResolver';
 import { FIDELITY_CATEGORY_ORDER } from './htmlImportFidelity';
 import {
   boundedHistoryForRequest, clearConversation, loadConversation, saveConversation,
@@ -673,6 +675,15 @@ export function AIEngineerPanel({
   // resolvedModuleOverrideRef above.
   const copySourceContextRef = useRef<AICommandCopySourceContext | null>(null);
 
+  // D4-E3G — set for exactly one outgoing request when
+  // resolveMultipleReferences() has already resolved 2+ DISTINCT
+  // cross-module targets client-side (see handleSend's own multi-
+  // reference block below), then cleared — same one-turn-only
+  // convention as copySourceContextRef above. Left null for the
+  // overwhelming common case (a single-target or non-targeting message),
+  // in which case the request behaves exactly as it did before D4-E3G.
+  const resolvedTargetsContextRef = useRef<AICommandResolvedTargetContext[] | null>(null);
+
   // C-3 remediation — explicit pending-repair context for the placeholder-
   // link conversational flow: which real module (never "whatever's
   // currently selected") is awaiting a destination URL, so a later bare
@@ -712,6 +723,7 @@ export function AIEngineerPanel({
     lastDiscussedReconstructionCategoryRef.current = null;
     lastReferentRef.current = null;
     resolvedModuleOverrideRef.current = null;
+    resolvedTargetsContextRef.current = null;
     reconstructionSessionRef.current = loadReconstructionSession(documentId);
     pendingReconstructionPassRef.current = null;
     setHistory([]);
@@ -1286,6 +1298,64 @@ export function AIEngineerPanel({
       };
     }
 
+    // D4-E3G §5/§6 — cross-module compound-request target resolution,
+    // checked BEFORE the single-target resolveReference() below (that
+    // function only ever answers "what is THE ONE thing referred to" and
+    // would otherwise just match the FIRST typed-module phrase in a
+    // message like "make the hero heading smaller and the CTA green",
+    // silently dropping the second target). Only treated as a genuine
+    // cross-module request when at least two DISTINCT real module ids
+    // resolve across two-or-more segments — a single-segment message (the
+    // overwhelming common case), or a compound naming the SAME module
+    // twice (ordinary same-module compound — BATCH_UPDATE's job, see
+    // ai_command.py's MULTI_MODULE_UPDATE docstring on why that contract
+    // stays single-module), never sets resolved_targets, and the request
+    // behaves exactly as it did before this checkpoint. A genuinely
+    // ambiguous segment (an unresolvable ordinal, an "other X" with no
+    // usable antecedent, "both X" against more than two candidates, ...)
+    // is answered locally with a clarifying question — never guessed,
+    // never silently dropped, never sent to the backend to guess either.
+    resolvedTargetsContextRef.current = null;
+    const multiReferenceResolution = resolveMultipleReferences(referentialCtx);
+    const typedSegments = multiReferenceResolution.items.filter((item) => item.status !== 'unresolved');
+    if (typedSegments.length >= 2) {
+      const ambiguousSegment = typedSegments.find((item) => item.status === 'ambiguous');
+      if (ambiguousSegment && ambiguousSegment.status === 'ambiguous') {
+        appendMessage('assistant', ambiguousSegment.clarifyingQuestion);
+        setHistory((current) => [...current, {
+          id: newId('hist'),
+          command: message,
+          interpretation: ambiguousSegment.clarifyingQuestion,
+          action: { type: 'NONE' },
+          status: 'clarification',
+          summary: ambiguousSegment.clarifyingQuestion,
+          provider: 'deterministic',
+          requiresConfirmation: false,
+        }]);
+        return;
+      }
+      const resolvedTargets = typedSegments.flatMap((item) => (item.status === 'resolved' ? item.targets : []));
+      const distinctTargetIds = new Set(resolvedTargets.map((target) => target.id).filter((id) => id !== 'none'));
+      if (distinctTargetIds.size >= 2) {
+        const seen = new Set<string>();
+        resolvedTargetsContextRef.current = resolvedTargets
+          .filter((target) => target.id !== 'none' && !seen.has(target.id) && seen.add(target.id))
+          .map((target) => {
+            // D4-E3G hardening — this ONE target's own current editable
+            // props (read from the live module tree the frontend already
+            // holds), never any other module's — lets the backend's
+            // deterministic planner resolve a relative request ("make it
+            // bigger") without ever being sent the rest of the document.
+            const liveModule = findModuleById(content.modules, target.id);
+            return {
+              id: target.id, type: target.type as AICommandResolvedTargetContext['type'],
+              label: target.label, matched_phrase: target.matchedPhrase,
+              props: liveModule?.props ?? {},
+            };
+          });
+      }
+    }
+
     const referentialResolution = resolveReference(referentialCtx);
 
     if (referentialResolution.status === 'ambiguous') {
@@ -1375,8 +1445,13 @@ export function AIEngineerPanel({
         // R4-B4 Closure §B/§C — see the copy-source block earlier in
         // this function; null on every ordinary turn.
         copy_source: copySourceContextRef.current,
+        // D4-E3G — see the multi-reference block earlier in this
+        // function; undefined/empty on every ordinary (single-target)
+        // turn.
+        resolved_targets: resolvedTargetsContextRef.current ?? undefined,
       });
       copySourceContextRef.current = null;
+      resolvedTargetsContextRef.current = null;
 
       appendMessage('assistant', response.reply);
       setLastProvider(response.provider);

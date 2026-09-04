@@ -22,7 +22,7 @@ import { DocumentSettingsDialog, type DocumentSettingsInput } from '../emailbuil
 import { ExportDeployDialog } from '../emailbuilder/ExportDeployDialog';
 import { saveEmailAsTemplate } from '../emailbuilder/duplicateEmailDocument';
 import { getModuleDefinition } from '../emailbuilder/moduleRegistry';
-import { findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
+import { findModuleById, findModulePath, isLayoutModuleType } from '../emailbuilder/layoutModel';
 import { renderEmailDocument } from '../emailbuilder/htmlRenderer';
 import type { EmailModuleType } from '../emailbuilder/edm';
 import type { EmailPlatform, SavedEmailModule } from '../emailbuilder/types';
@@ -654,6 +654,40 @@ export function EmailBuilderWorkspacePage() {
             ? { ...patch, desktop: { ...builder.selectedModule.settings.desktop, ...patch.desktop } }
             : patch;
           settingsPatches.push({ moduleId: builder.selectedModuleId, settingsPatch: mergedSettingsPatch });
+        }
+        if (modulePatches.length === 0 && settingsPatches.length === 0) return false;
+        builder.applyRepairPatch(modulePatches, null, settingsPatches);
+        return true;
+      }
+      // D4-E3G — MULTI_MODULE_UPDATE. Reuses applyRepairPatch exactly like
+      // BATCH_UPDATE above, just with each operation keyed by its OWN
+      // target_module_id instead of builder.selectedModuleId —
+      // applyRepairPatch already merges multiple patches to different
+      // module ids (and to the same id) into ONE next-tree computation,
+      // then calls commitEntry() exactly once (see that function's own
+      // docstring) — so N operations across N modules still land as ONE
+      // history/Undo entry, never N. Every operation is defense-in-depth
+      // re-checked against the LIVE module tree here (module still
+      // exists, its type still matches what the backend validated
+      // against) — the backend's own resolved-targets/capability
+      // checking is the real gate, this only guards against the document
+      // having changed between proposal and Apply.
+      case 'MULTI_MODULE_UPDATE': {
+        const modulePatches: { moduleId: string; propPatch: Record<string, unknown> }[] = [];
+        const settingsPatches: { moduleId: string; settingsPatch: Record<string, unknown> }[] = [];
+        for (const operation of action.operations) {
+          const targetModule = findModuleById(builder.modules, operation.target_module_id);
+          if (!targetModule || targetModule.type !== operation.module_type) continue;
+          if (operation.props_patch) {
+            modulePatches.push({ moduleId: operation.target_module_id, propPatch: operation.props_patch });
+          }
+          if (operation.settings_patch) {
+            const patch = operation.settings_patch as { desktop?: Record<string, unknown> } & Record<string, unknown>;
+            const mergedSettingsPatch = patch.desktop
+              ? { ...patch, desktop: { ...targetModule.settings.desktop, ...patch.desktop } }
+              : patch;
+            settingsPatches.push({ moduleId: operation.target_module_id, settingsPatch: mergedSettingsPatch });
+          }
         }
         if (modulePatches.length === 0 && settingsPatches.length === 0) return false;
         builder.applyRepairPatch(modulePatches, null, settingsPatches);

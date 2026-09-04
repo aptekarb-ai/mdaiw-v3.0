@@ -19,6 +19,7 @@ from .attachment_extraction import run_extraction
 from .attachment_validation import RejectedAttachmentType, classify_and_validate_upload
 from .construction_planner import build_construction_plan, summarize_plan
 from .email_brief import build_email_brief
+from . import local_ai_diagnostics
 from .local_ai_diagnostics import get_local_ai_diagnostics
 from .models import EmailAsset, EmailAttachment, EmailDocument, SavedEmailModule
 from .serializers import (
@@ -173,6 +174,13 @@ class EmailAICommandView(APIView):
             # the same reason every other field here is: one single
             # whitelist the view trusts, matching every other context key.
             'copy_source': data.get('copy_source'),
+            # D4-E3G — additive, optional; present only when the frontend's
+            # multi-reference resolver has already resolved 2+ distinct
+            # cross-module targets for this message (see referenceResolver.ts's
+            # resolveMultipleReferences and ai_command.py's
+            # _target_segments_from_context, apply_scope_gate()'s and
+            # apply_semantic_consistency_gate()'s consumers of this).
+            'resolved_targets': data.get('resolved_targets') or [],
             # Used only by the optional AI provider's own separate
             # throttle (ai_command_openai.py) — never logged or returned.
             '_rate_limit_identifier': str(request.user.pk),
@@ -218,6 +226,26 @@ class EmailAICommandView(APIView):
         # never inside validate_action() itself. See ai_command.py's
         # resolve_asset_references() docstring.
         validated_action = resolve_asset_references(validated_action, request)
+
+        # D4-E3G §17 — real runtime evidence for cross-module planning
+        # (see local_ai_diagnostics.record_cross_module_plan's own
+        # docstring for why this is the one place both the raw provider
+        # proposal and the post-validate_action() result are available).
+        # Never touches the response itself — diagnostics-only, and
+        # best-effort inside its own functions.
+        if validated_action.get('type') == ActionType.MULTI_MODULE_UPDATE:
+            validated_operation_count = len(validated_action.get('operations') or [])
+            raw_action = result.action if isinstance(result.action, dict) else {}
+            raw_operation_count = (
+                len(raw_action.get('operations') or []) if raw_action.get('type') == ActionType.MULTI_MODULE_UPDATE else validated_operation_count
+            )
+            local_ai_diagnostics.record_cross_module_plan(
+                operation_count=validated_operation_count,
+                rejected_count=max(0, raw_operation_count - validated_operation_count),
+                llm_assisted=(result.provider != 'deterministic'),
+            )
+        elif safe_context.get('resolved_targets'):
+            local_ai_diagnostics.record_unresolved_target_references()
 
         return Response({
             'success': True,

@@ -376,6 +376,243 @@ function readAlign(module: EmailModule): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+// D4-E3G §5/§6 — cross-module compound-request target resolution
+// ("make the hero heading smaller, the CTA green, and center the footer
+// text"). A SEPARATE function from resolveReference() above (which only
+// ever answers "what is THE ONE thing being referred to"): this one
+// segments a message into per-target phrases and resolves EACH segment
+// independently, so the caller (AIEngineerPanel.tsx) can hand the backend
+// a bounded, already-vouched-for `resolved_targets` list — never asking
+// an LLM to invent or enumerate module ids itself (this app never sends
+// the live module tree to any AI provider; see GET_DOCUMENT_SUMMARY's own
+// documented boundary in ai_command.py).
+//
+// Reuses the EXACT SAME matchesTypeWord/moduleLabel/ORDINAL_INDEX
+// machinery resolveReference() already uses — never a second, parallel
+// module-matching system. Every resolution path below follows §6's
+// "never guess when genuinely ambiguous" rule: "both X" only resolves
+// when EXACTLY two candidates exist; "the other X" only resolves when a
+// conversational antecedent (ctx.lastReferent) names one candidate of
+// that same type AND exactly one OTHER candidate remains; an ordinal
+// ("the first CTA") only resolves when that index is actually in range;
+// anything else that can't be pinned down comes back 'ambiguous' with a
+// clarifying question, never a silent wrong pick.
+export interface ResolvedTarget {
+  id: string;
+  type: string;
+  label: string;
+  matchedPhrase: string;
+  // D4-E3G hardening — this ONE resolved module's own current editable
+  // props (the SAME shape AICommandSelectedModuleContext.props already
+  // carries for the single-selection case), so the backend's
+  // deterministic cross-module planner can resolve a relative request
+  // ("make the CTA text bigger") without ever being sent the rest of the
+  // document. Bounded to only the (at most MAX_MULTI_MODULE_OPERATIONS)
+  // targets this message actually named — never the full module tree.
+  // Optional: populated by the caller (AIEngineerPanel.tsx) from the live
+  // module tree; this resolver itself never reads or sets it.
+  props?: Record<string, unknown>;
+}
+
+export type MultiReferenceItem =
+  | { status: 'resolved'; targets: ResolvedTarget[]; matchedPhrase: string }
+  | { status: 'ambiguous'; clarifyingQuestion: string; matchedPhrase: string }
+  | { status: 'unresolved'; matchedPhrase: string };
+
+export interface MultiReferenceResolution {
+  items: MultiReferenceItem[];
+}
+
+// "CTA" is this builder's own common shorthand for a button module —
+// never a distinct module type of its own (module_capabilities has no
+// "cta" type), so it is normalized to 'button' before matchesTypeWord
+// ever sees it, exactly like "buttons"/"ctas" plural forms.
+const TYPE_ALIASES: Record<string, string> = { cta: 'button', ctas: 'button', buttons: 'button' };
+
+function normalizeTypeWord(word: string): string {
+  return TYPE_ALIASES[word.toLowerCase()] ?? word.toLowerCase();
+}
+
+const MULTI_REF_TYPE_WORDS = [...TYPE_WORDS, 'cta', 'ctas', 'buttons'] as const;
+const MULTI_REF_TYPE_WORD_ALT = MULTI_REF_TYPE_WORDS.join('|');
+const MULTI_REF_ORDINAL_ALT = 'first|second|third|fourth|fifth|sixth|1st|2nd|3rd|4th|5th|6th';
+
+const ORDINAL_TYPED_RE = new RegExp(`\\b(${MULTI_REF_ORDINAL_ALT})\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+const BOTH_TYPED_RE = new RegExp(`\\bboth\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+const OTHER_TYPED_RE = new RegExp(`\\b(?:the\\s+)?other\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+const BARE_TYPED_RE = new RegExp(`\\b(?:this|that|the)\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+// D4-E3G hardening §11/§12 — many of the required multilingual examples
+// name a module type WITHOUT an English article at all ("Hero ke neeche
+// spacing badhao", "CTA ko green karo") — Hindi/Spanish/German/Hinglish
+// grammar has no equivalent of "the" placed exactly there. This fallback
+// only ever runs AFTER BARE_TYPED_RE (which stays the primary match, same
+// priority/behavior as before this hardening pass) fails to find an
+// article-led reference — matches the SAME small, closed TYPE_WORDS
+// vocabulary as a standalone token anywhere in the segment. Bounded risk:
+// this only runs inside resolveMultipleReferences, whose caller
+// (AIEngineerPanel.tsx) only ever acts on a result when 2+ DISTINCT real
+// targets resolve across the whole message — a single stray match here
+// can never, by itself, turn an ordinary single-target message into a
+// cross-module one.
+const ARTICLE_FREE_TYPED_RE = new RegExp(`\\b(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+
+// Splits a compound request on top-level conjunctions ("," / " and ") —
+// deliberately simple, not a clause parser. A segment that names no
+// recognizable module-type word comes back 'unresolved' below and is the
+// CALLER's job to fold into whichever target the surrounding segments
+// already resolved (e.g. "increase the padding to 20px" inside "make the
+// CTA green and increase the padding to 20px" describes the SAME CTA,
+// not a second target) — this function only ever reports per-segment
+// findings, never merges across segments itself.
+//
+// D4-E3G hardening §11 — "and" is also matched in the handful of
+// languages this app's own canonical multilingual layer already commits
+// to (Hindi/Hinglish "aur", Spanish "y", German "und") so a compound
+// cross-module request in one of those languages segments the same way
+// an English one does; each `\s+word\s+` alternative REQUIRES whitespace
+// on both sides, so a short word like "y" can never match as part of a
+// longer word. This is a pure vocabulary extension of the SAME splitter,
+// never a second, per-language segmentation implementation.
+const CONJUNCTION_SPLIT_RE = /\s*,\s*|\s+(?:and|aur|und|y)\s+/i;
+const CONJUNCTION_PREFIX_RE = /^(?:and|aur|und|y)\s+/i;
+
+function splitIntoTargetSegments(message: string): string[] {
+  return message
+    .split(CONJUNCTION_SPLIT_RE)
+    .map((segment) => segment.replace(CONJUNCTION_PREFIX_RE, '').trim())
+    .filter(Boolean);
+}
+
+function candidatesForWord(flat: EmailModule[], rawWord: string): EmailModule[] {
+  const word = normalizeTypeWord(rawWord);
+  return flat.filter((m) => matchesTypeWord(m.type, word));
+}
+
+function resolveSegmentTargets(segment: string, ctx: ReferentialResolutionContext, flat: EmailModule[]): MultiReferenceItem {
+  // "both buttons" / "both CTAs" — only meaningful when exactly two
+  // candidates of that type exist; more than two is genuinely ambiguous
+  // (which two?), fewer than two means there is nothing to pair up.
+  const bothMatch = segment.match(BOTH_TYPED_RE);
+  if (bothMatch) {
+    const word = normalizeTypeWord(bothMatch[1]);
+    const candidates = candidatesForWord(flat, word);
+    if (candidates.length === 2) {
+      return {
+        status: 'resolved',
+        matchedPhrase: segment,
+        targets: candidates.map((m) => ({ id: m.id, type: m.type, label: moduleLabel(m, flat.indexOf(m)), matchedPhrase: segment })),
+      };
+    }
+    if (candidates.length > 2) {
+      const labels = candidates.map((m) => moduleLabel(m, flat.indexOf(m)));
+      return {
+        status: 'ambiguous',
+        matchedPhrase: segment,
+        clarifyingQuestion: `There are ${candidates.length} ${word} modules — ${labels.join(', ')}. "Both" is ambiguous here; which two do you mean?`,
+      };
+    }
+    return { status: 'unresolved', matchedPhrase: segment };
+  }
+
+  // "the other button" / "the other CTA" — only resolves when a
+  // conversational antecedent (ctx.lastReferent) names one candidate of
+  // this same type AND exactly one other candidate remains; never
+  // silently interpreted as an arbitrary next module (§6).
+  const otherMatch = segment.match(OTHER_TYPED_RE);
+  if (otherMatch) {
+    const word = normalizeTypeWord(otherMatch[1]);
+    const candidates = candidatesForWord(flat, word);
+    const antecedent = ctx.lastReferent?.kind === 'module'
+      ? flat.find((m) => m.id === ctx.lastReferent!.id)
+      : undefined;
+    if (antecedent && matchesTypeWord(antecedent.type, word)) {
+      const remaining = candidates.filter((m) => m.id !== antecedent.id);
+      if (remaining.length === 1) {
+        const only = remaining[0];
+        return {
+          status: 'resolved',
+          matchedPhrase: segment,
+          targets: [{ id: only.id, type: only.type, label: moduleLabel(only, flat.indexOf(only)), matchedPhrase: segment }],
+        };
+      }
+      if (remaining.length === 0) {
+        return { status: 'unresolved', matchedPhrase: segment };
+      }
+      const labels = remaining.map((m) => moduleLabel(m, flat.indexOf(m)));
+      return {
+        status: 'ambiguous',
+        matchedPhrase: segment,
+        clarifyingQuestion: `There is more than one other ${word} module — ${labels.join(', ')}. Which one do you mean?`,
+      };
+    }
+    return {
+      status: 'ambiguous',
+      matchedPhrase: segment,
+      clarifyingQuestion: `"The other ${word}" isn't clear yet — which ${word} did you mean, and which one is the "other" one?`,
+    };
+  }
+
+  // "the first CTA" / "second button" — only resolves when that ordinal
+  // index is actually within range of the real candidates.
+  const ordinalMatch = segment.match(ORDINAL_TYPED_RE);
+  if (ordinalMatch) {
+    const index = ORDINAL_INDEX[ordinalMatch[1].toLowerCase()];
+    const word = normalizeTypeWord(ordinalMatch[2]);
+    const candidates = candidatesForWord(flat, word);
+    if (index !== undefined && index < candidates.length) {
+      const only = candidates[index];
+      return {
+        status: 'resolved',
+        matchedPhrase: segment,
+        targets: [{ id: only.id, type: only.type, label: moduleLabel(only, flat.indexOf(only)), matchedPhrase: segment }],
+      };
+    }
+    return { status: 'unresolved', matchedPhrase: segment };
+  }
+
+  // Plain typed reference ("the hero", "the footer text") — reuses the
+  // SAME current-selection-first / single-candidate / ambiguous-if-
+  // multiple priority resolveReference() already uses, scoped to this
+  // one segment only.
+  const bareMatch = segment.match(BARE_TYPED_RE) ?? segment.match(ARTICLE_FREE_TYPED_RE);
+  if (bareMatch) {
+    const word = normalizeTypeWord(bareMatch[1]);
+    if (word !== 'module' && ctx.selectedModule && matchesTypeWord(ctx.selectedModule.type, word)) {
+      return {
+        status: 'resolved',
+        matchedPhrase: segment,
+        targets: [{ id: ctx.selectedModule.id, type: ctx.selectedModule.type, label: ctx.selectedModule.label, matchedPhrase: segment }],
+      };
+    }
+    const candidates = candidatesForWord(flat, word);
+    if (candidates.length === 1) {
+      const only = candidates[0];
+      return {
+        status: 'resolved',
+        matchedPhrase: segment,
+        targets: [{ id: only.id, type: only.type, label: moduleLabel(only, flat.indexOf(only)), matchedPhrase: segment }],
+      };
+    }
+    if (candidates.length > 1) {
+      const labels = candidates.map((m) => moduleLabel(m, flat.indexOf(m)));
+      return {
+        status: 'ambiguous',
+        matchedPhrase: segment,
+        clarifyingQuestion: `There are ${candidates.length} ${word} modules in this email — ${labels.join(', ')}. Which one do you mean?`,
+      };
+    }
+    return { status: 'unresolved', matchedPhrase: segment };
+  }
+
+  return { status: 'unresolved', matchedPhrase: segment };
+}
+
+export function resolveMultipleReferences(ctx: ReferentialResolutionContext): MultiReferenceResolution {
+  const flat = flattenModules(ctx.modules);
+  const segments = splitIntoTargetSegments(ctx.message);
+  return { items: segments.map((segment) => resolveSegmentTargets(segment, ctx, flat)) };
+}
+
 export function resolveCopySourceRequest(ctx: ReferentialResolutionContext): CopySourceRequest {
   const { message } = ctx;
   if (!COPY_TRIGGER_RE.test(message)) return { status: 'not-a-copy-request' };

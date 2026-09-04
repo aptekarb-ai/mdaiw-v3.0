@@ -43,6 +43,12 @@ from .knowledge.rules import find_rule
 
 MAX_MESSAGE_LENGTH = 500
 MAX_GENERATED_MODULES = 5
+# D4-E3G — a single conversational compound request naming more than
+# this many distinct existing modules is already well past what "make
+# the hero heading smaller, CTA green, and footer centered" means —
+# bounded the same way MAX_GENERATED_MODULES/MAX_COMPOSITION_ITEMS
+# already bound their own operation counts.
+MAX_MULTI_MODULE_OPERATIONS = 8
 
 # --- C-2 remediation: deterministic (no-LLM) weak-text-contrast fix -----
 #
@@ -365,19 +371,16 @@ class ActionType:
     # other insert path already uses.
     COMPOSE_EMAIL = 'COMPOSE_EMAIL'
 
-    # D4-E3 item 7/8 — the ONE compound-request action type: bundles a
-    # props patch AND a settings patch for the SAME currently-selected
-    # module (e.g. "make this button green, increase the padding to
-    # 20px, and center it" — color+align live under UPDATE_MODULE_PROPS,
+    # D4-E3 item 7/8 — the ONE compound-request action type for the SAME
+    # currently-selected module: bundles a props patch AND a settings
+    # patch (e.g. "make this button green, increase the padding to 20px,
+    # and center it" — color+align live under UPDATE_MODULE_PROPS,
     # padding lives under UPDATE_MODULE_SETTINGS's nested desktop object;
-    # today those are two separate, mutually exclusive action types).
+    # those are two separate, mutually exclusive action types otherwise).
     # Always `target: 'selected'` — same convention as UPDATE_MODULE_PROPS/
-    # UPDATE_MODULE_SETTINGS, resolved client-side, never a module id sent
-    # BY the model (this app never sends the module tree to any AI
-    # provider — see execute_tool_call's GET_DOCUMENT_SUMMARY docstring —
-    # so cross-module compound requests naming several DIFFERENT modules
-    # are intentionally out of scope for this action type; see this
-    # checkpoint's own completion report for that disclosed limitation).
+    # UPDATE_MODULE_SETTINGS. D4-E3G — deliberately preserved AS single-
+    # module; cross-module requests use the SEPARATE MULTI_MODULE_UPDATE
+    # type below rather than overloading this one's contract.
     # Each half is validated through the EXACT SAME field-level validators
     # UPDATE_MODULE_PROPS/UPDATE_MODULE_SETTINGS already use — never a
     # second, parallel validation path — and applied through the EXISTING
@@ -385,13 +388,32 @@ class ActionType:
     # thing lands as ONE undo step, exactly like a repair batch already does.
     BATCH_UPDATE = 'BATCH_UPDATE'
 
+    # D4-E3G — cross-module compound requests ("make the hero heading
+    # smaller, CTA green, and center the footer text"). Each `operations`
+    # entry carries its OWN `target_module_id` (resolved CLIENT-SIDE by
+    # ReferenceResolver.ts — see that file's own docstring on why: this
+    # app never sends the live module tree to any AI provider, so a
+    # model can never invent a module id here that wasn't already handed
+    # to it as a `resolved_targets` context entry) plus the SAME
+    # props_patch/settings_patch shape BATCH_UPDATE already uses for one
+    # module. Every operation is validated, scope-gated, and semantic-
+    # gate-corrected INDEPENDENTLY (see validate_action()/apply_scope_gate()/
+    # apply_semantic_consistency_gate()'s own MULTI_MODULE_UPDATE
+    # branches) — an invalid or scope-creeping operation is dropped on
+    # its own, never trusted because the outer envelope validated.
+    # Applied through the SAME applyRepairPatch batch-commit primitive
+    # BATCH_UPDATE uses, just with multiple distinct module ids instead
+    # of one — still exactly ONE history/Undo entry (applyRepairPatch's
+    # own contract, unchanged).
+    MULTI_MODULE_UPDATE = 'MULTI_MODULE_UPDATE'
+
     values = frozenset({
         INSERT_MODULE, UPDATE_MODULE_PROPS, DELETE_MODULE, DUPLICATE_MODULE, APPLY_GLOBAL_STYLE, NONE,
         INSERT_NESTED_MODULE, UPDATE_MODULE_SETTINGS, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
         SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS,
         SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, CLEAR_FAVICON,
-        COMPOSE_EMAIL, BATCH_UPDATE,
+        COMPOSE_EMAIL, BATCH_UPDATE, MULTI_MODULE_UPDATE,
     })
 
     IMPLEMENTED = frozenset({
@@ -405,7 +427,7 @@ class ActionType:
         # updateModuleProps) — never a parallel mutation system.
         UPDATE_MODULE_SETTINGS, INSERT_NESTED_MODULE, RESTRUCTURE_LAYOUT,
         APPLY_OUTLOOK_WRAPPER, APPLY_VML_PATTERN, REPLACE_UNSUPPORTED_PROPERTY, UPDATE_REPEATABLE_FIELD,
-        COMPOSE_EMAIL, BATCH_UPDATE,
+        COMPOSE_EMAIL, BATCH_UPDATE, MULTI_MODULE_UPDATE,
     })
 
     # Sub-phase 6 — structural tree changes always require confirmation
@@ -741,6 +763,50 @@ def validate_action(action):
             'props_patch': props_patch, 'settings_patch': settings_patch,
         }
 
+    # D4-E3G — MULTI_MODULE_UPDATE. Each operation reuses the EXACT SAME
+    # per-module validation BATCH_UPDATE's single operation already uses
+    # (_validate_patch/_validate_settings_patch) — never a second,
+    # parallel validation path, just applied once per operation. An
+    # operation with an unreal module_type, a missing/blank
+    # target_module_id, or BOTH halves ending up empty is DROPPED
+    # entirely (never included in the validated list) — the REST of the
+    # plan is never discarded because one operation failed; if the whole
+    # plan ends up with zero surviving operations, this safely reduces to
+    # NONE, same posture as BATCH_UPDATE's own "both halves empty" case.
+    # Bounded to MAX_MULTI_MODULE_OPERATIONS entries — a message naming
+    # more distinct targets than that is already well past what a single
+    # conversational compound request means; excess entries are dropped,
+    # never silently expanded.
+    if action_type == ActionType.MULTI_MODULE_UPDATE:
+        raw_operations = action.get('operations')
+        if not isinstance(raw_operations, list) or not raw_operations:
+            return {'type': ActionType.NONE}
+        validated_operations = []
+        for raw_operation in raw_operations[:MAX_MULTI_MODULE_OPERATIONS]:
+            if not isinstance(raw_operation, dict):
+                continue
+            target_module_id = raw_operation.get('target_module_id')
+            module_type = raw_operation.get('module_type')
+            if not isinstance(target_module_id, str) or not target_module_id.strip():
+                continue
+            if module_type not in module_capabilities.get_all_module_types():
+                continue
+            props_patch = (
+                _validate_patch(module_type, raw_operation.get('props_patch')) if raw_operation.get('props_patch') else None
+            )
+            settings_patch = (
+                _validate_settings_patch(raw_operation.get('settings_patch')) if raw_operation.get('settings_patch') else None
+            )
+            if not props_patch and not settings_patch:
+                continue
+            validated_operations.append({
+                'target_module_id': target_module_id, 'module_type': module_type,
+                'props_patch': props_patch, 'settings_patch': settings_patch,
+            })
+        if not validated_operations:
+            return {'type': ActionType.NONE}
+        return {'type': action_type, 'operations': validated_operations}
+
     # APPLY_VML_PATTERN (buttons) / APPLY_OUTLOOK_WRAPPER (background-image
     # modules) — each a narrow, single-purpose alias that always means
     # "enable the already-implemented VML fallback for this module" (see
@@ -1054,6 +1120,14 @@ def describe_action_validation_failure(action, validated):
             'Correct only the field structure — do not change what the user asked for.'
         )
 
+    if action_type == ActionType.MULTI_MODULE_UPDATE:
+        return (
+            'MULTI_MODULE_UPDATE needs a non-empty `operations` array; each entry needs a real '
+            '`target_module_id` (from active_target_context/resolved_targets — never invented), a real '
+            '`module_type`, and at least one of props_patch/settings_patch. Correct only the field '
+            'structure — do not change what the user asked for.'
+        )
+
     return f'The proposed "{action_type}" action did not pass builder-schema validation. Check field names, value types, and required keys.'
 
 
@@ -1120,7 +1194,19 @@ _MESSAGE_CONCEPT_KEYWORDS = {
         'verlinkung', 'link',  # de
     ),
     'spacing': (
-        'padding', 'spacing', 'margin', ' gap', 'space around', 'space between',
+        # D4-E3G hardening — bare 'space' added (was previously only
+        # detected via the two multi-word phrases below): _SPACING_PATTERN
+        # (the trigger this concept detector's OWN sibling gate function
+        # uses) already special-cased bare "space" as an explicit third
+        # union member alongside padding/spacing — this tuple, the single
+        # source _requested_concepts()/apply_scope_gate() both read, had
+        # silently drifted out of sync with it, meaning a message like
+        # "hero ke neeche 20px space add karo" (a required D4-E3G
+        # multilingual example, using "space" as an English loanword)
+        # would trigger the spacing SETTING via _SPACING_PATTERN but never
+        # register as a requested CONCEPT here — a real, confirmed gap
+        # this hardening pass closes at its one authoritative source.
+        'padding', 'spacing', 'space', 'margin', ' gap', 'space around', 'space between',
         'पैडिंग', 'स्पेसिंग',  # hi
         # D4-E3F — 'espacio' ("space", the plain noun) added: 'espaciado'/
         # 'relleno' alone missed the natural, arguably more common Spanish
@@ -1210,27 +1296,101 @@ def _scope_gate_settings_patch(patch, requested):
     return new_patch, all_stripped
 
 
-def apply_scope_gate(message, action):
+def _target_segments_from_context(context):
+    """D4-E3G — builds the {target_module_id: matched_phrase} map
+    apply_scope_gate()/apply_semantic_consistency_gate() use to gate each
+    MULTI_MODULE_UPDATE operation against only its own resolved segment,
+    from context['resolved_targets'] (see ResolvedTargetContextSerializer
+    — id/type/label/matched_phrase, already vouched for client-side by
+    referenceResolver.ts's resolveMultipleReferences). Returns {} when
+    absent/malformed — every caller already falls back to the whole
+    message per-operation in that case (conservative, never a hard
+    failure)."""
+    resolved_targets = context.get('resolved_targets') if isinstance(context, dict) else None
+    if not isinstance(resolved_targets, list):
+        return {}
+    segments = {}
+    for entry in resolved_targets:
+        if not isinstance(entry, dict):
+            continue
+        target_id = entry.get('id')
+        phrase = entry.get('matched_phrase')
+        if isinstance(target_id, str) and target_id and isinstance(phrase, str) and phrase:
+            segments[target_id] = phrase
+    return segments
+
+
+def apply_scope_gate(message, action, target_segments=None):
     """Returns (possibly-narrowed) `action`, and a list of stripped field
     keys (empty when nothing was stripped) — the caller decides how to
     log/report that. Only ever narrows an already-validated
     UPDATE_MODULE_PROPS/APPLY_GLOBAL_STYLE/REPLACE_UNSUPPORTED_PROPERTY
-    patch, or BATCH_UPDATE's props_patch/settings_patch pair (D4-E3
+    patch, BATCH_UPDATE's props_patch/settings_patch pair (D4-E3
     scope-gate hardening — a BATCH_UPDATE proposed by the LLM tier
     previously bypassed this gate entirely, since it carries no `patch`
-    key at all; that confirmed gap is what this branch closes, reusing
-    the SAME _concept_for_field_key/_FIELD_KEY_CONCEPT_HINTS tables,
-    never a second, parallel scope-control system). Every other action
-    type passes through unchanged (nothing else carries a free-form
-    multi-field patch a scope gate applies to)."""
+    key at all; that confirmed gap is what this branch closes), or
+    MULTI_MODULE_UPDATE's `operations` list (D4-E3G — see below). All
+    reuse the SAME _concept_for_field_key/_FIELD_KEY_CONCEPT_HINTS
+    tables, never a second, parallel scope-control system. Every other
+    action type passes through unchanged (nothing else carries a
+    free-form multi-field patch a scope gate applies to).
+
+    `target_segments` (D4-E3G, optional): {target_module_id: message_segment}
+    — when the caller already knows which slice of the message a given
+    operation's target was resolved from (ReferenceResolver.ts's
+    matched_phrase, forwarded through context['resolved_targets']), each
+    operation is scope-gated against ONLY its own segment's requested
+    concepts, never the whole message's. This is required, not cosmetic:
+    "make the hero heading smaller, CTA green, and center the footer"
+    mentions size/color/align somewhere in the message, but a single
+    whole-message requested-concept set applied uniformly to every
+    operation would fail to catch a scope-creeping color field sneaking
+    onto the hero-heading operation (the message DOES mention color —
+    just for the CTA, not the hero). Falls back to the whole message,
+    per-operation, when no segment is available for a given target —
+    strictly conservative (still some protection) but only where the
+    caller genuinely could not supply a segment."""
     if not isinstance(action, dict):
         return action, []
     action_type = action.get('type')
     if action_type not in (
         ActionType.UPDATE_MODULE_PROPS, ActionType.APPLY_GLOBAL_STYLE, ActionType.REPLACE_UNSUPPORTED_PROPERTY,
-        ActionType.BATCH_UPDATE,
+        ActionType.BATCH_UPDATE, ActionType.MULTI_MODULE_UPDATE,
     ):
         return action, []
+
+    if action_type == ActionType.MULTI_MODULE_UPDATE:
+        operations = action.get('operations')
+        if not isinstance(operations, list) or not operations:
+            return action, []
+        new_operations = []
+        total_stripped = []
+        for operation in operations:
+            if not isinstance(operation, dict):
+                new_operations.append(operation)
+                continue
+            segment = (target_segments or {}).get(operation.get('target_module_id')) or message
+            op_requested = _requested_concepts(segment)
+            if not op_requested:
+                new_operations.append(operation)
+                continue
+            props_patch = operation.get('props_patch')
+            settings_patch = operation.get('settings_patch')
+            new_props, props_stripped = (
+                _scope_gate_patch(props_patch, op_requested) if isinstance(props_patch, dict) and props_patch
+                else (props_patch, [])
+            )
+            new_settings, settings_stripped = (
+                _scope_gate_settings_patch(settings_patch, op_requested) if settings_patch else (settings_patch, [])
+            )
+            op_stripped = props_stripped + settings_stripped
+            total_stripped.extend(op_stripped)
+            new_operations.append(
+                {**operation, 'props_patch': new_props, 'settings_patch': new_settings} if op_stripped else operation
+            )
+        if not total_stripped:
+            return action, []
+        return {**action, 'operations': new_operations}, total_stripped
 
     requested = _requested_concepts(message)
     if not requested:
@@ -1312,6 +1472,24 @@ def resolve_asset_references(action, request):
             return action
         resolved_patch = _resolve_patch_assets(module_type, props_patch, request)
         return {**action, 'props_patch': resolved_patch or None}
+
+    if action_type == ActionType.MULTI_MODULE_UPDATE:
+        operations = action.get('operations')
+        if not isinstance(operations, list) or not operations:
+            return action
+        new_operations = []
+        for operation in operations:
+            if not isinstance(operation, dict):
+                new_operations.append(operation)
+                continue
+            module_type = operation.get('module_type')
+            props_patch = operation.get('props_patch') or {}
+            if not _patch_has_asset_marker(module_type, props_patch):
+                new_operations.append(operation)
+                continue
+            resolved_patch = _resolve_patch_assets(module_type, props_patch, request)
+            new_operations.append({**operation, 'props_patch': resolved_patch or None})
+        return {**action, 'operations': new_operations}
 
     if action_type == ActionType.UPDATE_REPEATABLE_FIELD and action.get('op') in ('add', 'update'):
         module_type = action.get('module_type')
@@ -3475,8 +3653,16 @@ def _correct_settings_patch(message, patch):
     return patch, []
 
 
-def apply_semantic_consistency_gate(message, action):
-    """Returns (possibly-corrected `action`, list of correction descriptions)."""
+def apply_semantic_consistency_gate(message, action, target_segments=None):
+    """Returns (possibly-corrected `action`, list of correction descriptions).
+
+    `target_segments` (D4-E3G, optional): same {target_module_id: segment}
+    map apply_scope_gate() accepts — see its docstring. Corrections for a
+    MULTI_MODULE_UPDATE operation are derived from ONLY that operation's
+    own segment when available, never the whole message: an explicit
+    "20px" named for the footer's spacing must never get silently applied
+    to the hero operation's settings_patch just because both operations
+    happen to share one outer message."""
     if not isinstance(action, dict):
         return action, []
     action_type = action.get('type')
@@ -3502,6 +3688,33 @@ def apply_semantic_consistency_gate(message, action):
         corrections = props_corrections + settings_corrections
         if corrections:
             return {**action, 'props_patch': new_props, 'settings_patch': new_settings}, corrections
+        return action, []
+
+    # D4-E3G — MULTI_MODULE_UPDATE. Each operation is corrected against
+    # its OWN message segment (falling back to the whole message only
+    # when no segment is available for that target), independently —
+    # never a third, parallel correction path, and never one operation's
+    # correction bleeding into another's.
+    if action_type == ActionType.MULTI_MODULE_UPDATE:
+        operations = action.get('operations')
+        if not isinstance(operations, list) or not operations:
+            return action, []
+        new_operations = []
+        all_corrections = []
+        for operation in operations:
+            if not isinstance(operation, dict):
+                new_operations.append(operation)
+                continue
+            segment = (target_segments or {}).get(operation.get('target_module_id')) or message
+            new_props, props_corrections = _correct_props_patch(segment, operation.get('module_type'), operation.get('props_patch'))
+            new_settings, settings_corrections = _correct_settings_patch(segment, operation.get('settings_patch'))
+            op_corrections = props_corrections + settings_corrections
+            all_corrections.extend(op_corrections)
+            new_operations.append(
+                {**operation, 'props_patch': new_props, 'settings_patch': new_settings} if op_corrections else operation
+            )
+        if all_corrections:
+            return {**action, 'operations': new_operations}, all_corrections
         return action, []
 
     return action, []
@@ -3549,6 +3762,335 @@ def get_default_email_command_provider():
     return deterministic
 
 
+# D4-E3G hardening — deterministic cross-module planner. Built because the
+# first D4-E3G pass routed EVERY 2+-target message to the local LLM tier
+# unconditionally, even for messages this app already knows how to resolve
+# deterministically for a single module ("make this button green", "center
+# this", "increase the padding to 20px") — the architecture's own
+# "deterministic first, LLM only for genuinely unresolved reasoning" rule
+# was being violated the moment a message named more than one module.
+#
+# Reuses, never duplicates: _extract_unambiguous_props_patch (color/align,
+# capability-gated per module_type), _find_color/find_alignment_value (the
+# same multilingual value tables color/align resolution already uses),
+# compute_spacing_result (the SAME absolute-value spacing resolver
+# BATCH_UPDATE's own combiner uses — needs no current-state data at all,
+# since it sets an explicit value, never a delta), the fontSize
+# bigger/smaller heuristic _extract_style_patch already applies (only for
+# a target whose module_type actually has a fontSize field — hero/footer
+# module types do not, so "make the hero heading smaller" is correctly
+# UNSUPPORTED here, not silently ignored — see _resolve_deterministic_
+# operation_for_target's own docstring), _requested_concepts (the SAME
+# concept detector the scope gate uses, for "what did THIS target's own
+# segment actually ask for" bookkeeping), and validate_action() (every
+# assembled operation still passes through the SAME schema gate every
+# other action type uses).
+#
+# `apply_scope_gate()`/`apply_semantic_consistency_gate()` are deliberately
+# NOT run on the result — the same posture RuleBasedEmailCommandProvider's
+# own BATCH_UPDATE combiner already takes (see that combiner's own
+# comment): a patch built FROM the message's own per-target segment, using
+# only fields that segment's own concept keywords named, can never contain
+# scope creep by construction — there is no second, untrusted source (an
+# LLM) whose output needs re-checking here.
+_SAME_TRIGGER_RE = re.compile(
+    r'\b(?:do\s+)?the\s+same\b|\bsame\s+(?:thing\s+)?(?:to|for|with)\b|\bsame\s+as\s+(?:the\s+)?first\b'
+    r'|\brepeat\s+(?:that|this|it)\b|\blikewise\b',
+    re.IGNORECASE,
+)
+
+
+def _resolve_deterministic_operation_for_target(segment, module_type, current_props):
+    """Returns (props_patch: dict|None, settings_patch: dict|None,
+    resolved_concepts: set[str], understood: list[(label, value)]) for ONE
+    resolved target's own matched-phrase segment. Never looks at any other
+    target's segment, and never receives more of `current_props` than that
+    ONE module's own already-editable fields (the exact same shape
+    selected_module.props already carries for the single-module path —
+    used here ONLY for the fontSize bigger/smaller relative heuristic,
+    mirroring _extract_style_patch's own use of it)."""
+    lowered = (segment or '').lower()
+    allowed = {f['key'] for f in module_capabilities.get_editable_fields(module_type)}
+    resolved_concepts = set()
+    understood = []
+
+    props_patch = dict(_extract_unambiguous_props_patch(lowered, module_type) or {})
+    if any(key in props_patch for key in ('backgroundColor', 'color', 'textColor')):
+        resolved_concepts.add('color')
+        for key in ('backgroundColor', 'color', 'textColor'):
+            if key in props_patch:
+                understood.append((key, props_patch[key]))
+    if 'align' in props_patch:
+        resolved_concepts.add('align')
+        understood.append(('align', props_patch['align']))
+
+    # fontSize — capability-gated (hero/footer types have no fontSize field
+    # at all, so a "smaller"/"bigger" request against one of them correctly
+    # never resolves here; it surfaces as an unsupported concept instead of
+    # being silently ignored — see build_deterministic_multi_module_plan).
+    # The bigger/smaller RELATIVE heuristic is skipped when this SAME
+    # segment also matches _SPACING_PATTERN — "increase the padding" must
+    # never be misread as a font-size request just because "increase" is
+    # also _BIGGER_PATTERN's own trigger word (the exact collision
+    # _extract_unambiguous_props_patch's own docstring documents for the
+    # single-module combiner; the explicit-number case below has no such
+    # ambiguity and is never skipped).
+    if 'fontSize' in allowed:
+        size_match = _FONT_SIZE_PATTERN.search(lowered)
+        if size_match:
+            props_patch['fontSize'] = int(size_match.group(1))
+            resolved_concepts.add('size')
+            understood.append(('fontSize', f'{props_patch["fontSize"]}px'))
+        elif not _SPACING_PATTERN.search(lowered):
+            if _BIGGER_PATTERN.search(lowered):
+                base = (current_props or {}).get('fontSize') or 16
+                props_patch['fontSize'] = base + 4
+                resolved_concepts.add('size')
+                understood.append(('fontSize', f'{props_patch["fontSize"]}px'))
+            elif _SMALLER_PATTERN.search(lowered):
+                base = (current_props or {}).get('fontSize') or 16
+                props_patch['fontSize'] = max(1, base - 4)
+                resolved_concepts.add('size')
+                understood.append(('fontSize', f'{props_patch["fontSize"]}px'))
+
+    settings_patch = None
+    if _SPACING_PATTERN.search(lowered):
+        spacing_result = compute_spacing_result(module_type, lowered)
+        if spacing_result.action.get('type') == ActionType.UPDATE_MODULE_SETTINGS:
+            settings_patch = spacing_result.action['patch']
+            resolved_concepts.add('spacing')
+            px = settings_patch['desktop']['paddingTop']
+            px_label = int(px) if px == int(px) else px
+            understood.append(('padding', f'{px_label}px'))
+
+    return (props_patch or None), settings_patch, resolved_concepts, understood
+
+
+def build_deterministic_multi_module_plan(message, resolved_targets):
+    """D4-E3G hardening — the deterministic MULTI_MODULE_UPDATE builder.
+    `resolved_targets` is the SAME bounded, already-vouched-for list
+    apply_scope_gate()'s target_segments already consume (id/type/label/
+    matched_phrase, plus D4-E3G-hardening's new optional `props` — that
+    ONE target's own current editable props, never any other module's).
+
+    Returns None when NOT EVEN ONE target's own segment contains a single
+    classifiable concept (_requested_concepts) — genuinely nothing here a
+    deterministic keyword/value resolver could ever act on (e.g. "make it
+    match the other CTA" — "match" names no concept at all), so the
+    caller should consult the LLM tier. Otherwise ALWAYS returns a dict
+    (never partially-silent): a target with a requested-but-unresolvable
+    concept is recorded, never dropped — see `fully_understood` below.
+
+    Returns {
+      'operations': [validated MULTI_MODULE_UPDATE operation dicts],
+      'per_target': [{
+          target_module_id, module_type, label, matched_phrase,
+          requested_concepts: sorted list, resolved_concepts: sorted list,
+          unresolved_concepts: sorted list, understood: [(label, value)],
+      } for each target that had at least one requested OR propagated concept],
+      'fully_understood': bool,  # False -> caller must clarify, never Apply
+    }
+
+    "Do the same to the second CTA" (§4): a target whose OWN segment
+    matches _SAME_TRIGGER_RE and requests no concept of its own inherits
+    the PRECEDING target's own resolved (concept, value) pairs ONLY — not
+    its whole props object, and not any concept that target itself did not
+    resolve (e.g. if the first CTA got a padding change too, "do the same"
+    still only copies concepts, tracked per-key, never a blind clone)."""
+    if not isinstance(resolved_targets, list) or len(resolved_targets) < 2:
+        return None
+
+    per_target = []
+    operations = []
+    any_concept_found = False
+    all_understood = True
+    previous_resolved = None  # (module_type, props_patch, settings_patch, understood) of the last target with a real resolution
+
+    for entry in resolved_targets:
+        if not isinstance(entry, dict):
+            continue
+        target_id = entry.get('id')
+        module_type = entry.get('type')
+        label = entry.get('label') or module_type or 'this module'
+        matched_phrase = entry.get('matched_phrase') or message
+        current_props = entry.get('props') if isinstance(entry.get('props'), dict) else {}
+        if not isinstance(target_id, str) or not target_id or module_type not in module_capabilities.get_all_module_types():
+            continue
+
+        lowered_segment = (matched_phrase or '').lower()
+
+        # D4-E3G hardening — a real false-positive found during live QA:
+        # "Explain the Outlook SPACING issue in these sections" mentions
+        # "spacing" only as the NOUN naming what is being diagnosed, never
+        # as an instruction to change it — without this guard, the
+        # planner would silently propose an unrequested default-16px
+        # padding mutation for a purely diagnostic question. Reuses the
+        # EXACT SAME explain-vs-mutation distinction RuleBasedEmailCommandProvider.resolve()
+        # already applies for the single-target case (D4-E3 item 6):
+        # _EXPLAIN_PATTERN alone means "this segment is a question, skip
+        # concept resolution for it entirely" — UNLESS _has_compound_action_hint
+        # also matches ("...and fix it"), in which case the segment
+        # genuinely combines a question with a real mutation request and
+        # concept resolution proceeds normally. A target skipped here
+        # contributes nothing to `any_concept_found` on its own (same as
+        # any other target with zero classifiable concepts) — it is never
+        # recorded as "unresolved" either, since nothing was actually
+        # asked of it as a mutation.
+        from .intent_normalization import detect_language
+
+        segment_language = detect_language(lowered_segment)
+        if _EXPLAIN_PATTERN.search(lowered_segment) and not _has_compound_action_hint(matched_phrase, lowered_segment, segment_language):
+            continue
+
+        requested_concepts = _requested_concepts(matched_phrase)
+        # D4-E3G hardening — a real false-positive found during audit:
+        # "center THE FOOTER TEXT" mentions the word "text" only as a
+        # NOUN naming what is being aligned, never as a request to change
+        # the text CONTENT — but _requested_concepts()'s 'text' keyword
+        # list (bare 'text'/'headline'/'caption'/'title', shared with the
+        # scope gate) matches it anyway. Scoped to THIS planner only
+        # (never touching the shared _requested_concepts() other callers
+        # already rely on, to avoid any regression risk to the already-
+        # verified scope-gate behavior elsewhere): 'text' is only treated
+        # as genuinely requested here when the segment also carries a
+        # real content-change signal (an explicit quoted replacement, or
+        # the "set/change the text to ..." pattern) — this planner has no
+        # deterministic resolver for arbitrary text content anyway (too
+        # much room for silently mangling exact wording), so a genuine
+        # text-content request still correctly surfaces as unresolved,
+        # just never a false one from an innocent noun reference.
+        if 'text' in requested_concepts and not (_SET_TEXT_PATTERN.search(matched_phrase or '') or _QUOTED_TEXT_RE.search(matched_phrase or '')):
+            requested_concepts = requested_concepts - {'text'}
+        props_patch, settings_patch, resolved_concepts, understood = _resolve_deterministic_operation_for_target(
+            matched_phrase, module_type, current_props,
+        )
+
+        propagated = False
+        if not requested_concepts and _SAME_TRIGGER_RE.search(lowered_segment):
+            if previous_resolved is None:
+                # "Do the same" with NOTHING real preceding it in this
+                # plan to copy from — an explicit, user-authored request
+                # for this target with genuinely nothing to resolve it
+                # against. Must surface as unresolved, never silently
+                # produce zero operations for a target the user named.
+                requested_concepts = {'same-as-reference'}
+            else:
+                prev_type, prev_props_patch, prev_settings_patch, prev_understood = previous_resolved
+                # Only ever copies fields the PREVIOUS target's own
+                # resolution actually produced, and only into fields THIS
+                # target's own capability manifest also allows — a "same"
+                # propagated onto a module type that cannot represent
+                # that field is itself an unresolved concept for this
+                # target (see below), never a silently-invented field.
+                allowed = {f['key'] for f in module_capabilities.get_editable_fields(module_type)}
+                copied_props = {k: v for k, v in (prev_props_patch or {}).items() if k in allowed}
+                if copied_props:
+                    props_patch = {**(props_patch or {}), **copied_props}
+                    for key, value in copied_props.items():
+                        concept = _concept_for_field_key(key) or 'style'
+                        resolved_concepts.add(concept)
+                        understood.append((f'{key} (same as previous)', value))
+                if prev_settings_patch and settings_patch is None:
+                    settings_patch = prev_settings_patch
+                    resolved_concepts.add('spacing')
+                    understood.append(('padding (same as previous)', 'matched previous target'))
+                if not copied_props and not (prev_settings_patch and settings_patch):
+                    requested_concepts = {'same-as-reference'}  # nothing on the source side to copy — genuinely unresolved
+                else:
+                    propagated = True
+
+        unresolved_concepts = (requested_concepts - resolved_concepts) if not propagated else set()
+        # A propagated "same" that copied something real is fully resolved
+        # even though its OWN segment named no concept keyword — tracked
+        # via `propagated`, never inferred from an empty requested set.
+        if propagated:
+            requested_concepts = set(resolved_concepts)
+
+        if not requested_concepts:
+            # This target's own segment named nothing this planner
+            # classifies at all (and was not a resolvable "same" either) —
+            # not itself a failure signal for THIS target (it may just be
+            # continuing the previous target's phrase, e.g. "and increase
+            # the padding to 20px" describing the SAME already-recorded
+            # target again within one matched_phrase) — only contributes
+            # to the overall "was anything classifiable found anywhere"
+            # check below.
+            continue
+
+        any_concept_found = True
+        if unresolved_concepts:
+            all_understood = False
+
+        per_target.append({
+            'target_module_id': target_id, 'module_type': module_type, 'label': label,
+            'matched_phrase': matched_phrase,
+            'requested_concepts': sorted(requested_concepts), 'resolved_concepts': sorted(resolved_concepts),
+            'unresolved_concepts': sorted(unresolved_concepts), 'understood': understood,
+        })
+
+        if resolved_concepts and (props_patch or settings_patch):
+            validated_props = _validate_patch(module_type, props_patch) if props_patch else None
+            validated_settings = _validate_settings_patch(settings_patch) if settings_patch else None
+            if validated_props or validated_settings:
+                operations.append({
+                    'target_module_id': target_id, 'module_type': module_type,
+                    'props_patch': validated_props, 'settings_patch': validated_settings,
+                })
+                previous_resolved = (module_type, validated_props, validated_settings, understood)
+
+    if not any_concept_found:
+        return None
+
+    return {'operations': operations, 'per_target': per_target, 'fully_understood': all_understood and bool(operations)}
+
+
+def _describe_target_change(target):
+    parts = [f'{key} -> {value}' for key, value in target['understood']]
+    return f"{target['label']}: {', '.join(parts)}" if parts else f"{target['label']}: no change"
+
+
+def _command_result_from_multi_module_plan(plan):
+    """Builds the CommandResult for a deterministic multi-module plan.
+    NEVER returns a real MULTI_MODULE_UPDATE action unless
+    `fully_understood` is True — a target with a requested-but-unresolved
+    concept forces a clarification (action NONE) instead, per D4-E3G
+    hardening §5/§6: partial understanding must never masquerade as a
+    complete, Apply-ready proposal.
+
+    Deliberately does NOT call local_ai_diagnostics.record_cross_module_plan()
+    itself — views.py already does that exactly once, for EVERY provider
+    (deterministic or LLM), right after validate_action() re-validates the
+    final action; recording it here too would double-count every
+    deterministic plan (this function's own CommandResult always reaches
+    that same views.py code path). The one diagnostic genuinely unique to
+    THIS function — user_requested_unsupported_operations, which has no
+    equivalent anywhere else — is still recorded directly below."""
+    if plan['fully_understood']:
+        operations = plan['operations']
+        lines = [f"I'll update {len(operations)} modules:"]
+        lines.extend(f'- {_describe_target_change(t)}' for t in plan['per_target'])
+        lines.append('Review and Apply, or Cancel to change nothing.')
+        return CommandResult(
+            reply='\n'.join(lines), action={'type': ActionType.MULTI_MODULE_UPDATE, 'operations': operations},
+            confidence=0.85,
+        )
+
+    lines = ["I understood part of this, but not all of it — nothing will change until you confirm:"]
+    unsupported_count = 0
+    for t in plan['per_target']:
+        if t['understood']:
+            lines.append(f"- {_describe_target_change(t)}")
+        if t['unresolved_concepts']:
+            unsupported_count += len(t['unresolved_concepts'])
+            concepts = ', '.join(t['unresolved_concepts'])
+            lines.append(f"- {t['label']}: I can't change its {concepts} — this module type does not support that.")
+    lines.append('Tell me how to handle the unsupported part(s), or ask me to apply just what I understood.')
+    from . import local_ai_diagnostics
+
+    local_ai_diagnostics.record_user_requested_unsupported_operations(unsupported_count)
+    return CommandResult(reply='\n'.join(lines), action={'type': ActionType.NONE}, confidence=0.4)
+
+
 class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
     """R4-B3 §A — wraps `fallback` (always RuleBasedEmailCommandProvider
     in practice) with ONE extra check: for a non-English message that
@@ -3582,6 +4124,48 @@ class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
 
     def resolve(self, message, context):
         from .intent_normalization import CanonicalIntent, EXECUTABLE_INTENTS, is_explanation_seeking, normalize_intent
+
+        # D4-E3G hardening — a genuine cross-module compound request (the
+        # frontend already resolved 2+ distinct real targets for this
+        # message via referenceResolver.ts's resolveMultipleReferences,
+        # carried in context['resolved_targets']). Every canonical-intent/
+        # rule-based branch below (and inside `self.fallback`) only ever
+        # reasons about the SINGLE currently selected module — matching
+        # one of them here would silently apply a single-target mutation
+        # to a message that actually names multiple different modules
+        # (the "silent partial understanding" failure mode D4-E3F's own
+        # rule exists to close, just for a different message shape), so
+        # those branches are still never reached for a 2+-target message.
+        #
+        # D4-E3G's FIRST pass then routed every such message straight to
+        # the LLM tier — but that violated "deterministic first" for
+        # exactly the compound requests this app already knows how to
+        # resolve deterministically per module (color/align/spacing/
+        # explicit font-size). build_deterministic_multi_module_plan()
+        # attempts that FIRST, reusing the SAME resolvers a single-module
+        # message already uses, one target at a time, against ONLY that
+        # target's own matched-phrase segment. Three outcomes:
+        #   1. Every target's requested concept resolved -> a real
+        #      MULTI_MODULE_UPDATE proposal, ZERO LLM calls.
+        #   2. At least one target had a requested-but-unresolvable
+        #      concept (e.g. no matching capability) -> a deterministic
+        #      clarification, ZERO LLM calls, action NONE — never a
+        #      silent partial plan (D4-E3G hardening §5/§6).
+        #   3. Not even one target's segment contained a single
+        #      classifiable concept at all (genuine semantic reasoning
+        #      needed, e.g. "make it match the other CTA") -> falls
+        #      through to the SAME NO_MATCH shape _is_no_match_result()
+        #      recognizes, so DeterministicFirstEmailCommandProvider
+        #      routes ONLY this residual case to the LLM tier. A single
+        #      resolved target (0 or 1 entries — the overwhelming common
+        #      case) never trips any of this; the whole deterministic
+        #      chain below is unaffected.
+        resolved_targets = (context or {}).get('resolved_targets')
+        if isinstance(resolved_targets, list) and len(resolved_targets) >= 2:
+            plan = build_deterministic_multi_module_plan(message, resolved_targets)
+            if plan is not None:
+                return _command_result_from_multi_module_plan(plan)
+            return CommandResult(reply=_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.2)
 
         # R4-D Checkpoint D1-A/D1-C — the two reconstruction-conversation
         # intents have NO independent English equivalent anywhere else
@@ -3690,7 +4274,9 @@ class DeterministicFirstEmailCommandProvider(EmailCommandProvider):
             )
         except EmailCommandProviderUnavailable:
             return result
-        corrected_action, corrections = apply_semantic_consistency_gate(message, llm_result.action)
+        corrected_action, corrections = apply_semantic_consistency_gate(
+            message, llm_result.action, target_segments=_target_segments_from_context(context),
+        )
         if corrections:
             # Item 11 — never weaken validate_action(): a semantic-gate
             # correction still passes back through the SAME validator

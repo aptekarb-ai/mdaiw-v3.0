@@ -12,6 +12,7 @@ import { buildFidelityReport } from '../emailbuilder/htmlImportFidelity';
 import { mapImportedHtml } from '../emailbuilder/htmlImportMapper';
 import { buildReconstructionReview, formatReconstructionReviewMessage } from '../emailbuilder/reconstructionReview';
 import { buildImportReconstructionContext } from '../emailbuilder/importReconstructionContext';
+import { createModule } from '../emailbuilder/moduleFactory';
 import type { EmailDocument, SavedEmailModule } from '../emailbuilder/types';
 
 vi.mock('../api/client', async () => {
@@ -3449,6 +3450,172 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
     expect(textarea.value).not.toContain('#76C043');
     expect(textarea.value).not.toContain('37px');
+  });
+
+  // D4-E3G — end-to-end proof that a MULTI_MODULE_UPDATE proposal
+  // spanning TWO DIFFERENT modules is atomic through the same shared
+  // applyRepairPatch primitive BATCH_UPDATE already uses: one Apply
+  // commits both operations as ONE history entry, one Undo restores the
+  // complete pre-Apply state, and Cancel mutates nothing.
+  it('MULTI_MODULE_UPDATE applies operations against TWO different modules as ONE history entry; one Undo restores the complete pre-Apply state', async () => {
+    const hero = { ...createModule('hero-text-only', 1), id: 'test-hero-1' };
+    const button = { ...createModule('button', 2), id: 'test-button-1' };
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [hero, button] } }));
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const beforeApply = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I'll update 2 modules: the hero heading and the CTA button. Review and Apply, or Cancel to change nothing.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: 'test-hero-1', module_type: 'hero-text-only', props_patch: { align: 'right' }, settings_patch: null },
+          { target_module_id: 'test-button-1', module_type: 'button', props_patch: { backgroundColor: '#123ABC' }, settings_patch: null },
+        ],
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.8,
+      provider: 'local',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make the hero heading centered and the CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Update 2 modules/);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const afterApply = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    // Both operations, against TWO DIFFERENT modules, landed from the
+    // SAME Apply.
+    expect(afterApply.value).toContain('#123ABC');
+    expect(afterApply.value).toContain('text-align:right');
+    expect(afterApply.value).not.toBe(beforeApply);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    const afterUndo = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    // ONE undo reverted BOTH modules' changes together (exact byte-for-
+    // byte restoration of the pre-Apply document) — proves N operations
+    // across N modules were committed as a SINGLE history entry, not N.
+    expect(afterUndo.value).toBe(beforeApply);
+  });
+
+  it('MULTI_MODULE_UPDATE: Cancel discards a cross-module proposal with zero document mutation', async () => {
+    const hero = { ...createModule('hero-text-only', 1), id: 'test-hero-1' };
+    const button = { ...createModule('button', 2), id: 'test-button-1' };
+    vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument({ content: { version: 1, modules: [hero, button] } }));
+    const user = userEvent.setup();
+    renderPage();
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I'll update 2 modules: the hero heading and the CTA button. Review and Apply, or Cancel to change nothing.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: 'test-hero-1', module_type: 'hero-text-only', props_patch: { align: 'right' }, settings_patch: null },
+          { target_module_id: 'test-button-1', module_type: 'button', props_patch: { backgroundColor: '#123ABC' }, settings_patch: null },
+        ],
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.8,
+      provider: 'local',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make the hero heading centered and the CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Update 2 modules/);
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const textarea = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(textarea.value).not.toContain('#123ABC');
+    expect(textarea.value).not.toContain('text-align:right');
+  });
+
+  // D4-E3G hardening §15 — the required "real Apply/Cancel/Undo QA"
+  // scenario, with THREE real modules (hero + button + footer) instead
+  // of two: proposal shown before mutation, Apply changes every intended
+  // module AND NOTHING ELSE (a 4th, untouched divider module proves no
+  // unrelated module was ever touched), exactly one history entry, one
+  // Undo restores the complete pre-Apply state byte-for-byte. Full
+  // real-browser QA was not performed this session (no dev server/
+  // browser session was set up) — this is the strongest available
+  // real-backend-shaped + frontend-integration evidence instead (see the
+  // final report's own disclosure on this).
+  it('MULTI_MODULE_UPDATE with THREE targets: only the intended modules change, one history entry, one Undo restores everything', async () => {
+    const hero = { ...createModule('hero-text-only', 1), id: 'test-hero-1' };
+    const button = { ...createModule('button', 2), id: 'test-button-1' };
+    const footer = { ...createModule('footer-simple-legal', 3), id: 'test-footer-1' };
+    const untouchedDivider = { ...createModule('divider', 4), id: 'test-divider-untouched' };
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      baseDocument({ content: { version: 1, modules: [hero, button, footer, untouchedDivider] } }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const beforeApply = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I'll update 3 modules:\n- the hero module: align -> right\n- the button module: backgroundColor -> #123ABC\n- the footer module: align -> center\nReview and Apply, or Cancel to change nothing.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: 'test-hero-1', module_type: 'hero-text-only', props_patch: { align: 'right' }, settings_patch: null },
+          { target_module_id: 'test-button-1', module_type: 'button', props_patch: { backgroundColor: '#123ABC' }, settings_patch: null },
+          { target_module_id: 'test-footer-1', module_type: 'footer-simple-legal', props_patch: { align: 'center' }, settings_patch: null },
+        ],
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make the hero right-aligned, the CTA a different color, and center the footer');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    // Proposal shown BEFORE any mutation — the proposal card/summary
+    // renders, and Apply is a separate, explicit, later click (proven
+    // below); switching to Code view here would close the AI Engineer
+    // panel/lose the pending proposal, so "before Apply" is verified via
+    // the earlier `beforeApply` snapshot (still equal to what Apply then
+    // changes) rather than a risky mid-flow view toggle.
+    await screen.findByText(/Update 3 modules/);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const afterApply = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    // All three intended modules changed...
+    expect(afterApply.value).toContain('#123ABC');
+    expect(afterApply.value).toContain('text-align:right');
+    expect(afterApply.value).toContain('text-align:center');
+    // ...and the divider (never named in the plan) is byte-for-byte
+    // identical in both documents — proves no unrelated module changed.
+    const dividerMarkerBefore = beforeApply.match(/MODULE-4: DIVIDER[\s\S]*?ENDS/)?.[0];
+    const dividerMarkerAfter = afterApply.value.match(/MODULE-4: DIVIDER[\s\S]*?ENDS/)?.[0];
+    expect(dividerMarkerBefore).toBeTruthy();
+    expect(dividerMarkerAfter).toBe(dividerMarkerBefore);
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    const afterUndo = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    // ONE Undo restores the COMPLETE pre-Apply state — all three
+    // operations were committed as a single history entry.
+    expect(afterUndo.value).toBe(beforeApply);
   });
 
   it('APPLY_OUTLOOK_WRAPPER enables the background-image VML fallback, visible in Code view', async () => {

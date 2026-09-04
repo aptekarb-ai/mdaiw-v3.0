@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { resolveCopySourceRequest, resolveReference, type ReferentialResolutionContext } from './referenceResolver';
+import {
+  resolveCopySourceRequest, resolveMultipleReferences, resolveReference, type ReferentialResolutionContext,
+} from './referenceResolver';
 import type { EmailModule } from './edm';
 import { createModule } from './moduleFactory';
 
@@ -413,5 +415,223 @@ describe('resolveCopySourceRequest — R4-B4 Closure §B/§C', () => {
       selectedModule: { id: target.id, type: 'button', label: 'the button' },
     }));
     expect(result.status).toBe('declined');
+  });
+});
+
+// D4-E3G — cross-module compound-request target resolution.
+describe('resolveMultipleReferences — plain typed segments (cross-module compound)', () => {
+  it('resolves the worked-example compound: hero heading + CTA', () => {
+    const hero = mod('hero-text-only');
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the hero heading smaller and the CTA green',
+      modules: [hero, button],
+    }));
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]).toMatchObject({ status: 'resolved', matchedPhrase: 'make the hero heading smaller' });
+    expect(result.items[1]).toMatchObject({ status: 'resolved', matchedPhrase: 'the CTA green' });
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(hero.id);
+    if (result.items[1].status === 'resolved') expect(result.items[1].targets[0].id).toBe(button.id);
+  });
+
+  it('resolves a three-way compound: hero + CTA + footer', () => {
+    const hero = mod('hero-text-only');
+    const button = mod('button');
+    const footer = mod('footer-simple-legal');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the hero heading smaller, the CTA green, and center the footer text',
+      modules: [hero, button, footer],
+    }));
+    expect(result.items).toHaveLength(3);
+    const resolvedIds = result.items.map((item) => (item.status === 'resolved' ? item.targets[0]?.id : null));
+    expect(resolvedIds).toEqual([hero.id, button.id, footer.id]);
+  });
+
+  it('a single-segment (non-compound) message still resolves one target, matching resolveReference', () => {
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'make this button green', modules: [button] }));
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+  });
+
+  it('a segment naming no module type comes back unresolved, never guessed', () => {
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the CTA green and increase the padding to 20px',
+      modules: [button],
+    }));
+    // "increase the padding to 20px" names no module-type word — this
+    // resolver reports it 'unresolved'; the CALLER decides it continues
+    // describing the same (already resolved) CTA operation.
+    expect(result.items[1]).toMatchObject({ status: 'unresolved' });
+  });
+
+  it('"CTA" is recognized as a button-family alias', () => {
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'make the CTA green', modules: [button] }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(button.id);
+  });
+});
+
+describe('resolveMultipleReferences — ordinal typed segments', () => {
+  it('"the first CTA" resolves to the first button in document order', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the first CTA green', modules: [buttonA, buttonB],
+    }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(buttonA.id);
+  });
+
+  it('"the second button" resolves to the second button in document order', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the second button smaller', modules: [buttonA, buttonB],
+    }));
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(buttonB.id);
+  });
+
+  it('an ordinal beyond the real candidate count is unresolved, never clamped to the last one', () => {
+    const buttonA = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the second CTA green', modules: [buttonA],
+    }));
+    expect(result.items[0]).toMatchObject({ status: 'unresolved' });
+  });
+});
+
+describe('resolveMultipleReferences — "both X"', () => {
+  it('resolves both targets when exactly two candidates exist', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make both buttons green', modules: [buttonA, buttonB],
+    }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') {
+      expect(result.items[0].targets.map((t) => t.id).sort()).toEqual([buttonA.id, buttonB.id].sort());
+    }
+  });
+
+  it('asks a clarifying question when more than two candidates exist', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make both buttons green', modules: [buttonA, buttonB, buttonC],
+    }));
+    expect(result.items[0].status).toBe('ambiguous');
+  });
+
+  it('is unresolved when fewer than two candidates exist', () => {
+    const buttonA = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'make both buttons green', modules: [buttonA] }));
+    expect(result.items[0]).toMatchObject({ status: 'unresolved' });
+  });
+});
+
+describe('resolveMultipleReferences — "the other X"', () => {
+  it('resolves to the one remaining candidate when a conversational antecedent names the other one', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the other button green',
+      modules: [buttonA, buttonB],
+      lastReferent: { kind: 'module', id: buttonA.id, label: 'the first button module' },
+    }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(buttonB.id);
+  });
+
+  it('never silently guesses "the other X" with no usable antecedent', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the other button green', modules: [buttonA, buttonB],
+    }));
+    expect(result.items[0].status).toBe('ambiguous');
+  });
+
+  it('is ambiguous when more than one "other" candidate remains', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make the other button green',
+      modules: [buttonA, buttonB, buttonC],
+      lastReferent: { kind: 'module', id: buttonA.id, label: 'the first button module' },
+    }));
+    expect(result.items[0].status).toBe('ambiguous');
+  });
+});
+
+// D4-E3G hardening §11/§12 — multilingual conjunction splitting and
+// article-free type-word matching, both required for the deterministic
+// cross-module planner to even SEE 2 targets for the required Hindi/
+// Hinglish/Spanish/German compound examples (which keep "hero"/"CTA" as
+// English loanwords but use non-English conjunctions and no "the").
+describe('resolveMultipleReferences — multilingual segmentation', () => {
+  it('splits on Hindi/Hinglish "aur" and resolves an article-free "hero" mention', () => {
+    const hero = mod('hero-text-only');
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'hero ke neeche spacing badhao aur first CTA green kar do',
+      modules: [hero, button],
+    }));
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0]).toMatchObject({ status: 'resolved', matchedPhrase: 'hero ke neeche spacing badhao' });
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(hero.id);
+    if (result.items[1].status === 'resolved') expect(result.items[1].targets[0].id).toBe(button.id);
+  });
+
+  it('splits on Spanish "y"', () => {
+    const button = mod('button');
+    const hero = mod('hero-text-only');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'Cambia el primer botón a verde y aumenta el espacio debajo del hero',
+      modules: [button, hero],
+    }));
+    expect(result.items).toHaveLength(2);
+  });
+
+  it('splits on German "und"', () => {
+    const button = mod('button');
+    const hero = mod('hero-text-only');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'Mach den ersten CTA grün und vergrößere den Abstand unter dem Hero',
+      modules: [button, hero],
+    }));
+    expect(result.items).toHaveLength(2);
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(button.id);
+    if (result.items[1].status === 'resolved') expect(result.items[1].targets[0].id).toBe(hero.id);
+  });
+
+  it('a bare "y" inside a longer word is never treated as the conjunction (word-boundary safe)', () => {
+    // "hoy" (Spanish "today") must never be split as if it were the "y"
+    // conjunction — proves the multilingual split requires whitespace on
+    // both sides, not a bare substring match.
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'make the button green hoy mismo', modules: [button] }));
+    expect(result.items).toHaveLength(1);
+  });
+
+  it('does not require an English article before the type word ("CTA ko green karo")', () => {
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'CTA ko green karo', modules: [button] }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].id).toBe(button.id);
+  });
+});
+
+// D4-E3G hardening — extended ResolvedTarget carries an optional `props`
+// bundle for the caller to populate from the live module tree.
+describe('ResolvedTarget — props field', () => {
+  it('is undefined by default and never invented by the resolver itself', () => {
+    const button = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'make the button green and the hero red', modules: [button, mod('hero-text-only')] }));
+    if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].props).toBeUndefined();
   });
 });

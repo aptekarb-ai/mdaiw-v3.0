@@ -1,7 +1,7 @@
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
-from .ai_command import MAX_MESSAGE_LENGTH
+from .ai_command import MAX_MESSAGE_LENGTH, MAX_MULTI_MODULE_OPERATIONS
 from . import learning
 from . import module_capabilities
 from .custom_css_security import validate_custom_css_security
@@ -398,6 +398,35 @@ class CopySourceContextSerializer(serializers.Serializer):
     source_label = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
 
 
+class ResolvedTargetContextSerializer(serializers.Serializer):
+    """D4-E3G — one already-resolved cross-module reference (see
+    referenceResolver.ts's resolveMultipleReferences/ResolvedTarget).
+    `id`/`type` name a REAL module the frontend already found in
+    content.modules — never invented server-side, and never used to look
+    anything up in the live document itself; this is descriptive metadata
+    only, exactly like SelectedModuleContextSerializer's own `id` field.
+    `matched_phrase` is the specific slice of the user's message this
+    target was resolved from ("the hero heading" out of "make the hero
+    heading smaller and the CTA green") — used ONLY to scope-gate/correct
+    that one operation against its own segment (see apply_scope_gate()'s
+    and apply_semantic_consistency_gate()'s `target_segments` parameter),
+    never to drive the mutation itself.
+
+    D4-E3G hardening — `props` is additive/optional: this ONE target's own
+    current editable props (same shape as SelectedModuleContextSerializer's
+    own `props`), read from the frontend's live module tree. Used by
+    build_deterministic_multi_module_plan() for relative requests ("make
+    it bigger") and by the LLM tier for per-target capability grounding —
+    never used to look anything up server-side, and never any other
+    module's props (bounded to just the targets this one message named)."""
+
+    id = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
+    type = serializers.ChoiceField(choices=list(module_capabilities.get_all_module_types()))
+    label = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
+    matched_phrase = serializers.CharField(max_length=500, trim_whitespace=True, allow_blank=False)
+    props = serializers.DictField(required=False, default=dict)
+
+
 class EmailAICommandRequestSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=False)
     selected_module = SelectedModuleContextSerializer(required=False, allow_null=True, default=None)
@@ -425,6 +454,18 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     # request that omits this (every pre-closure-pass client) behaves
     # exactly as before.
     copy_source = CopySourceContextSerializer(required=False, allow_null=True, default=None)
+    # D4-E3G — additive, optional; present only when the frontend's
+    # multi-reference resolver (referenceResolver.ts's
+    # resolveMultipleReferences) has already resolved 2+ distinct
+    # cross-module targets for this message. A request that omits this
+    # (every pre-D4-E3G client, and every single-target message) behaves
+    # exactly as before — bounded to MAX_MULTI_MODULE_OPERATIONS, the
+    # same cap validate_action()'s own MULTI_MODULE_UPDATE branch uses,
+    # so a client can never send more resolved targets than the action
+    # itself could ever carry operations for.
+    resolved_targets = ResolvedTargetContextSerializer(
+        many=True, required=False, default=list, max_length=MAX_MULTI_MODULE_OPERATIONS,
+    )
 
 
 class LearningSignalRequestSerializer(serializers.Serializer):

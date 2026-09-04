@@ -3528,6 +3528,70 @@ class EmailAICommandViewTests(TestCase):
         self.assertEqual(body['action']['type'], 'DELETE_MODULE')
         self.assertTrue(body['requires_confirmation'])
 
+    def test_deterministic_multi_module_update_end_to_end(self):
+        """D4-E3G hardening — the real HTTP round trip a browser session
+        would make: message + resolved_targets (as referenceResolver.ts's
+        resolveMultipleReferences would have already built client-side).
+        No local/OpenAI AI provider is configured in this test settings
+        module, so a 200 response with a real MULTI_MODULE_UPDATE action
+        is only possible via the deterministic planner — proves the whole
+        chain (serializer -> safe_context -> CanonicalIntentEmailCommandProvider
+        -> build_deterministic_multi_module_plan -> validate_action ->
+        resolve_asset_references -> diagnostics) works together, not just
+        each piece in isolation."""
+        self.client.force_login(self.user)
+        from . import local_ai_diagnostics
+
+        local_ai_diagnostics.reset_session_stats_for_tests()
+        response = self._post({
+            'message': 'make the first CTA green and increase the spacing below the hero',
+            'resolved_targets': [
+                {'id': 'mod-button-1', 'type': 'button', 'label': 'the first button', 'matched_phrase': 'make the first CTA green'},
+                {'id': 'mod-hero-1', 'type': 'hero-text-only', 'label': 'the hero', 'matched_phrase': 'increase the spacing below the hero'},
+            ],
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body['success'])
+        self.assertEqual(body['provider'], 'deterministic')
+        self.assertEqual(body['action']['type'], 'MULTI_MODULE_UPDATE')
+        operations = body['action']['operations']
+        self.assertEqual(len(operations), 2)
+        by_id = {op['target_module_id']: op for op in operations}
+        self.assertEqual(by_id['mod-button-1']['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertEqual(by_id['mod-hero-1']['settings_patch']['desktop']['paddingTop'], 16.0)
+
+        stats = local_ai_diagnostics.get_session_stats()
+        self.assertEqual(stats['cross_module_plans'], 1)
+        self.assertEqual(stats['deterministic_cross_module_plans'], 1)
+        self.assertEqual(stats['llm_assisted_cross_module_plans'], 0)
+        self.assertEqual(stats['plan_operations_generated'], 2)
+        self.assertEqual(stats['plan_operations_rejected'], 0)
+
+    def test_deterministic_multi_module_partial_plan_clarifies_end_to_end(self):
+        # Real capability gap (no hero module type has a font-size field)
+        # — the HTTP response must be a clarification, never a partial
+        # MULTI_MODULE_UPDATE that silently drops the unsupported half.
+        self.client.force_login(self.user)
+        from . import local_ai_diagnostics
+
+        local_ai_diagnostics.reset_session_stats_for_tests()
+        response = self._post({
+            'message': 'make the hero heading smaller and make the CTA green',
+            'resolved_targets': [
+                {'id': 'mod-hero-1', 'type': 'hero-text-only', 'label': 'the hero', 'matched_phrase': 'make the hero heading smaller'},
+                {'id': 'mod-button-1', 'type': 'button', 'label': 'the button', 'matched_phrase': 'make the CTA green'},
+            ],
+        })
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body['action']['type'], 'NONE')
+        self.assertIn('backgroundColor', body['reply'])
+        self.assertIn('size', body['reply'])
+        stats = local_ai_diagnostics.get_session_stats()
+        self.assertEqual(stats['cross_module_plans'], 0)
+        self.assertEqual(stats['user_requested_unsupported_operations'], 1)
+
     def test_blank_message_rejected(self):
         self.client.force_login(self.user)
         response = self._post({'message': ''})
