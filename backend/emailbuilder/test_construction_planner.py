@@ -444,6 +444,27 @@ class RequiresNewModuleTests(SimpleTestCase):
         summary = planner.summarize_plan(plan)
         self.assertIn('new builder module', summary)
 
+    def test_summarize_plan_surfaces_a_brief_conflict_when_passed(self):
+        # D4-E3I §5 — a real instruction/attachment disagreement
+        # (EmailBrief.conflicts, populated by build_email_brief() since
+        # D4-C) must never be silently resolved one way with no visible
+        # trace in the reply text.
+        brief = _empty_brief()
+        plan = planner.build_construction_plan(brief, 'Create a promotional email.')
+        conflicts = [{
+            'field': 'purpose', 'message': 'The instruction suggests "promotional", but an attachment suggests "webinar".',
+            'candidates': [],
+        }]
+        summary = planner.summarize_plan(plan, conflicts=conflicts)
+        self.assertIn('promotional', summary)
+        self.assertIn('webinar', summary)
+
+    def test_summarize_plan_unaffected_when_no_conflicts(self):
+        brief = _empty_brief()
+        plan = planner.build_construction_plan(brief, 'Create a promotional email.')
+        self.assertEqual(planner.summarize_plan(plan), planner.summarize_plan(plan, conflicts=[]))
+        self.assertEqual(planner.summarize_plan(plan), planner.summarize_plan(plan, conflicts=None))
+
 
 class LearningSignatureTests(SimpleTestCase):
     """D4-D hardening item 3: every MatchResult exposes a stable,

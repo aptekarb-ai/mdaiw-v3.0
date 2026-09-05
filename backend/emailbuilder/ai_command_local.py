@@ -213,7 +213,26 @@ _SYSTEM_PROMPT_PART_B = (
     'limitation, never answer with only "I cannot do that" — say what you CAN do first, then name the gap '
     'plainly. Bad: "Cannot perform action." Better: "I can reproduce the text, spacing, and CTA exactly, but '
     'the current builder has no video module — I can build the rest of the email and leave the video section '
-    'as a documented unsupported requirement." Prior turns of this SAME conversation '
+    'as a documented unsupported requirement." '
+    # D4-E3I §7 — a SEPARATE five-term framework from D4-E0's own (that
+    # one classifies "how well does an existing module represent
+    # CONTENT" during construction; this one classifies "what KIND OF
+    # CLAIM is this response making" for any non-trivial interpretation)
+    # — never conflate the two vocabularies, and never invent a third.
+    'D4-E3I — for any non-trivial request, silently distinguish internally, and make clear in `reply` '
+    'whenever more than one applies: EXPLICIT (the user directly asked for this), INFERRED (a reasonable '
+    'interpretation you needed to make in order to carry out what was explicitly asked — e.g. resolving '
+    '"the CTA" to a specific button because only one exists), RECOMMENDED (professional email-engineering '
+    'advice you are volunteering that the user did NOT explicitly ask for — e.g. suggesting a contrast fix '
+    'while only color was requested), UNSUPPORTED (the current Builder cannot represent this at all), '
+    'UNRESOLVED (you genuinely need more information before it is safe to act). Never silently redesign '
+    'more than what was explicitly requested — e.g. "make this more premium" does NOT license rewriting '
+    'the whole email; you may name likely INFERRED/RECOMMENDED aspects (spacing, typography, hierarchy, CTA '
+    'consistency) in `reply`, but the actual proposed `action` must stay scoped to what you can justify as '
+    'explicit or a narrow, clearly-labeled inference — anything broader is a RECOMMENDED suggestion in text '
+    'only, never silently included in `action`. If several materially different interpretations are equally '
+    'plausible, that is UNRESOLVED — ask, do not guess. '
+    'Prior turns of this SAME conversation '
     'may be included as ordinary user/assistant messages before the current one — use them to '
     'resolve a follow-up like "make it darker" or "can you fix it" against what was just discussed, '
     'but never assume anything about a different conversation or document. '
@@ -239,7 +258,20 @@ _SYSTEM_PROMPT_PART_B = (
     'GET_SELECTED_MODULE, GET_SELECTED_COLUMN, GET_DOCUMENT_SUMMARY, GET_EMAIL_SETTINGS, '
     'GET_VALIDATION_REPORT, GET_IMPORT_RECONSTRUCTION, GET_MODULE_CAPABILITIES (args: {"module_type": '
     '"..."}), or COMPARE_RECONSTRUCTION. You get at most a few such requests before you must answer with '
-    'whatever you have; never request the same tool twice in a row.'
+    'whatever you have; never request the same tool twice in a row. '
+    # D4-E3I §3 — GET_DOCUMENT_SUMMARY's result now also carries
+    # document_summary: {module_count, module_types} — an ORDERED list of
+    # the email's real top-level module TYPES (e.g. "hero-text-only",
+    # "cta-banner", "footer-simple-legal"), nothing else (no props, no
+    # text, no nested column children). Use this ONLY for holistic
+    # questions about the email's overall structure ("why does this feel
+    # inconsistent", "what should I improve", "does this have a
+    # footer/CTA") — never invent a module, section, or property this
+    # list does not literally name, and never assume anything about a
+    # module beyond what its type name plainly says.
+    'For a holistic question about the email\'s overall structure (not a specific selected module), call '
+    'GET_DOCUMENT_SUMMARY to see document_summary.module_types before answering — never guess the email\'s '
+    'structure from the conversation alone when you can ask for the real one.'
 )
 
 # Appended only when context['selected_validation_issue'] is present (see
@@ -761,6 +793,26 @@ def _build_safe_context(context):
     return safe_context, safe_history
 
 
+def _build_safe_document_summary(raw):
+    """D4-E3I §3 — validates/filters the frontend's bounded document
+    overview. An unrecognized module_type string (stale manifest,
+    transient version skew) is silently dropped from the list rather than
+    failing the whole summary — this is best-effort helper context for
+    the LLM tier, never load-bearing for validation/mutation."""
+    if not isinstance(raw, dict):
+        return None
+    module_types = raw.get('module_types')
+    if not isinstance(module_types, list):
+        return None
+    known_types = module_capabilities.get_all_module_types()
+    safe_types = [t for t in module_types[:60] if isinstance(t, str) and t in known_types]
+    module_count = raw.get('module_count')
+    return {
+        'module_count': module_count if isinstance(module_count, int) and module_count >= 0 else len(safe_types),
+        'module_types': safe_types,
+    }
+
+
 def _build_safe_resolved_targets(raw):
     if not isinstance(raw, list):
         return []
@@ -1033,6 +1085,12 @@ class LocalEmailCommandProvider(EmailCommandProvider):
         safe_context, safe_history = _build_safe_context(context_for_build)
         safe_history = _apply_context_limit(safe_context, safe_history, settings.EMAILBUILDER_LOCAL_AI_CONTEXT_LIMIT_CHARS)
         history_messages = [{'role': turn['role'], 'content': turn['content']} for turn in safe_history]
+        # D4-E3I §3 — computed once per request, kept OUT of safe_context/
+        # the main prompt entirely; only ever spent if the model actually
+        # calls GET_DOCUMENT_SUMMARY (see execute_tool_call()'s own
+        # docstring for why this is a separate parameter, not a
+        # safe_context key).
+        safe_document_summary = _build_safe_document_summary(context.get('document_summary') if isinstance(context, dict) else None)
 
         messages = [
             {'role': 'system', 'content': _build_system_prompt(safe_context)},
@@ -1129,7 +1187,9 @@ class LocalEmailCommandProvider(EmailCommandProvider):
                     # tool name is never executed, never raises.
                     break
 
-                tool_result = execute_tool_call(tool_name, tool_call.get('args'), safe_context)
+                tool_result = execute_tool_call(tool_name, tool_call.get('args'), safe_context, document_summary=safe_document_summary)
+                if tool_name == 'GET_DOCUMENT_SUMMARY':
+                    local_ai_diagnostics.record_document_summary_tool_call(safe_document_summary)
                 messages.append({'role': 'assistant', 'content': json.dumps({'tool_call': tool_call})})
                 messages.append({
                     'role': 'system',

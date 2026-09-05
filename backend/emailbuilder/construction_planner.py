@@ -676,10 +676,23 @@ def build_construction_plan(brief: EmailBrief, message: str = '') -> Constructio
     )
 
 
-def summarize_plan(plan: ConstructionPlan) -> str:
+def summarize_plan(plan: ConstructionPlan, conflicts=None) -> str:
     """One deterministic, human-readable "what I understood / what will
     happen" summary — never a template the user can't verify against the
-    actual `plan.sections` classifications returned alongside it."""
+    actual `plan.sections` classifications returned alongside it.
+
+    D4-E3I §5 — `conflicts` (optional, a list of the brief's own
+    EmailBrief.conflicts dicts) surfaces disagreements between the user's
+    typed instruction and attachment-derived facts directly in this reply
+    text. Callers already receive the full `brief.conflicts` list
+    separately in the response body (email_brief.py has always populated
+    it); this was the one place a conflict could go completely unmentioned
+    to the user — the ConstructionPlanView reply text never referenced it
+    before, so a real disagreement (e.g. instruction says "welcome email",
+    attached brief says "webinar invitation") was silently applied one way
+    with no visible sign anything was ever in question. Never silently
+    resolves which side wins — states both candidates and which one this
+    plan proceeded with."""
     exact = sum(1 for s in plan.sections if s.match.classification == EXACT)
     normalized = sum(1 for s in plan.sections if s.match.classification == NORMALIZED)
     approximated = sum(1 for s in plan.sections if s.match.classification == APPROXIMATED)
@@ -699,5 +712,12 @@ def summarize_plan(plan: ConstructionPlan) -> str:
         parts.append(f'{len(needs_new_module)} item(s) would need a new builder module to represent properly: {details}.')
     if plan.platform_notes:
         parts.append(' '.join(plan.platform_notes))
+    if conflicts:
+        for conflict in conflicts:
+            if not isinstance(conflict, dict):
+                continue
+            message = conflict.get('message')
+            if message:
+                parts.append(f'Note: {message}')
     parts.append('Review the proposal below and choose Build to apply it, or Cancel.')
     return ' '.join(parts)

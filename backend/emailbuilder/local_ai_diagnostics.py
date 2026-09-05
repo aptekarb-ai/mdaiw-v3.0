@@ -245,6 +245,27 @@ _session_stats = {
     # during real conversations, not merely sitting in the registry
     # unused — see rules.py/retrieval.py.
     'knowledge_grounded_responses': 0,
+    # D4-E3I §3/§14 — how many turns the model actually spent a
+    # GET_DOCUMENT_SUMMARY tool call on AND received a real, non-empty
+    # document_summary back (a call made while no document_summary was
+    # ever supplied by the frontend does not count — see
+    # record_document_summary_tool_call()'s own docstring). Proves the
+    # new bounded document-context bridge is genuinely being used for
+    # holistic questions, not merely wired and idle. Audited against
+    # D4-E3I §14's own 9-candidate counter list: 8 of the 9 already have
+    # a direct, non-duplicate existing equivalent here —
+    # attachment_grounded_plans -> attachment_grounded_responses,
+    # professional_knowledge_recommendations -> knowledge_grounded_
+    # responses, clarification_requests -> clarifications,
+    # unsupported_recommendations -> user_requested_unsupported_
+    # operations, deterministic_full_email_plans ->
+    # deterministic_cross_module_plans, local_ai_design_reasoning_calls ->
+    # llm_calls_required/llm_successful_completions, design_intent_
+    # resolutions and preservation_constraints_enforced are prompt/gate-
+    # internal behaviors with no discrete "event" to count without
+    # inventing an artificial one — this is the one genuinely new,
+    # non-duplicate signal this checkpoint's own new mechanism warrants.
+    'document_summary_tool_calls': 0,
     # D4-E3G §17 — real runtime evidence for the cross-module planning
     # feature, never vanity metrics: how many turns actually produced a
     # validated MULTI_MODULE_UPDATE plan at all, how many of those were
@@ -558,6 +579,24 @@ def record_knowledge_rules_used(rule_ids):
         logger.info('emailbuilder.local_ai_diagnostics.record_knowledge_rules_used_failed')
 
 
+def record_document_summary_tool_call(document_summary):
+    """D4-E3I §3/§14 — called at the GET_DOCUMENT_SUMMARY tool-call site
+    with whatever execute_tool_call() was actually given (possibly None,
+    when the frontend never supplied one this turn). Only counts a REAL,
+    grounded use — an empty/None summary means the model asked but there
+    was nothing real to ground on, which is not the signal this counter
+    is for — an email with zero modules is still a real, grounded answer,
+    so presence of the dict is what's checked, never truthiness of its
+    (possibly legitimately empty) module_types list. Best-effort — never
+    raises."""
+    try:
+        if not isinstance(document_summary, dict) or 'module_types' not in document_summary:
+            return
+        _session_stats['document_summary_tool_calls'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_document_summary_tool_call_failed')
+
+
 def get_session_stats():
     total_calls = _session_stats['total_calls']
     attempts = _session_stats['structured_action_attempts']
@@ -585,6 +624,7 @@ def get_session_stats():
         # mechanism, just the raw sum surfaced directly.
         'llm_total_latency_ms': round(_session_stats['total_latency_ms'], 1) if _session_stats['total_latency_ms'] else None,
         'knowledge_grounded_responses': _session_stats['knowledge_grounded_responses'],
+        'document_summary_tool_calls': _session_stats['document_summary_tool_calls'],
         'recent_knowledge_rule_ids': list(_recent_knowledge_rule_ids),
         'cross_module_plans': _session_stats['cross_module_plans'],
         'deterministic_cross_module_plans': _session_stats['deterministic_cross_module_plans'],

@@ -427,6 +427,37 @@ class ResolvedTargetContextSerializer(serializers.Serializer):
     props = serializers.DictField(required=False, default=dict)
 
 
+# D4-E3I §3/§13 — same bounding posture as MAX_MULTI_MODULE_OPERATIONS:
+# a document with more top-level modules than this still gets a summary,
+# just truncated, never an unbounded payload.
+MAX_DOCUMENT_SUMMARY_MODULES = 60
+
+
+class DocumentSummaryContextSerializer(serializers.Serializer):
+    """D4-E3I §3 — a bounded, manifest-driven overview of the CURRENT
+    document's top-level structure: how many modules, and their real
+    registered types in document order. Never props, never text content,
+    never nested column children — type names alone (e.g.
+    "footer-simple-legal", "cta-banner") are already self-describing
+    enough for the model to reason about overall structure ("does this
+    have a footer", "how many CTAs") without this app ever sending the
+    module tree itself to any AI provider."""
+
+    module_count = serializers.IntegerField(min_value=0)
+    # Deliberately a plain CharField, not a ChoiceField: this is bounded,
+    # best-effort helper context for the LLM tier, never load-bearing for
+    # validation/mutation — an unrecognized type string here (e.g. a
+    # transient frontend/backend manifest version mismatch) must never
+    # 400 the WHOLE turn the way a single selected_module.type mismatch
+    # legitimately would. Unrecognized values are filtered out, never
+    # trusted, at the point each provider actually reads this field (see
+    # ai_command_local.py/ai_command_openai.py's own _build_safe_context).
+    module_types = serializers.ListField(
+        child=serializers.CharField(max_length=60, trim_whitespace=True, allow_blank=False),
+        required=False, default=list, max_length=MAX_DOCUMENT_SUMMARY_MODULES,
+    )
+
+
 class EmailAICommandRequestSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=MAX_MESSAGE_LENGTH, trim_whitespace=True, allow_blank=False)
     selected_module = SelectedModuleContextSerializer(required=False, allow_null=True, default=None)
@@ -476,6 +507,15 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     # never read for routing or validation. A client that omits this
     # (every pre-D4-E3H client) behaves exactly as before.
     reference_resolved = serializers.BooleanField(required=False, default=False)
+    # D4-E3I §3 — a bounded, manifest-driven document overview (ordered
+    # top-level module TYPES only — never props, never content, never
+    # nested column children). Additive/optional; a request that omits
+    # this behaves exactly as before. See ai_command.py's
+    # execute_tool_call()'s own GET_DOCUMENT_SUMMARY branch for how this
+    # is actually used — only surfaced to the model when it explicitly
+    # asks for a document overview via the existing bounded tool loop,
+    # never injected into every prompt inline.
+    document_summary = DocumentSummaryContextSerializer(required=False, allow_null=True, default=None)
 
 
 class LearningSignalRequestSerializer(serializers.Serializer):

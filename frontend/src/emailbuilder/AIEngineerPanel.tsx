@@ -185,6 +185,12 @@ function newId(prefix: string): string {
   return `${prefix}-${nextId}`;
 }
 
+// D4-E3I §3 — same bounding posture as MAX_MULTI_MODULE_OPERATIONS/every
+// other capped list this app sends: a document with more than this many
+// TOP-LEVEL modules still gets a summary, just truncated, never an
+// unbounded payload.
+const MAX_DOCUMENT_SUMMARY_MODULES = 60;
+
 // D4-B — pure display helpers for AttachmentChip; no component state, so
 // these live at module scope like newId() above.
 function attachmentChipIconClass(status: AttachmentChip['status']): string {
@@ -1414,6 +1420,24 @@ export function AIEngineerPanel({
     const referenceWasResolved = (!selectedModule && resolvedModuleOverrideRef.current !== null)
       || resolvedTargetsContextRef.current !== null;
 
+    // D4-E3I §3 — a bounded, manifest-driven document overview (ordered
+    // top-level module TYPES only — never props, never content, never
+    // nested column children) so a holistic question ("why does this
+    // feel inconsistent?", "what should I improve?") can be answered
+    // without ever sending the module tree itself. Deliberately NOT
+    // attached to every request inline — it rides along on GET_DOCUMENT_
+    // SUMMARY's existing bounded tool-call result (see execute_tool_call()
+    // in ai_command.py), so an ordinary deterministic/single-field turn
+    // never pays for it at all; only a turn that reaches the LLM tier AND
+    // the model itself decides it needs a document overview ever spends
+    // the tokens. Type names are already self-describing (e.g.
+    // "footer-simple-legal", "cta-banner") — never a second, invented
+    // role taxonomy.
+    const documentSummaryContext = {
+      module_count: content.modules.length,
+      module_types: content.modules.slice(0, MAX_DOCUMENT_SUMMARY_MODULES).map((m) => m.type),
+    };
+
     // E9 — informational-only column context (never drives a real
     // column-scoped edit action yet — see AIEngineerPanelProps'
     // selectedColumn docstring). Resolved from the live module tree
@@ -1459,6 +1483,7 @@ export function AIEngineerPanel({
         // turn.
         resolved_targets: resolvedTargetsContextRef.current ?? undefined,
         reference_resolved: referenceWasResolved,
+        document_summary: documentSummaryContext,
       });
       copySourceContextRef.current = null;
       resolvedTargetsContextRef.current = null;

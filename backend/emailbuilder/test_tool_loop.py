@@ -53,6 +53,61 @@ class ExecuteToolCallTests(TestCase):
         for tool in READ_TOOL_NAMES:
             self.assertIsNotNone(execute_tool_call(tool, {}, {'selected_module': None}))
 
+    def test_get_document_summary_carries_document_summary_when_supplied(self):
+        # D4-E3I §3 — document_summary is a SEPARATE parameter, never a
+        # safe_context key (see execute_tool_call's own docstring on why
+        # — it must never inflate the always-sent context JSON).
+        summary = {'module_count': 2, 'module_types': ['hero-text-only', 'button']}
+        result = execute_tool_call('GET_DOCUMENT_SUMMARY', {}, {'platform': 'generic'}, document_summary=summary)
+        self.assertEqual(result['document_summary'], summary)
+        self.assertEqual(result['platform'], 'generic')
+
+    def test_get_document_summary_key_always_present_even_when_none(self):
+        result = execute_tool_call('GET_DOCUMENT_SUMMARY', {}, {})
+        self.assertIn('document_summary', result)
+        self.assertIsNone(result['document_summary'])
+
+    def test_document_summary_never_leaks_into_other_tool_results(self):
+        summary = {'module_count': 1, 'module_types': ['button']}
+        result = execute_tool_call('GET_SELECTED_MODULE', {}, {'selected_module': None}, document_summary=summary)
+        self.assertNotIn('document_summary', result)
+
+
+class BuildSafeDocumentSummaryTests(TestCase):
+    """D4-E3I §3 — _build_safe_document_summary() in BOTH provider
+    modules (structurally identical, per-provider-file posture, same as
+    every other safe-context builder)."""
+
+    def test_filters_unrecognized_module_types_never_raises(self):
+        from .ai_command_local import _build_safe_document_summary as local_build
+        from .ai_command_openai import _build_safe_document_summary as openai_build
+
+        raw = {'module_count': 3, 'module_types': ['hero-text-only', 'not-a-real-type', 'button']}
+        for build in (local_build, openai_build):
+            safe = build(raw)
+            self.assertEqual(safe['module_types'], ['hero-text-only', 'button'])
+            self.assertEqual(safe['module_count'], 3)
+
+    def test_malformed_input_returns_none(self):
+        from .ai_command_local import _build_safe_document_summary as local_build
+
+        self.assertIsNone(local_build(None))
+        self.assertIsNone(local_build('not-a-dict'))
+        self.assertIsNone(local_build({'module_types': 'not-a-list'}))
+
+    def test_bounded_to_sixty_modules(self):
+        from .ai_command_local import _build_safe_document_summary as local_build
+
+        raw = {'module_count': 100, 'module_types': ['button'] * 100}
+        safe = local_build(raw)
+        self.assertEqual(len(safe['module_types']), 60)
+
+    def test_negative_or_missing_module_count_falls_back_to_len(self):
+        from .ai_command_local import _build_safe_document_summary as local_build
+
+        safe = local_build({'module_count': -1, 'module_types': ['button', 'hero-text-only']})
+        self.assertEqual(safe['module_count'], 2)
+
 
 def _fake_completion(payload):
     completion = MagicMock()

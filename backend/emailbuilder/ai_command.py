@@ -1150,6 +1150,13 @@ _FIELD_KEY_CONCEPT_HINTS = (
     ('visib', 'visibility'), ('hidden', 'visibility'),
     ('src', 'image'), ('image', 'image'), ('asset', 'image'),
     ('text', 'text'), ('label', 'text'), ('content', 'text'), ('headline', 'text'), ('caption', 'text'), ('title', 'text'),
+    # D4-E3I §8 — "copy" is the standard email-industry word for text
+    # content ("don't change the copy") and was a confirmed real gap:
+    # _requested_concepts_with_constraints()'s negative-constraint
+    # detection could not recognize it at all before this, since the
+    # field-key hint table above (shared with the scope gate) had no
+    # entry for it.
+    ('copy', 'text'),
 )
 
 _MESSAGE_CONCEPT_KEYWORDS = {
@@ -1254,10 +1261,19 @@ def _requested_concepts(message):
 # mapping apply_scope_gate() already relies on — never a second,
 # independently-invented concept vocabulary.
 _NEGATIVE_CONSTRAINT_RE = re.compile(
-    r"\b(?:don'?t|do\s+not|never)\s+change\s+(?:the\s+|its\s+|his\s+|her\s+)?(\w+)"
+    r"\b(?:don'?t|do\s+not|never)\s+(?:change|touch|modify|alter)\s+(?:the\s+|its\s+|his\s+|her\s+)?(\w+)"
     r"|\bkeep\s+(?:the\s+|its\s+)?(\w+)\s+(?:as\s+(?:it|they)\s+(?:is|are)|unchanged|the\s+same)"
     r"|\bwithout\s+changing\s+(?:the\s+|its\s+)?(\w+)"
-    r"|\bleave\s+(?:the\s+|its\s+)?(\w+)\s+(?:alone|as\s+(?:it|they)\s+(?:is|are)|unchanged)",
+    r"|\bleave\s+(?:the\s+|its\s+)?(\w+)\s+(?:alone|as\s+(?:it|they)\s+(?:is|are)|unchanged)"
+    # D4-E3I §8 — a bare "keep the images"/"keep the copy" with no
+    # trailing "as is"/"unchanged" qualifier — the exact phrasing Phase
+    # 8's own worked example uses. Deliberately its OWN, narrower
+    # alternative (never merged into the "keep X (qualifier)" branch
+    # above) so it only fires for a short, otherwise-unqualified clause —
+    # bounded by requiring the captured word be followed by a clause
+    # boundary (end of string, comma, or "and"), never mid-sentence noise.
+    r"|\bkeep\s+(?:the\s+|its\s+)?(\w+)\b(?=\s*(?:,|\.|$|\band\b))"
+    r"|\bskip\s+(?:the\s+|its\s+)?(\w+)",
     re.IGNORECASE,
 )
 _ONLY_CONSTRAINT_RE = re.compile(
@@ -2828,11 +2844,20 @@ READ_TOOL_NAMES = frozenset({
 MAX_TOOL_LOOP_ITERATIONS = 5
 
 
-def execute_tool_call(name, args, safe_context):
+def execute_tool_call(name, args, safe_context, document_summary=None):
     """Returns a small, bounded, JSON-serializable dict (never None for
     a whitelisted name, even when the requested data is absent — an
     absent value is itself useful information, e.g. "no module
-    selected"), or None for an unrecognized tool name."""
+    selected"), or None for an unrecognized tool name.
+
+    D4-E3I §3 — `document_summary` (optional) is deliberately NOT part of
+    `safe_context`: unlike every other field there, which is always
+    serialized into the main "Current context JSON" system message on
+    EVERY call, this one is only ever spent when the model itself asks
+    for GET_DOCUMENT_SUMMARY via the existing bounded tool loop — an
+    ordinary single-field turn never pays for it. Already validated/
+    filtered by the caller (see ai_command_local.py/ai_command_openai.py's
+    own _build_safe_document_summary) before it ever reaches here."""
     args = args if isinstance(args, dict) else {}
     safe_context = safe_context if isinstance(safe_context, dict) else {}
 
@@ -2841,13 +2866,18 @@ def execute_tool_call(name, args, safe_context):
     if name == 'GET_SELECTED_COLUMN':
         return {'selected_column': safe_context.get('selected_column')}
     if name == 'GET_DOCUMENT_SUMMARY':
-        # Bounded on purpose — platform/width/editor_mode only, never
-        # the full module tree (which this app never sends to any AI
-        # provider at all — see resolve_asset_references()'s own
-        # posture on never sending raw document content).
+        # Bounded on purpose — platform/width/editor_mode, plus (D4-E3I)
+        # an ordered list of top-level module TYPES only, never the full
+        # module tree (which this app never sends to any AI provider at
+        # all — see resolve_asset_references()'s own posture on never
+        # sending raw document content). `document_summary` is None on
+        # any older/omitting client — the key is still always present
+        # (possibly null), same "never omit a documented key" posture as
+        # every other tool result here.
         return {
             'platform': safe_context.get('platform'), 'width': safe_context.get('width'),
             'editor_mode': safe_context.get('editor_mode'),
+            'document_summary': document_summary,
         }
     if name == 'GET_EMAIL_SETTINGS':
         return {'platform': safe_context.get('platform'), 'width': safe_context.get('width')}

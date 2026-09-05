@@ -305,6 +305,16 @@ export interface AICommandRequest {
   // the reference resolver (anaphora/follow-up) rather than the live
   // canvas selection. Never read for routing or validation server-side.
   reference_resolved?: boolean;
+  // D4-E3I §3 — a bounded, manifest-driven document overview (ordered
+  // top-level module TYPES only, never props/content/nested children).
+  // Rides along on GET_DOCUMENT_SUMMARY's existing bounded tool-call
+  // result server-side — never dumped into every prompt inline.
+  document_summary?: AICommandDocumentSummaryContext;
+}
+
+export interface AICommandDocumentSummaryContext {
+  module_count: number;
+  module_types: AICommandModuleType[];
 }
 
 export interface AICommandCopySourceContext {

@@ -186,6 +186,13 @@ class EmailAICommandView(APIView):
             # _target_segments_from_context, apply_scope_gate()'s and
             # apply_semantic_consistency_gate()'s consumers of this).
             'resolved_targets': data.get('resolved_targets') or [],
+            # D4-E3I §3 — additive, optional; a bounded, manifest-driven
+            # overview of the CURRENT document's top-level module types
+            # only (see serializers.DocumentSummaryContextSerializer's own
+            # docstring). Never used for routing/validation — only ever
+            # surfaced to the LLM tier via execute_tool_call()'s
+            # GET_DOCUMENT_SUMMARY branch, when the model itself asks.
+            'document_summary': data.get('document_summary'),
             # Used only by the optional AI provider's own separate
             # throttle (ai_command_openai.py) — never logged or returned.
             '_rate_limit_identifier': str(request.user.pk),
@@ -662,7 +669,7 @@ class ConstructionPlanView(APIView):
 
         return Response({
             'success': True,
-            'reply': summarize_plan(plan),
+            'reply': summarize_plan(plan, conflicts=brief.conflicts),
             'brief': brief.to_dict(),
             'plan': plan.to_dict(),
             'action': validated_action,

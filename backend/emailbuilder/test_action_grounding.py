@@ -1189,6 +1189,48 @@ class NegativeConstraintScopeGateTests(SimpleTestCase):
         self.assertEqual(requested, set())
         self.assertFalse(strict)
 
+    def test_bare_keep_the_images_strips_image_field(self):
+        # D4-E3I Phase 8's own worked example: no "as it is" / "unchanged"
+        # qualifier, just a bare "keep the X" before a clause boundary.
+        action = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'hero-image-cta',
+            'patch': {'backgroundColor': '#76C043', 'imageSrc': {'assetId': 1}},
+        }
+        gated, stripped = apply_scope_gate('make this button green, keep the images', action)
+        self.assertNotIn('imageSrc', gated['patch'])
+        self.assertIn('imageSrc', stripped)
+
+    def test_dont_change_the_copy_strips_text_field(self):
+        # D4-E3I Phase 8 — "copy" is common email-marketing shorthand for
+        # body/button text, not present in D4-E3H's original concept map.
+        action = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'button',
+            'patch': {'backgroundColor': '#76C043', 'text': 'Buy Now'},
+        }
+        gated, stripped = apply_scope_gate("make it green, don't change the copy", action)
+        self.assertEqual(gated['patch'], {'backgroundColor': '#76C043'})
+        self.assertIn('text', stripped)
+
+    def test_skip_the_footer_has_no_field_concept_effect(self):
+        # Known, disclosed D4-E3I limitation: "footer" names a MODULE, not
+        # a field-concept, so this field-level mechanism can't honor it.
+        # Module-level exclusion is out of scope for this checkpoint.
+        requested, strict = ai_command._requested_concepts_with_constraints('skip the footer')
+        self.assertEqual(requested, set())
+        self.assertFalse(strict)
+
+    def test_bare_keep_the_x_does_not_regress_existing_qualified_phrasing(self):
+        requested, strict = ai_command._requested_concepts_with_constraints(
+            'make it green, keep the text as it is',
+        )
+        self.assertEqual(requested, {'color'})
+        self.assertFalse(strict)
+
+    def test_bare_keep_the_x_does_not_false_positive_on_keep_going_idiom(self):
+        requested, strict = ai_command._requested_concepts_with_constraints('keep going, make this bigger')
+        self.assertEqual(requested, {'size'})
+        self.assertFalse(strict)
+
 
 class InsertClauseBoundaryTests(SimpleTestCase):
     """D4-E3H — a real bug found via this checkpoint's own live QA:

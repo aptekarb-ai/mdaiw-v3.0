@@ -217,3 +217,36 @@ class CrossModulePlanDiagnosticsTests(SimpleTestCase):
     def test_never_raises_on_bad_input(self):
         diagnostics.record_cross_module_plan(operation_count=None, rejected_count=None, llm_assisted=False)
         diagnostics.record_cross_module_plan(operation_count='not-a-number', rejected_count=1, llm_assisted=True)
+
+
+class DocumentSummaryToolCallDiagnosticsTests(SimpleTestCase):
+    """D4-E3I §3/§14 — record_document_summary_tool_call() must count a
+    genuinely grounded GET_DOCUMENT_SUMMARY use, never a call the model
+    made while no real document_summary existed to answer it with."""
+
+    def setUp(self):
+        diagnostics.reset_session_stats_for_tests()
+
+    def test_real_summary_increments_counter(self):
+        diagnostics.record_document_summary_tool_call({'module_count': 3, 'module_types': ['header', 'cta', 'footer']})
+        self.assertEqual(diagnostics.get_session_stats()['document_summary_tool_calls'], 1)
+
+    def test_empty_document_still_counts_as_a_real_grounded_answer(self):
+        # A brand-new, zero-module document is a genuine, useful answer —
+        # not the same as "nothing was ever supplied this turn".
+        diagnostics.record_document_summary_tool_call({'module_count': 0, 'module_types': []})
+        self.assertEqual(diagnostics.get_session_stats()['document_summary_tool_calls'], 1)
+
+    def test_none_summary_does_not_increment(self):
+        diagnostics.record_document_summary_tool_call(None)
+        self.assertEqual(diagnostics.get_session_stats()['document_summary_tool_calls'], 0)
+
+    def test_malformed_summary_never_raises_and_does_not_increment(self):
+        diagnostics.record_document_summary_tool_call('not-a-dict')
+        diagnostics.record_document_summary_tool_call(42)
+        self.assertEqual(diagnostics.get_session_stats()['document_summary_tool_calls'], 0)
+
+    def test_reset_clears_the_counter(self):
+        diagnostics.record_document_summary_tool_call({'module_count': 1, 'module_types': ['header']})
+        diagnostics.reset_session_stats_for_tests()
+        self.assertEqual(diagnostics.get_session_stats()['document_summary_tool_calls'], 0)

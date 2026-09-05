@@ -169,7 +169,24 @@ _SYSTEM_PROMPT = (
     'limitation, never answer with only "I cannot do that" — say what you CAN do first, then name the gap '
     'plainly. Bad: "Cannot perform action." Better: "I can reproduce the text, spacing, and CTA exactly, but '
     'the current builder has no video module — I can build the rest of the email and leave the video section '
-    'as a documented unsupported requirement." Prior turns of this SAME '
+    'as a documented unsupported requirement." '
+    # D4-E3I §7 — parity with ai_command_local.py's own five-term framework
+    # (see that module's own comment on why this is a separate vocabulary
+    # from D4-E0's above, never conflated, never a third invented).
+    'D4-E3I — for any non-trivial request, silently distinguish internally, and make clear in `reply` '
+    'whenever more than one applies: EXPLICIT (the user directly asked for this), INFERRED (a reasonable '
+    'interpretation you needed to make in order to carry out what was explicitly asked — e.g. resolving '
+    '"the CTA" to a specific button because only one exists), RECOMMENDED (professional email-engineering '
+    'advice you are volunteering that the user did NOT explicitly ask for — e.g. suggesting a contrast fix '
+    'while only color was requested), UNSUPPORTED (the current Builder cannot represent this at all), '
+    'UNRESOLVED (you genuinely need more information before it is safe to act). Never silently redesign '
+    'more than what was explicitly requested — e.g. "make this more premium" does NOT license rewriting '
+    'the whole email; you may name likely INFERRED/RECOMMENDED aspects (spacing, typography, hierarchy, CTA '
+    'consistency) in `reply`, but the actual proposed `action` must stay scoped to what you can justify as '
+    'explicit or a narrow, clearly-labeled inference — anything broader is a RECOMMENDED suggestion in text '
+    'only, never silently included in `action`. If several materially different interpretations are equally '
+    'plausible, that is UNRESOLVED — ask, do not guess. '
+    'Prior turns of this SAME '
     'conversation may be included as ordinary user/'
     'assistant messages before the current one — use them to resolve a follow-up like "make it '
     'darker" or "can you fix it" against what was just discussed, but never assume anything '
@@ -211,6 +228,13 @@ _SYSTEM_PROMPT = (
     'GET_VALIDATION_REPORT, GET_IMPORT_RECONSTRUCTION, GET_MODULE_CAPABILITIES (args: {"module_type": '
     '"..."}), or COMPARE_RECONSTRUCTION. You get at most a few such requests before you must answer with '
     'whatever you have; never request the same tool twice in a row. '
+    # D4-E3I §3 — parity with ai_command_local.py's own GET_DOCUMENT_SUMMARY guidance.
+    'GET_DOCUMENT_SUMMARY\'s result now also carries document_summary: {module_count, module_types} — an '
+    'ORDERED list of the email\'s real top-level module TYPES (e.g. "hero-text-only", "cta-banner", '
+    '"footer-simple-legal"), nothing else. For a holistic question about the email\'s overall structure '
+    '(not a specific selected module), call GET_DOCUMENT_SUMMARY to see it before answering — never guess '
+    'the email\'s structure from the conversation alone, and never invent a module/section/property this '
+    'list does not literally name. '
     # D4-E3H item 1/2 — parity with ai_command_local.py's own _QA_VS_ACTION_GUIDANCE
     # (see that module's own comment on the repair-loop waste this closes).
     'If the user is only asking a question, asking you to explain something, or making a statement '
@@ -489,6 +513,23 @@ def _build_safe_context(context):
     return safe_context, safe_history
 
 
+def _build_safe_document_summary(raw):
+    """D4-E3I §3 — parity with the local provider's own
+    _build_safe_document_summary (see that module's own docstring)."""
+    if not isinstance(raw, dict):
+        return None
+    module_types = raw.get('module_types')
+    if not isinstance(module_types, list):
+        return None
+    known_types = module_capabilities.get_all_module_types()
+    safe_types = [t for t in module_types[:60] if isinstance(t, str) and t in known_types]
+    module_count = raw.get('module_count')
+    return {
+        'module_count': module_count if isinstance(module_count, int) and module_count >= 0 else len(safe_types),
+        'module_types': safe_types,
+    }
+
+
 def _build_safe_resolved_targets(raw):
     if not isinstance(raw, list):
         return []
@@ -684,6 +725,10 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
         context_for_build = dict(context) if isinstance(context, dict) else {}
         context_for_build['_retrieval_message'] = text
         safe_context, safe_history = _build_safe_context(context_for_build)
+        # D4-E3I §3 — parity with the local provider's own comment: kept
+        # OUT of safe_context/the main prompt entirely, only ever spent
+        # if the model actually calls GET_DOCUMENT_SUMMARY.
+        safe_document_summary = _build_safe_document_summary(context.get('document_summary') if isinstance(context, dict) else None)
 
         # Module-4 E10 — real multi-turn: the bounded prior turns of THIS
         # SAME document's conversation are replayed as genuine user/
@@ -743,7 +788,9 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
             if not tool_name or tool_name not in READ_TOOL_NAMES:
                 break
 
-            tool_result = execute_tool_call(tool_name, tool_call.get('args'), safe_context)
+            tool_result = execute_tool_call(tool_name, tool_call.get('args'), safe_context, document_summary=safe_document_summary)
+            if tool_name == 'GET_DOCUMENT_SUMMARY':
+                local_ai_diagnostics.record_document_summary_tool_call(safe_document_summary)
             messages.append({'role': 'assistant', 'content': json.dumps({'tool_call': tool_call})})
             messages.append({
                 'role': 'system',
