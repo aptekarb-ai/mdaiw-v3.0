@@ -466,6 +466,16 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     resolved_targets = ResolvedTargetContextSerializer(
         many=True, required=False, default=list, max_length=MAX_MULTI_MODULE_OPERATIONS,
     )
+    # D4-E3H §20/§4 — a single, additive, optional boolean: did the
+    # frontend's OWN reference resolver (referenceResolver.ts's
+    # resolveReference/resolveMultipleReferences) already resolve an
+    # anaphoric/follow-up reference ("it", "the other one", "do the
+    # same") for THIS turn. Carries no content, no target id, nothing
+    # beyond this one bit — used ONLY for the contextual_reference_
+    # resolutions diagnostics counter (see views.py's own call site);
+    # never read for routing or validation. A client that omits this
+    # (every pre-D4-E3H client) behaves exactly as before.
+    reference_resolved = serializers.BooleanField(required=False, default=False)
 
 
 class LearningSignalRequestSerializer(serializers.Serializer):

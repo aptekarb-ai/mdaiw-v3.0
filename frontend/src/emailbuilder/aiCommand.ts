@@ -301,6 +301,10 @@ export interface AICommandRequest {
   // and behaving unchanged, same convention as every prior additive
   // context field.
   resolved_targets?: AICommandResolvedTargetContext[];
+  // D4-E3H §20/§4 — diagnostics-only: did this turn's target come from
+  // the reference resolver (anaphora/follow-up) rather than the live
+  // canvas selection. Never read for routing or validation server-side.
+  reference_resolved?: boolean;
 }
 
 export interface AICommandCopySourceContext {

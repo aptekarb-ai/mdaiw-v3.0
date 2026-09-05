@@ -1105,3 +1105,122 @@ class DeterministicMultiModulePlannerMultilingualTests(SimpleTestCase):
         by_id = {op['target_module_id']: op for op in plan['operations']}
         self.assertEqual(by_id['btn1']['props_patch'], {'backgroundColor': '#76C043'})
         self.assertEqual(by_id['hero1']['settings_patch']['desktop']['paddingTop'], 16.0)
+
+
+class NegativeConstraintScopeGateTests(SimpleTestCase):
+    """D4-E3H item 4 — "keep the text as it is" / "don't change the
+    image" / "only change the padding" (the exact three phrasings named
+    in the D4-E3H spec's own §4 list). apply_scope_gate() must honor
+    these EXPLICIT exclusions/exhaustive-inclusions, not just positive
+    concept mentions — see _requested_concepts_with_constraints()'s own
+    docstring for the exact contract."""
+
+    def test_keep_the_text_as_it_is_strips_text_even_though_mentioned(self):
+        action = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'button',
+            'patch': {'backgroundColor': '#76C043', 'text': 'Buy Now'},
+        }
+        gated, stripped = apply_scope_gate('make this button green, but keep the text as it is', action)
+        self.assertEqual(gated['patch'], {'backgroundColor': '#76C043'})
+        self.assertIn('text', stripped)
+
+    def test_dont_change_the_image_strips_image_field(self):
+        action = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'hero-image-cta',
+            'patch': {'backgroundColor': '#76C043', 'imageSrc': {'assetId': 1}},
+        }
+        gated, stripped = apply_scope_gate("make it green, don't change the image", action)
+        self.assertNotIn('imageSrc', gated['patch'])
+        self.assertIn('imageSrc', stripped)
+
+    def test_only_change_the_padding_empties_the_unrelated_props_half(self):
+        action = {
+            'type': ActionType.BATCH_UPDATE, 'target': 'selected', 'module_type': 'button',
+            'props_patch': {'backgroundColor': '#76C043'},
+            'settings_patch': {'desktop': {'paddingTop': 20, 'paddingRight': 20, 'paddingBottom': 20, 'paddingLeft': 20}},
+        }
+        gated, stripped = apply_scope_gate('only change the padding, the color looks fine', action)
+        self.assertIsNone(gated['props_patch'])
+        self.assertEqual(gated['settings_patch']['desktop']['paddingTop'], 20)
+        self.assertIn('backgroundColor', stripped)
+
+    def test_only_change_the_padding_on_a_single_patch_action_can_empty_it_to_none(self):
+        # If the ONLY requested concept isn't even in this patch at all,
+        # the honest outcome is an invalidated action (patch -> None),
+        # not silently keeping an unrelated field — validate_action()
+        # re-checks this exact shape at the view layer regardless.
+        action = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'button',
+            'patch': {'backgroundColor': '#76C043'},
+        }
+        gated, stripped = apply_scope_gate('only change the padding', action)
+        self.assertIsNone(gated['patch'])
+        self.assertIn('backgroundColor', stripped)
+
+    def test_negative_constraint_never_affects_an_unrelated_ordinary_request(self):
+        action = {
+            'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'button',
+            'patch': {'backgroundColor': '#76C043'},
+        }
+        gated, stripped = apply_scope_gate('make this button green', action)
+        self.assertEqual(gated, action)
+        self.assertEqual(stripped, [])
+
+    def test_negative_constraint_applies_per_operation_in_multi_module_update(self):
+        action = {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {
+                    'target_module_id': 'mod-button-1', 'module_type': 'button',
+                    'props_patch': {'backgroundColor': '#76C043', 'text': 'Buy Now'}, 'settings_patch': None,
+                },
+            ],
+        }
+        target_segments = {'mod-button-1': 'make the CTA green, keep the text as it is'}
+        gated, stripped = apply_scope_gate(
+            'make the CTA green, keep the text as it is', action, target_segments=target_segments,
+        )
+        op = gated['operations'][0]
+        self.assertEqual(op['props_patch'], {'backgroundColor': '#76C043'})
+        self.assertIn('text', stripped)
+
+    def test_requested_concepts_with_constraints_unclassifiable_word_ignored(self):
+        requested, strict = ai_command._requested_concepts_with_constraints('only change the whatchamacallit')
+        self.assertEqual(requested, set())
+        self.assertFalse(strict)
+
+
+class InsertClauseBoundaryTests(SimpleTestCase):
+    """D4-E3H — a real bug found via this checkpoint's own live QA:
+    "Add a countdown timer and also make the button green." silently
+    inserted an EMPTY button module (matching "button" from the unrelated
+    mutation clause) and dropped the color request entirely — never
+    honestly declining the unsupported "countdown timer". Fixed by
+    bounding module-type matching to the text before a mutation-verb
+    clause boundary, when one is present."""
+
+    def test_unsupported_insert_target_with_trailing_mutation_clause_declines_honestly(self):
+        provider = RuleBasedEmailCommandProvider()
+        result = provider.resolve(
+            'Add a countdown timer and also make the button green.', {'selected_module': {'type': 'button', 'props': {}}},
+        )
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertNotIn('button', str(result.action))
+
+    def test_legitimate_two_type_multi_insert_is_unaffected(self):
+        provider = RuleBasedEmailCommandProvider()
+        result = provider.resolve('add a button and a divider', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+        self.assertEqual({m['module_type'] for m in result.action['modules']}, {'button', 'divider'})
+
+    def test_legitimate_multi_insert_with_different_types_is_unaffected(self):
+        provider = RuleBasedEmailCommandProvider()
+        result = provider.resolve('add a text module and an image module', {})
+        self.assertEqual(result.action['type'], ActionType.INSERT_MODULE)
+        self.assertEqual({m['module_type'] for m in result.action['modules']}, {'text', 'image'})
+
+    def test_insert_search_window_only_trims_when_a_real_boundary_exists(self):
+        self.assertEqual(ai_command._insert_search_window('add a button and a divider'), 'add a button and a divider')
+        trimmed = ai_command._insert_search_window('add a countdown timer and also make the button green')
+        self.assertNotIn('button', trimmed)
+        self.assertIn('countdown timer', trimmed)

@@ -312,14 +312,40 @@ EMAILBUILDER_AI_COMMAND_REQUEST_WINDOW_SECONDS = int(
 EMAILBUILDER_LOCAL_AI_BASE_URL = os.environ.get('EMAILBUILDER_LOCAL_AI_BASE_URL', '')
 EMAILBUILDER_LOCAL_AI_MODEL = os.environ.get('EMAILBUILDER_LOCAL_AI_MODEL', '')
 EMAILBUILDER_LOCAL_AI_API_KEY = os.environ.get('EMAILBUILDER_LOCAL_AI_API_KEY', '')
-# R4-B2 — informational only, never read for control flow: which local
-# runtime family the operator has pointed EMAILBUILDER_LOCAL_AI_BASE_URL
-# at ('ollama' | 'llamacpp' | 'compatible-local-server' | ''), surfaced
-# only in admin/settings diagnostics (see §24 of the R4-B2 spec — never
-# shown in the normal AI Engineer conversation UI). The wire protocol is
-# identical OpenAI-compatible JSON regardless of this value, so nothing
-# in ai_command_local.py branches on it.
+# R4-B2 — which local runtime family the operator has pointed
+# EMAILBUILDER_LOCAL_AI_BASE_URL at ('ollama' | 'llamacpp' |
+# 'compatible-local-server' | ''), surfaced in admin/settings diagnostics
+# (see §24 of the R4-B2 spec — never shown in the normal AI Engineer
+# conversation UI). The wire protocol is identical OpenAI-compatible JSON
+# regardless of this value for every REQUEST/RESPONSE field this app
+# reads or writes.
+#
+# D4-E3H item 8 — the ONE exception: `keep_alive` (see
+# EMAILBUILDER_LOCAL_AI_KEEP_ALIVE below) is an Ollama-specific
+# `extra_body` extension with no equivalent in the plain OpenAI wire
+# format — a llama.cpp `llama-server`/LM Studio/other OpenAI-compatible
+# server has no defined behavior for an unrecognized field, so this is
+# now read for exactly that one, narrow, additive purpose: only send
+# `keep_alive` when the operator has explicitly told this app the
+# runtime IS Ollama. Every other request/response field, and the
+# provider's core resolve() logic, remains completely unbranched on this
+# value, unchanged from R4-B2.
 EMAILBUILDER_LOCAL_AI_RUNTIME = os.environ.get('EMAILBUILDER_LOCAL_AI_RUNTIME', '')
+
+# D4-E3H item 8 (Local-LLM Performance Hardening) — Ollama's default
+# `keep_alive` is 5 minutes: a local model idle longer than that between
+# AI Engineer turns is unloaded from memory, and the NEXT call pays a
+# full cold-load penalty (observed, per D4-E2's own settings.py comment
+# above, up to ~290s for a first call) on top of ordinary generation
+# time — indistinguishable to the user from the model itself being slow.
+# Only ever sent when EMAILBUILDER_LOCAL_AI_RUNTIME == 'ollama' (see that
+# setting's own docstring) — never guessed, never sent to a server that
+# might not understand it. '0' or '' disables this (falls back to
+# whatever the operator's own Ollama instance is already configured
+# with) — this is a pure performance knob, never required for
+# correctness, and changing it can never affect validation, scope-gate,
+# or any other safety mechanism.
+EMAILBUILDER_LOCAL_AI_KEEP_ALIVE = os.environ.get('EMAILBUILDER_LOCAL_AI_KEEP_ALIVE', '10m')
 # R4-B2 — a local model's own context window is frequently much smaller
 # than a hosted model's (many popular local 7B-13B models ship with
 # 4k-8k token windows) — this caps the TOTAL serialized size (system

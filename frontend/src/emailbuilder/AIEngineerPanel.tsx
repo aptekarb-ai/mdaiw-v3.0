@@ -1405,6 +1405,15 @@ export function AIEngineerPanel({
       ? { type: selectedModule.type, id: selectedModule.id, props: selectedModule.props ?? {} }
       : resolvedModuleOverrideRef.current;
 
+    // D4-E3H §20/§4 — a single bit reporting whether THIS turn's target
+    // came from the reference resolver rather than the live canvas
+    // selection (single-target: resolvedModuleOverrideRef filled in
+    // because nothing was selected; cross-module: resolvedTargetsContextRef
+    // already resolved 2+ targets) — diagnostics only, never read for
+    // routing/validation.
+    const referenceWasResolved = (!selectedModule && resolvedModuleOverrideRef.current !== null)
+      || resolvedTargetsContextRef.current !== null;
+
     // E9 — informational-only column context (never drives a real
     // column-scoped edit action yet — see AIEngineerPanelProps'
     // selectedColumn docstring). Resolved from the live module tree
@@ -1449,6 +1458,7 @@ export function AIEngineerPanel({
         // function; undefined/empty on every ordinary (single-target)
         // turn.
         resolved_targets: resolvedTargetsContextRef.current ?? undefined,
+        reference_resolved: referenceWasResolved,
       });
       copySourceContextRef.current = null;
       resolvedTargetsContextRef.current = null;

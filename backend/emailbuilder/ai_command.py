@@ -1243,7 +1243,68 @@ def _requested_concepts(message):
     return {concept for concept, keywords in _MESSAGE_CONCEPT_KEYWORDS.items() if any(kw in lowered for kw in keywords)}
 
 
-def _scope_gate_patch(patch, requested):
+# D4-E3H item 4 — negative-constraint scope handling ("keep the text as it
+# is", "don't change the image", "without changing the padding") and its
+# positive counterpart ("only change the padding"). _requested_concepts()
+# above only ever tracks POSITIVE concept mentions — a message like "make
+# this button green, but keep the text as it is" would previously let the
+# scope gate keep BOTH backgroundColor AND text if the model (or a
+# deterministic combiner) proposed both, since "text" genuinely IS
+# mentioned in the message. Reuses the EXACT SAME _concept_for_field_key
+# mapping apply_scope_gate() already relies on — never a second,
+# independently-invented concept vocabulary.
+_NEGATIVE_CONSTRAINT_RE = re.compile(
+    r"\b(?:don'?t|do\s+not|never)\s+change\s+(?:the\s+|its\s+|his\s+|her\s+)?(\w+)"
+    r"|\bkeep\s+(?:the\s+|its\s+)?(\w+)\s+(?:as\s+(?:it|they)\s+(?:is|are)|unchanged|the\s+same)"
+    r"|\bwithout\s+changing\s+(?:the\s+|its\s+)?(\w+)"
+    r"|\bleave\s+(?:the\s+|its\s+)?(\w+)\s+(?:alone|as\s+(?:it|they)\s+(?:is|are)|unchanged)",
+    re.IGNORECASE,
+)
+_ONLY_CONSTRAINT_RE = re.compile(
+    r'\bonly\s+(?:change|update|adjust|modify)\s+(?:the\s+|its\s+)?(\w+)',
+    re.IGNORECASE,
+)
+
+
+def _requested_concepts_with_constraints(message):
+    """Returns (requested_concepts: set, is_exhaustive: bool). The set is
+    the same shape _requested_concepts() returns, adjusted for two
+    bounded phrasings apply_scope_gate() alone needs to honor:
+      - "only change/update/adjust/modify the X" — the requested set
+        becomes JUST that one concept (is_exhaustive=True: this is a
+        positive, EXHAUSTIVE constraint — nothing else should survive,
+        even a whole props_patch/settings_patch half emptying out
+        entirely is the correct result, not over-stripping), REGARDLESS
+        of what else the message happens to mention elsewhere.
+      - "don't change/keep/without changing/leave alone the X" — that
+        concept is removed from whatever was otherwise requested, even
+        though the message DOES mention it (an explicit exclusion, not a
+        request); is_exhaustive stays False here (the ordinary
+        conservative "don't empty a whole half" guard still applies —
+        an exclusion narrows what's kept, it does not assert that
+        nothing else in that half may legitimately survive).
+    An unclassifiable word in either pattern is silently ignored (same
+    conservative "no signal -> don't touch anything" default every other
+    concept-detection helper in this file already uses) — never raises,
+    never invents a concept name outside the existing vocabulary."""
+    lowered = (message or '').lower()
+    only_match = _ONLY_CONSTRAINT_RE.search(lowered)
+    if only_match:
+        only_concept = _concept_for_field_key(only_match.group(1))
+        if only_concept:
+            return {only_concept}, True
+
+    requested = _requested_concepts(message)
+    excluded = set()
+    for match in _NEGATIVE_CONSTRAINT_RE.finditer(lowered):
+        word = next((g for g in match.groups() if g), None)
+        concept = _concept_for_field_key(word) if word else None
+        if concept:
+            excluded.add(concept)
+    return requested - excluded, False
+
+
+def _scope_gate_patch(patch, requested, strict=False):
     """Given a flat {field_key: value} patch and a set of requested
     concepts, returns (kept_patch, stripped_keys) — the ONE concept-
     filtering primitive apply_scope_gate() itself now uses for every
@@ -1257,7 +1318,16 @@ def _scope_gate_patch(patch, requested):
     If stripping would empty the patch entirely, conservatively returns
     the ORIGINAL patch with an empty stripped list — over-aggressive
     concept detection is more likely than a genuinely all-off-topic
-    proposal (same guard the pre-D4-E3 single-patch code already had)."""
+    proposal (same guard the pre-D4-E3 single-patch code already had).
+
+    D4-E3H item 4 — `strict=True` (passed ONLY when
+    _requested_concepts_with_constraints() found an unambiguous "only
+    change/update the X" instruction) skips that conservative guard: an
+    explicit "only" is a strong enough signal that a half emptying out
+    entirely is the CORRECT outcome (the user said nothing else in this
+    half should change), not over-aggressive stripping. Every existing
+    caller passes strict=False (the default) and is completely
+    unaffected."""
     kept, stripped = {}, []
     for key, value in patch.items():
         concept = _concept_for_field_key(key)
@@ -1266,11 +1336,17 @@ def _scope_gate_patch(patch, requested):
         else:
             stripped.append(key)
     if not kept:
-        return patch, []
+        # strict=True: an explicit "only X" constraint genuinely means
+        # this whole half should end up empty — return None (not {}), so
+        # every downstream consumer (validate_action(), the frontend's
+        # own `if (operation.props_patch)` truthiness check) treats it
+        # exactly like "this half was never proposed," never an object
+        # that happens to be empty.
+        return (None, stripped) if strict else (patch, [])
     return kept, stripped
 
 
-def _scope_gate_settings_patch(patch, requested):
+def _scope_gate_settings_patch(patch, requested, strict=False):
     """The settings-shaped counterpart of _scope_gate_patch — for a
     per-breakpoint patch like {"desktop": {paddingTop: 20, ...}, ...}
     (the ONLY shape _validate_settings_patch ever produces; see that
@@ -1281,7 +1357,10 @@ def _scope_gate_settings_patch(patch, requested):
     prop patch uses (see that table's own 'padding'->'spacing' entry) —
     never a second, settings-specific concept system. A non-dict
     breakpoint entry is left untouched (defensive; validate_action()
-    already guarantees this never happens in practice)."""
+    already guarantees this never happens in practice).
+
+    D4-E3H item 4 — `strict` is passed straight through to
+    _scope_gate_patch (see that function's own docstring)."""
     if not isinstance(patch, dict):
         return patch, []
     new_patch = {}
@@ -1290,9 +1369,13 @@ def _scope_gate_settings_patch(patch, requested):
         if not isinstance(breakpoint_patch, dict):
             new_patch[breakpoint_key] = breakpoint_patch
             continue
-        kept, stripped = _scope_gate_patch(breakpoint_patch, requested)
+        kept, stripped = _scope_gate_patch(breakpoint_patch, requested, strict=strict)
         new_patch[breakpoint_key] = kept
         all_stripped.extend(stripped)
+    if strict and all_stripped and all(not value for value in new_patch.values()):
+        # Every breakpoint emptied out under a strict "only X" constraint
+        # — the whole settings_patch is None, not {"desktop": None, ...}.
+        return None, all_stripped
     return new_patch, all_stripped
 
 
@@ -1370,18 +1453,18 @@ def apply_scope_gate(message, action, target_segments=None):
                 new_operations.append(operation)
                 continue
             segment = (target_segments or {}).get(operation.get('target_module_id')) or message
-            op_requested = _requested_concepts(segment)
+            op_requested, op_strict = _requested_concepts_with_constraints(segment)
             if not op_requested:
                 new_operations.append(operation)
                 continue
             props_patch = operation.get('props_patch')
             settings_patch = operation.get('settings_patch')
             new_props, props_stripped = (
-                _scope_gate_patch(props_patch, op_requested) if isinstance(props_patch, dict) and props_patch
+                _scope_gate_patch(props_patch, op_requested, strict=op_strict) if isinstance(props_patch, dict) and props_patch
                 else (props_patch, [])
             )
             new_settings, settings_stripped = (
-                _scope_gate_settings_patch(settings_patch, op_requested) if settings_patch else (settings_patch, [])
+                _scope_gate_settings_patch(settings_patch, op_requested, strict=op_strict) if settings_patch else (settings_patch, [])
             )
             op_stripped = props_stripped + settings_stripped
             total_stripped.extend(op_stripped)
@@ -1392,7 +1475,7 @@ def apply_scope_gate(message, action, target_segments=None):
             return action, []
         return {**action, 'operations': new_operations}, total_stripped
 
-    requested = _requested_concepts(message)
+    requested, requested_strict = _requested_concepts_with_constraints(message)
     if not requested:
         # No classifiable concept anywhere in the message — too weak a
         # signal to strip anything against; pass the whole action through.
@@ -1402,11 +1485,11 @@ def apply_scope_gate(message, action, target_segments=None):
         props_patch = action.get('props_patch')
         settings_patch = action.get('settings_patch')
         new_props, props_stripped = (
-            _scope_gate_patch(props_patch, requested) if isinstance(props_patch, dict) and props_patch
+            _scope_gate_patch(props_patch, requested, strict=requested_strict) if isinstance(props_patch, dict) and props_patch
             else (props_patch, [])
         )
         new_settings, settings_stripped = (
-            _scope_gate_settings_patch(settings_patch, requested) if settings_patch else (settings_patch, [])
+            _scope_gate_settings_patch(settings_patch, requested, strict=requested_strict) if settings_patch else (settings_patch, [])
         )
         stripped = props_stripped + settings_stripped
         if not stripped:
@@ -1416,7 +1499,7 @@ def apply_scope_gate(message, action, target_segments=None):
     patch = action.get('patch')
     if not isinstance(patch, dict) or not patch:
         return action, []
-    kept, stripped = _scope_gate_patch(patch, requested)
+    kept, stripped = _scope_gate_patch(patch, requested, strict=requested_strict)
     if not stripped:
         return action, []
     return {**action, 'patch': kept}, stripped
@@ -1670,6 +1753,27 @@ _NO_SELECTION_REPLY = (
 )
 
 _INSERT_PATTERN = re.compile(r'\b(add|insert|create)\b', re.IGNORECASE)
+# D4-E3H — a real bug found via this checkpoint's own live QA: "Add a
+# countdown timer and also make the button green." has NO real module
+# type to insert ("countdown timer" matches nothing in MODULE_TYPE_ALIASES)
+# — but _find_all_module_types(), which scans the WHOLE message so that a
+# legitimate "add a button and a divider" correctly finds both, ALSO
+# matched "button" from the completely unrelated "make the button green"
+# mutation clause later in the same sentence, and silently inserted an
+# empty button module nobody asked for while dropping the color request
+# entirely. When a mutation-verb clause ("make/change/update/set
+# the/this/it") is present, module-type matching is now bounded to the
+# text BEFORE it — a genuine multi-insert message ("add a button and a
+# divider") never contains that phrase at all, so this changes nothing
+# for the common case; it only ever narrows the search when there is
+# real reason to believe a later clause is asking for something else
+# entirely.
+_MUTATION_CLAUSE_BOUNDARY_RE = re.compile(r'\b(?:make|change|update|set)\s+(?:the|this|it)\b', re.IGNORECASE)
+
+
+def _insert_search_window(lowered):
+    boundary = _MUTATION_CLAUSE_BOUNDARY_RE.search(lowered)
+    return lowered[:boundary.start()] if boundary else lowered
 _DELETE_PATTERN = re.compile(r'\b(delete|remove)\b.*\b(this|it|the selected)\b', re.IGNORECASE)
 _DUPLICATE_PATTERN = re.compile(r'\b(duplicate|copy)\b.*\b(this|it)\b', re.IGNORECASE)
 _GLOBAL_PATTERN = re.compile(r'\b(all|every|each)\b', re.IGNORECASE)
@@ -3232,7 +3336,7 @@ class RuleBasedEmailCommandProvider(EmailCommandProvider):
         # Insert — checked before delete/duplicate so "add a button" never
         # collides with "remove"/"duplicate" phrasing.
         if _INSERT_PATTERN.search(lowered):
-            module_types = _find_all_module_types(lowered)
+            module_types = _find_all_module_types(_insert_search_window(lowered))
             if module_types:
                 modules = [{'module_type': t, 'patch': {}} for t in module_types[:MAX_GENERATED_MODULES]]
                 names = ', '.join(t for t in module_types[:MAX_GENERATED_MODULES])

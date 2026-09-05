@@ -182,8 +182,13 @@ class CapabilityHonestyTests(SimpleTestCase):
     """D4-E0 item 12."""
 
     def test_system_prompt_defines_all_five_classification_terms(self):
+        # D4-E3H item 1 — _SYSTEM_PROMPT_BASE was split into conditionally
+        # -assembled parts; _build_system_prompt({}) is the real thing
+        # sent on an ordinary turn (no resolved_targets), and these terms
+        # live in the always-included portion regardless.
+        prompt = ai_command_local._build_system_prompt({})
         for term in ('EXACT', 'NORMALIZED', 'APPROXIMATED', 'UNSUPPORTED', 'REQUIRES_NEW_MODULE'):
-            self.assertIn(term, ai_command_local._SYSTEM_PROMPT_BASE)
+            self.assertIn(term, prompt)
 
     def test_construction_plan_summary_absent_by_default(self):
         safe_context, _history = _build_safe_context({})
@@ -574,8 +579,10 @@ class CapabilityGroundingContextTests(SimpleTestCase):
         self.assertTrue(safe_context['active_target_context']['selected'])
 
     def test_system_prompt_warns_against_the_content_vs_text_mistake(self):
-        self.assertIn('active_target_context', ai_command_local._SYSTEM_PROMPT_BASE)
-        self.assertIn('"content"', ai_command_local._SYSTEM_PROMPT_BASE)
+        prompt = ai_command_local._build_system_prompt({})
+        self.assertIn('active_target_context', prompt)
+        self.assertIn('"content"', prompt)
 
     def test_system_prompt_instructs_not_to_ask_for_re_selection(self):
-        self.assertIn('never ask the user to re-select it', ai_command_local._SYSTEM_PROMPT_BASE)
+        prompt = ai_command_local._build_system_prompt({})
+        self.assertIn('never ask the user to re-select it', prompt)

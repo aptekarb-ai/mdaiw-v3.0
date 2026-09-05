@@ -75,7 +75,7 @@ logger = logging.getLogger('emailbuilder.ai_command_local')
 # (the cloud/paid tier, not local, and not what this hardening item
 # targets) deliberately keeps its OWN always-unconditional _SYSTEM_PROMPT
 # unchanged.
-_SYSTEM_PROMPT_BASE = (
+_SYSTEM_PROMPT_PART_A = (
     'You are the AI Engineer inside an email builder. You translate one short user '
     'instruction into AT MOST ONE structured action. You never write raw HTML, CSS, or '
     'JavaScript, and you never invent image URLs — to reference an image, use the '
@@ -89,7 +89,22 @@ _SYSTEM_PROMPT_BASE = (
     'property half and settings_patch — {"desktop": {"paddingTop"/"paddingRight"/'
     '"paddingBottom"/"paddingLeft": <px>}} — for the spacing half; use this ONLY when both '
     'halves are genuinely requested together, never when only one kind of change was asked '
-    'for), D4-E3G — a CROSS-MODULE compound update, when the user asks for changes to '
+    'for), '
+)
+
+# D4-E3H item 1 — performance hardening: this block (~2.7KB of the ~13.5KB
+# base prompt) is ONLY ever actionable when context carries resolved_targets
+# (MULTI_MODULE_UPDATE literally cannot be validly constructed without real
+# ids to copy target_module_id from — see validate_action()'s own
+# MULTI_MODULE_UPDATE branch). D4-E3G baked it unconditionally into every
+# single call; measured audit (D4-E3H architecture audit) found this was
+# pure wasted prefill on the vast majority of local-model calls, which have
+# no resolved_targets at all. Mirrors the EXACT SAME conditional-inclusion
+# pattern _VALIDATION_ISSUE_GUIDANCE already established (D4-E2 item 4) —
+# never removed when it could actually matter, only skipped when it
+# structurally cannot apply. See _build_system_prompt()'s own docstring.
+_MULTI_MODULE_UPDATE_GUIDANCE = (
+    'D4-E3G — a CROSS-MODULE compound update, when the user asks for changes to '
     'DIFFERENT modules in one message (e.g. "make the hero heading smaller and the CTA green") '
     'AND context includes resolved_targets (present only when the frontend already resolved 2+ '
     'distinct real module ids for this message): action type MULTI_MODULE_UPDATE, with an '
@@ -115,7 +130,11 @@ _SYSTEM_PROMPT_BASE = (
     'target it lists, return action type NONE and explain what is missing — never emit a '
     'MULTI_MODULE_UPDATE with an operation for only some of the named targets and silently drop '
     'the rest. If resolved_targets is absent, never use MULTI_MODULE_UPDATE — treat the message as '
-    'targeting only the current selection, exactly as before this capability existed. A document-level change (enable/disable Email Reset CSS, '
+    'targeting only the current selection, exactly as before this capability existed. '
+)
+
+_SYSTEM_PROMPT_PART_B = (
+    'A document-level change (enable/disable Email Reset CSS, '
     'set/enable/disable/clear Custom CSS, set the email title, set the email subject, or '
     'set/clear the favicon URL — action types SET_RESET_CSS_ENABLED, SET_CUSTOM_CSS_ENABLED, '
     'SET_CUSTOM_CSS, CLEAR_CUSTOM_CSS, SET_EMAIL_TITLE, SET_EMAIL_SUBJECT, SET_FAVICON, '
@@ -144,10 +163,9 @@ _SYSTEM_PROMPT_BASE = (
     'UPDATE_MODULE_SETTINGS with patch {"desktop": {"paddingTop": 24, "paddingRight": 24, "paddingBottom": 24, '
     '"paddingLeft": 24}}, never UPDATE_MODULE_PROPS with an invented flat "padding" field), and '
     'supported_actions (the action types this specific module actually supports — never propose an action '
-    'type absent from this list for the selected module), and resolved_targets (D4-E3G — present only for a '
-    'genuine cross-module compound request; a bounded list of {id, type, label, matched_phrase} for the OTHER '
-    'real modules this specific message named besides/instead of the current selection — see the '
-    'MULTI_MODULE_UPDATE description above for how to use it). D4-E1 — stay scoped to exactly what the user asked: if the '
+    'type absent from this list for the selected module). '
+    '@@RESOLVED_TARGETS_FIELD_GUIDANCE@@'
+    'D4-E1 — stay scoped to exactly what the user asked: if the '
     'user asks to change one property (e.g. "make this red"), propose a patch containing ONLY the '
     'field(s) that property requires — never also change unrelated fields (text, link, alignment, '
     'padding, ...) the user did not mention, even if you think they might want it too; a scope-creep '
@@ -245,22 +263,80 @@ _VALIDATION_ISSUE_GUIDANCE = (
 )
 
 
+_RESOLVED_TARGETS_FIELD_GUIDANCE = (
+    'And resolved_targets (D4-E3G — present only for a genuine cross-module compound request; a '
+    'bounded list of {id, type, label, matched_phrase} for the OTHER real modules this specific '
+    'message named besides/instead of the current selection — see the MULTI_MODULE_UPDATE '
+    'description above for how to use it). '
+)
+
+# D4-E3H item 1/2 — a short, always-cheap instruction closing the exact
+# repair-loop waste the D4-E3H architecture audit measured: a model that
+# ATTEMPTS an uncertain structured mutation for what is really just a
+# question burns a full extra local-inference round (up to
+# EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS) in the bounded repair
+# loop before validate_action() ever gets a chance to reject it cleanly.
+# Costs ~30 tokens, every call; saves up to one whole repair round on any
+# turn that is genuinely Q&A-only — never weakens validation itself, this
+# is a MODEL-BEHAVIOR nudge, validate_action()/scope gate/semantic
+# consistency gate are completely unchanged and remain the real gate.
+_QA_VS_ACTION_GUIDANCE = (
+    ' If the user is only asking a question, asking you to explain something, or making a '
+    'statement with no requested change, action.type MUST be NONE and `reply` carries your full '
+    'answer — never attempt an uncertain mutation just to have something in `action`. If the '
+    'user both asks something AND requests a change in the same message ("why is this '
+    'inconsistent, and fix it"), answer the question in `reply` AND still propose the real '
+    'action, when you can determine it safely — do not silently drop either half.'
+)
+
+
 def _build_system_prompt(safe_context):
     """D4-E2 item 4 — the base instructions plus _VALIDATION_ISSUE_GUIDANCE
     ONLY when there is an actual validation issue in play this turn. Never
     removes guidance that is relevant THIS turn — only skips guidance that
     could not possibly apply (no selected_validation_issue means no VML/
-    contrast/placeholder-link issue is being discussed)."""
+    contrast/placeholder-link issue is being discussed).
+
+    D4-E3H item 1 — same posture extended to the MULTI_MODULE_UPDATE
+    guidance block: included ONLY when safe_context actually carries
+    resolved_targets (the one and only condition under which that action
+    type could ever be validly constructed — see validate_action()'s own
+    MULTI_MODULE_UPDATE branch). Measured audit: this alone removes ~2.7KB
+    (~670 tokens) of fixed prefill from the overwhelming majority of local-
+    model calls, which have no resolved_targets at all."""
+    has_resolved_targets = isinstance(safe_context, dict) and bool(safe_context.get('resolved_targets'))
+    multi_module_block = _MULTI_MODULE_UPDATE_GUIDANCE if has_resolved_targets else ''
+    resolved_targets_field_block = _RESOLVED_TARGETS_FIELD_GUIDANCE if has_resolved_targets else ''
+
+    prompt = (
+        _SYSTEM_PROMPT_PART_A + multi_module_block
+        + _SYSTEM_PROMPT_PART_B.replace('@@RESOLVED_TARGETS_FIELD_GUIDANCE@@', resolved_targets_field_block)
+        + _QA_VS_ACTION_GUIDANCE
+    )
     if isinstance(safe_context, dict) and safe_context.get('selected_validation_issue'):
-        return _SYSTEM_PROMPT_BASE + _VALIDATION_ISSUE_GUIDANCE
-    return _SYSTEM_PROMPT_BASE
+        prompt += _VALIDATION_ISSUE_GUIDANCE
+    return prompt
 
 
-def _action_schema():
+def _action_schema(include_operations=True):
     """Built lazily (not at import time) from the SAME generated module
     manifest ai_command.py's own validate_action() reads — the enum of
     valid `module_type` values here is never a separately-maintained
-    list. Mirrors ai_command_openai.py::_ACTION_SCHEMA's shape exactly."""
+    list. Mirrors ai_command_openai.py::_ACTION_SCHEMA's shape exactly.
+
+    D4-E3H item 1 — `include_operations=False` (the caller passes this
+    whenever safe_context carries no resolved_targets) drops `operations`
+    from BOTH `properties` and `required`, together, so the schema stays
+    internally consistent under `strict: true` (a key can never appear in
+    `required` without also appearing in `properties`) — never a
+    partially-broken schema. This is always SAFE to omit in that case:
+    MULTI_MODULE_UPDATE's `operations[].target_module_id` MUST come from
+    resolved_targets[].id (see the system prompt's own contract) — with
+    no resolved_targets, there is no legal id the model could ever use,
+    so the capability is structurally unusable regardless of whether the
+    schema offers it. Measured audit: saves ~1.4KB (~350 tokens) of fixed
+    schema prefill on every call that cannot use it anyway — the large
+    majority of local-model calls."""
     all_types = sorted(module_capabilities.get_all_module_types())
     flat_module_entry = {
         'type': 'object',
@@ -315,6 +391,60 @@ def _action_schema():
         'required': ['target_module_id', 'module_type', 'props_patch', 'settings_patch'],
         'additionalProperties': False,
     }
+    action_properties = {
+        'type': {'type': 'string', 'enum': list(ActionType.values)},
+        'target': {'type': ['string', 'null'], 'enum': ['selected', None]},
+        'module_type': {'type': ['string', 'null'], 'enum': all_types + [None]},
+        'modules': {
+            'type': ['array', 'null'],
+            'items': flat_module_entry,
+            'maxItems': MAX_GENERATED_MODULES,
+        },
+        'patch': {'type': ['object', 'null']},
+        # Sub-phase 2 — document-level CSS actions.
+        'enabled': {'type': ['boolean', 'null']},
+        'css': {'type': ['string', 'null']},
+        # Sub-phase 4 — document-level title/subject/favicon.
+        'value': {'type': ['string', 'null']},
+        'url': {'type': ['string', 'null']},
+        # Sub-phase 7 — COMPOSE_EMAIL's ordered plan.
+        'items': {
+            'type': ['array', 'null'],
+            'items': composition_item,
+            'maxItems': MAX_COMPOSITION_ITEMS,
+        },
+        # D4-E3 item 7/8 — BATCH_UPDATE's two halves, always
+        # against the currently selected module (same
+        # `target: 'selected'` as UPDATE_MODULE_PROPS/
+        # UPDATE_MODULE_SETTINGS): props_patch for
+        # color/text/align/size-shaped fields, settings_patch
+        # for the nested desktop.padding* shape. Use ONLY
+        # when the user asked for BOTH kinds of change on
+        # the SAME module in one message — a single-kind
+        # request still uses the existing single-purpose
+        # action type, never BATCH_UPDATE with one half null.
+        'props_patch': {'type': ['object', 'null']},
+        'settings_patch': {'type': ['object', 'null']},
+    }
+    action_required = [
+        'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
+        'props_patch', 'settings_patch',
+    ]
+    if include_operations:
+        # D4-E3G — MULTI_MODULE_UPDATE's cross-module
+        # operations list. Every target_module_id here MUST
+        # come from context.resolved_targets (never
+        # invented) — validate_action() independently drops
+        # any operation whose target_module_id/module_type
+        # does not survive re-validation, so this is
+        # defense-in-depth, not the only gate.
+        action_properties['operations'] = {
+            'type': ['array', 'null'],
+            'items': multi_module_operation_entry,
+            'maxItems': MAX_MULTI_MODULE_OPERATIONS,
+        }
+        action_required.append('operations')
+
     return {
         'name': 'email_ai_command',
         'strict': True,
@@ -325,57 +455,8 @@ def _action_schema():
                 'confidence': {'type': 'number'},
                 'action': {
                     'type': 'object',
-                    'properties': {
-                        'type': {'type': 'string', 'enum': list(ActionType.values)},
-                        'target': {'type': ['string', 'null'], 'enum': ['selected', None]},
-                        'module_type': {'type': ['string', 'null'], 'enum': all_types + [None]},
-                        'modules': {
-                            'type': ['array', 'null'],
-                            'items': flat_module_entry,
-                            'maxItems': MAX_GENERATED_MODULES,
-                        },
-                        'patch': {'type': ['object', 'null']},
-                        # Sub-phase 2 — document-level CSS actions.
-                        'enabled': {'type': ['boolean', 'null']},
-                        'css': {'type': ['string', 'null']},
-                        # Sub-phase 4 — document-level title/subject/favicon.
-                        'value': {'type': ['string', 'null']},
-                        'url': {'type': ['string', 'null']},
-                        # Sub-phase 7 — COMPOSE_EMAIL's ordered plan.
-                        'items': {
-                            'type': ['array', 'null'],
-                            'items': composition_item,
-                            'maxItems': MAX_COMPOSITION_ITEMS,
-                        },
-                        # D4-E3 item 7/8 — BATCH_UPDATE's two halves, always
-                        # against the currently selected module (same
-                        # `target: 'selected'` as UPDATE_MODULE_PROPS/
-                        # UPDATE_MODULE_SETTINGS): props_patch for
-                        # color/text/align/size-shaped fields, settings_patch
-                        # for the nested desktop.padding* shape. Use ONLY
-                        # when the user asked for BOTH kinds of change on
-                        # the SAME module in one message — a single-kind
-                        # request still uses the existing single-purpose
-                        # action type, never BATCH_UPDATE with one half null.
-                        'props_patch': {'type': ['object', 'null']},
-                        'settings_patch': {'type': ['object', 'null']},
-                        # D4-E3G — MULTI_MODULE_UPDATE's cross-module
-                        # operations list. Every target_module_id here MUST
-                        # come from context.resolved_targets (never
-                        # invented) — validate_action() independently drops
-                        # any operation whose target_module_id/module_type
-                        # does not survive re-validation, so this is
-                        # defense-in-depth, not the only gate.
-                        'operations': {
-                            'type': ['array', 'null'],
-                            'items': multi_module_operation_entry,
-                            'maxItems': MAX_MULTI_MODULE_OPERATIONS,
-                        },
-                    },
-                    'required': [
-                        'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
-                        'props_patch', 'settings_patch', 'operations',
-                    ],
+                    'properties': action_properties,
+                    'required': action_required,
                     'additionalProperties': False,
                 },
                 # R4-B3 §D — the bounded tool loop. Non-null ONLY when
@@ -868,6 +949,25 @@ def _local_ai_client_timeout():
     )
 
 
+def _ollama_extra_body():
+    """D4-E3H item 8 — Performance Hardening: pass Ollama's `keep_alive`
+    extension so the model stays resident in memory between AI Engineer
+    turns instead of unloading after Ollama's own default 5-minute idle
+    window (see EMAILBUILDER_LOCAL_AI_KEEP_ALIVE's own settings.py
+    docstring for the cold-reload cost this avoids). Returns {} (no
+    extra_body fields at all) for every runtime OTHER than 'ollama' —
+    never sends a field a non-Ollama OpenAI-compatible server has no
+    defined behavior for. `openai` SDK's `extra_body` parameter merges
+    these keys into the raw JSON request body verbatim; never a second,
+    parallel HTTP client."""
+    if settings.EMAILBUILDER_LOCAL_AI_RUNTIME != 'ollama':
+        return {}
+    keep_alive = settings.EMAILBUILDER_LOCAL_AI_KEEP_ALIVE
+    if not keep_alive:
+        return {}
+    return {'keep_alive': keep_alive}
+
+
 class LocalEmailCommandProvider(EmailCommandProvider):
     """Every call is timeout-bounded and rate-limited independently of the
     view's own general throttle, same posture as OpenAIEmailCommandProvider.
@@ -971,6 +1071,11 @@ class LocalEmailCommandProvider(EmailCommandProvider):
         # only after the bound is reached does this degrade the action to
         # NONE (the reply/knowledge/explanation the model already gave
         # stays intact; only the STRUCTURED MUTATION is dropped).
+        # D4-E3H item 1 — computed once per request, not per repair/tool-
+        # loop attempt (the schema never changes mid-request); see
+        # _action_schema()'s own docstring for why omitting `operations`
+        # here is always safe when resolved_targets is absent.
+        action_json_schema = _action_schema(include_operations=bool(safe_context.get('resolved_targets')))
         for repair_attempt in range(_MAX_REPAIR_ATTEMPTS):
             # R4-B3 §D — bounded tool loop. Every iteration is the SAME
             # request shape (json_schema, same messages list grown by
@@ -986,8 +1091,9 @@ class LocalEmailCommandProvider(EmailCommandProvider):
                         model=settings.EMAILBUILDER_LOCAL_AI_MODEL,
                         max_completion_tokens=settings.EMAILBUILDER_AI_COMMAND_MAX_OUTPUT_TOKENS,
                         timeout=_local_ai_client_timeout(),
-                        response_format={'type': 'json_schema', 'json_schema': _action_schema()},
+                        response_format={'type': 'json_schema', 'json_schema': action_json_schema},
                         messages=messages,
+                        extra_body=_ollama_extra_body(),
                     )
                     elapsed_ms += (time.perf_counter() - started) * 1000
                 except APITimeoutError as exc:
@@ -1040,6 +1146,11 @@ class LocalEmailCommandProvider(EmailCommandProvider):
 
             validated = validate_action(raw_action)
             if validated is not None:
+                if repair_attempt > 0:
+                    # D4-E3H §20 — this round SUCCEEDED after at least one
+                    # earlier failed attempt — a genuine repair recovery,
+                    # never counted for an ordinary first-attempt success.
+                    local_ai_diagnostics.record_repair_success()
                 break  # a real, schema-valid action — done
 
             if repair_attempt == _MAX_REPAIR_ATTEMPTS - 1:
@@ -1052,6 +1163,11 @@ class LocalEmailCommandProvider(EmailCommandProvider):
 
             failure_description = describe_action_validation_failure(raw_action, validated)
             repaired = True
+            # D4-E3H §20 — one extra completion round is ABOUT to run
+            # because THIS attempt's action failed validation — see
+            # settings.py's own EMAILBUILDER_LOCAL_AI_GENERATION_TIMEOUT_SECONDS
+            # docstring for exactly what each extra round costs.
+            local_ai_diagnostics.record_repair_attempt()
             messages.append({'role': 'assistant', 'content': json.dumps(raw)})
             messages.append({
                 'role': 'system',
@@ -1091,6 +1207,20 @@ class LocalEmailCommandProvider(EmailCommandProvider):
             else:
                 validated_successfully = False
                 raw_action = {'type': ActionType.NONE}
+
+        if raw_action.get('type') == ActionType.NONE:
+            # D4-E3H §20 — the LLM tier's final answer for this turn is
+            # NONE: a real clarifying question, an honest decline, or a
+            # pure Q&A answer with nothing to mutate — never counted when
+            # a real action survives to this point.
+            local_ai_diagnostics.record_clarification()
+        if isinstance(safe_context.get('import_reconstruction'), dict):
+            # D4-E3H §20/§16 — this call's context genuinely carried
+            # attachment/import-derived facts (see _build_safe_import_
+            # reconstruction) — evidence the LLM tier is actually USING
+            # that already-extracted, provenance-aware context, not just
+            # wired but unused.
+            local_ai_diagnostics.record_attachment_grounded_response()
 
         reply_text = str(raw.get('reply') or '')
         # D4-E1 item 7 — bounded local relocalization pass: if the user's
@@ -1177,6 +1307,7 @@ def localize_reply(english_text, language, client_factory=None):
                 {'role': 'system', 'content': _LOCALIZATION_SYSTEM_PROMPT.format(language=_LANGUAGE_NAMES[language])},
                 {'role': 'user', 'content': english_text},
             ],
+            extra_body=_ollama_extra_body(),
         )
         translated = completion.choices[0].message.content
     except Exception as exc:  # noqa: BLE001 - best-effort only, never leak provider/network internals

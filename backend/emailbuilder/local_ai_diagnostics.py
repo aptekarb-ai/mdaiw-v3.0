@@ -281,6 +281,26 @@ _session_stats = {
     # unsupported" vs. LLM tier: "the model tried to change something you
     # never asked for") are never conflated in diagnostics.
     'scope_creep_operations_stripped': 0,
+    # D4-E3H §20 — new counters. Several of the checkpoint's requested
+    # names already exist under a different, established name in this
+    # file (deterministic_resolutions -> llm_calls_avoided_by_deterministic,
+    # llm_required -> llm_calls_required, llm_success ->
+    # llm_successful_completions, llm_timeout -> llm_timeouts, llm_failure
+    # -> llm_failures, unsupported_requests ->
+    # user_requested_unsupported_operations, knowledge_grounded_responses/
+    # cross_module_plans already exist verbatim) — reused as-is, never
+    # duplicated under a second name (see the D4-E3H final report's own
+    # explicit mapping table). llm_first_token_latency_ms is NOT added:
+    # this provider uses non-streaming completions.create() calls (see
+    # ai_command_local.py's own resolve()), so only a single, total
+    # latency is ever genuinely measurable — a first-token figure would
+    # have to be fabricated, which this app never does for diagnostics.
+    'conversation_turns': 0,
+    'repair_attempts': 0,
+    'repair_successes': 0,
+    'clarifications': 0,
+    'contextual_reference_resolutions': 0,
+    'attachment_grounded_responses': 0,
 }
 
 # Kept OUTSIDE _session_stats (list, not a number) so
@@ -446,6 +466,80 @@ def record_scope_creep_stripped(count):
         logger.info('emailbuilder.local_ai_diagnostics.record_scope_creep_stripped_failed')
 
 
+def record_conversation_turn():
+    """D4-E3H §20 — called exactly once per AI Engineer request, at the
+    ONE choke point every request passes through regardless of which
+    provider ultimately answers it (see views.py::EmailAICommandView.post's
+    own call site) — the denominator every other per-turn counter in this
+    module is implicitly a fraction of. Best-effort — never raises."""
+    try:
+        _session_stats['conversation_turns'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_conversation_turn_failed')
+
+
+def record_repair_attempt():
+    """D4-E3H §20 — called once per EXTRA repair-loop round the local/
+    OpenAI provider actually executes beyond the first completion (i.e.
+    once per repair round, not once per turn) — see
+    _MAX_REPAIR_ATTEMPTS's own docstring for the bound. Best-effort —
+    never raises."""
+    try:
+        _session_stats['repair_attempts'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_repair_attempt_failed')
+
+
+def record_repair_success():
+    """D4-E3H §20 — called once when a repair round actually RECOVERED a
+    schema-valid action after at least one earlier failed attempt (never
+    called for a first-attempt success, which is not a repair at all).
+    Best-effort — never raises."""
+    try:
+        _session_stats['repair_successes'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_repair_success_failed')
+
+
+def record_clarification():
+    """D4-E3H §20 — called once whenever the LLM tier's FINAL action for
+    a turn is NONE (a real clarifying question, honest decline, or pure
+    answer with nothing to mutate) — the direct evidence for "does the
+    residual reasoning tier actually know when NOT to guess." Best-effort
+    — never raises."""
+    try:
+        _session_stats['clarifications'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_clarification_failed')
+
+
+def record_contextual_reference_resolution():
+    """D4-E3H §20/§4 — called once when the frontend's own reference
+    resolver (referenceResolver.ts's resolveReference/resolveMultipleReferences)
+    already resolved an anaphoric/follow-up reference ("it", "the other
+    one", "do the same") for this turn — see serializers.py's
+    `reference_resolved` field, set by AIEngineerPanel.tsx only when its
+    own resolvedModuleOverrideRef/multi-target resolution actually fired.
+    Best-effort — never raises."""
+    try:
+        _session_stats['contextual_reference_resolutions'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_contextual_reference_resolution_failed')
+
+
+def record_attachment_grounded_response():
+    """D4-E3H §20/§16 — called once when the LLM tier was actually
+    consulted WITH import_reconstruction/attachment-derived context
+    present in safe_context — the direct evidence the already-extracted,
+    provenance-aware EmailBrief/reconstruction facts are genuinely being
+    used at runtime, not just wired but unused. Best-effort — never
+    raises."""
+    try:
+        _session_stats['attachment_grounded_responses'] += 1
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_attachment_grounded_response_failed')
+
+
 def record_knowledge_rules_used(rule_ids):
     """D4-E3 item 5 — called whenever a response (deterministic explain-
     branch OR LLM-tier `knowledge` context injection) was grounded in one
@@ -485,6 +579,11 @@ def get_session_stats():
         'llm_timeouts': _session_stats['llm_timeouts'],
         'llm_failures': _session_stats['llm_failures'],
         'max_llm_latency_ms': _session_stats['max_llm_latency_ms'] or None,
+        # D4-E3H §20 — exposes the SAME internal total_latency_ms
+        # already tracked (average_latency_ms above already divides by
+        # total_calls) — never a second, parallel latency-tracking
+        # mechanism, just the raw sum surfaced directly.
+        'llm_total_latency_ms': round(_session_stats['total_latency_ms'], 1) if _session_stats['total_latency_ms'] else None,
         'knowledge_grounded_responses': _session_stats['knowledge_grounded_responses'],
         'recent_knowledge_rule_ids': list(_recent_knowledge_rule_ids),
         'cross_module_plans': _session_stats['cross_module_plans'],
@@ -495,6 +594,12 @@ def get_session_stats():
         'unresolved_target_references': _session_stats['unresolved_target_references'],
         'user_requested_unsupported_operations': _session_stats['user_requested_unsupported_operations'],
         'scope_creep_operations_stripped': _session_stats['scope_creep_operations_stripped'],
+        'conversation_turns': _session_stats['conversation_turns'],
+        'repair_attempts': _session_stats['repair_attempts'],
+        'repair_successes': _session_stats['repair_successes'],
+        'clarifications': _session_stats['clarifications'],
+        'contextual_reference_resolutions': _session_stats['contextual_reference_resolutions'],
+        'attachment_grounded_responses': _session_stats['attachment_grounded_responses'],
     }
 
 

@@ -148,6 +148,11 @@ class EmailAICommandView(APIView):
         serializer = EmailAICommandRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        # D4-E3H §20 — the ONE choke point every AI Engineer turn passes
+        # through, regardless of which provider ultimately answers it.
+        local_ai_diagnostics.record_conversation_turn()
+        if data.get('reference_resolved'):
+            local_ai_diagnostics.record_contextual_reference_resolution()
 
         safe_context = {
             'selected_module': data.get('selected_module'),

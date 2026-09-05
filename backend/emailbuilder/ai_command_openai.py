@@ -210,16 +210,26 @@ _SYSTEM_PROMPT = (
     'GET_SELECTED_MODULE, GET_SELECTED_COLUMN, GET_DOCUMENT_SUMMARY, GET_EMAIL_SETTINGS, '
     'GET_VALIDATION_REPORT, GET_IMPORT_RECONSTRUCTION, GET_MODULE_CAPABILITIES (args: {"module_type": '
     '"..."}), or COMPARE_RECONSTRUCTION. You get at most a few such requests before you must answer with '
-    'whatever you have; never request the same tool twice in a row.'
+    'whatever you have; never request the same tool twice in a row. '
+    # D4-E3H item 1/2 — parity with ai_command_local.py's own _QA_VS_ACTION_GUIDANCE
+    # (see that module's own comment on the repair-loop waste this closes).
+    'If the user is only asking a question, asking you to explain something, or making a statement '
+    'with no requested change, action.type MUST be NONE and `reply` carries your full answer — never '
+    'attempt an uncertain mutation just to have something in `action`. If the user both asks something '
+    'AND requests a change in the same message ("why is this inconsistent, and fix it"), answer the '
+    'question in `reply` AND still propose the real action, when you can determine it safely — do not '
+    'silently drop either half.'
 )
 
 
-def _action_schema():
+def _action_schema(include_operations=True):
     """Built lazily (not at import time) from the SAME generated module
     manifest ai_command.py's own validate_action() reads — mirrors
-    ai_command_local.py::_action_schema() exactly; the two optional
-    providers never maintain two different notions of "which module
-    types/props exist."""
+    ai_command_local.py::_action_schema() exactly, including the
+    `include_operations` parameter and its identical safety reasoning
+    (see that function's own docstring) — the two optional providers
+    never maintain two different notions of "which module types/props
+    exist," or two different schema-shaping rules."""
     all_types = sorted(module_capabilities.get_all_module_types())
     flat_module_entry = {
         'type': 'object',
@@ -269,6 +279,52 @@ def _action_schema():
         'required': ['target_module_id', 'module_type', 'props_patch', 'settings_patch'],
         'additionalProperties': False,
     }
+    action_properties = {
+        'type': {'type': 'string', 'enum': list(ActionType.values)},
+        'target': {'type': ['string', 'null'], 'enum': ['selected', None]},
+        'module_type': {'type': ['string', 'null'], 'enum': all_types + [None]},
+        'modules': {
+            'type': ['array', 'null'],
+            'items': flat_module_entry,
+            'maxItems': MAX_GENERATED_MODULES,
+        },
+        'patch': {'type': ['object', 'null']},
+        # Sub-phase 2 — document-level CSS actions.
+        'enabled': {'type': ['boolean', 'null']},
+        'css': {'type': ['string', 'null']},
+        # Sub-phase 4 — document-level title/subject/favicon.
+        # `value` carries the title or subject text;
+        # validate_action() maps it to the right key
+        # ('title'/'subject') per action type.
+        'value': {'type': ['string', 'null']},
+        'url': {'type': ['string', 'null']},
+        # Sub-phase 7 — COMPOSE_EMAIL's ordered plan.
+        'items': {
+            'type': ['array', 'null'],
+            'items': composition_item,
+            'maxItems': MAX_COMPOSITION_ITEMS,
+        },
+        # D4-E3 item 7/8 — BATCH_UPDATE's two halves — see
+        # ai_command_local.py's own schema comment (mirrored
+        # here, same shape, same posture).
+        'props_patch': {'type': ['object', 'null']},
+        'settings_patch': {'type': ['object', 'null']},
+    }
+    action_required = [
+        'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
+        'props_patch', 'settings_patch',
+    ]
+    if include_operations:
+        # D4-E3G — MULTI_MODULE_UPDATE's cross-module
+        # operations list — see ai_command_local.py's own
+        # schema comment (mirrored here, same shape).
+        action_properties['operations'] = {
+            'type': ['array', 'null'],
+            'items': multi_module_operation_entry,
+            'maxItems': MAX_MULTI_MODULE_OPERATIONS,
+        }
+        action_required.append('operations')
+
     return {
         'name': 'email_ai_command',
         'strict': True,
@@ -279,49 +335,8 @@ def _action_schema():
                 'confidence': {'type': 'number'},
                 'action': {
                     'type': 'object',
-                    'properties': {
-                        'type': {'type': 'string', 'enum': list(ActionType.values)},
-                        'target': {'type': ['string', 'null'], 'enum': ['selected', None]},
-                        'module_type': {'type': ['string', 'null'], 'enum': all_types + [None]},
-                        'modules': {
-                            'type': ['array', 'null'],
-                            'items': flat_module_entry,
-                            'maxItems': MAX_GENERATED_MODULES,
-                        },
-                        'patch': {'type': ['object', 'null']},
-                        # Sub-phase 2 — document-level CSS actions.
-                        'enabled': {'type': ['boolean', 'null']},
-                        'css': {'type': ['string', 'null']},
-                        # Sub-phase 4 — document-level title/subject/favicon.
-                        # `value` carries the title or subject text;
-                        # validate_action() maps it to the right key
-                        # ('title'/'subject') per action type.
-                        'value': {'type': ['string', 'null']},
-                        'url': {'type': ['string', 'null']},
-                        # Sub-phase 7 — COMPOSE_EMAIL's ordered plan.
-                        'items': {
-                            'type': ['array', 'null'],
-                            'items': composition_item,
-                            'maxItems': MAX_COMPOSITION_ITEMS,
-                        },
-                        # D4-E3 item 7/8 — BATCH_UPDATE's two halves — see
-                        # ai_command_local.py's own schema comment (mirrored
-                        # here, same shape, same posture).
-                        'props_patch': {'type': ['object', 'null']},
-                        'settings_patch': {'type': ['object', 'null']},
-                        # D4-E3G — MULTI_MODULE_UPDATE's cross-module
-                        # operations list — see ai_command_local.py's own
-                        # schema comment (mirrored here, same shape).
-                        'operations': {
-                            'type': ['array', 'null'],
-                            'items': multi_module_operation_entry,
-                            'maxItems': MAX_MULTI_MODULE_OPERATIONS,
-                        },
-                    },
-                    'required': [
-                        'type', 'target', 'module_type', 'modules', 'patch', 'enabled', 'css', 'value', 'url', 'items',
-                        'props_patch', 'settings_patch', 'operations',
-                    ],
+                    'properties': action_properties,
+                    'required': action_required,
                     'additionalProperties': False,
                 },
                 # R4-B3 §D — parity with the local provider's own bounded
@@ -696,6 +711,10 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
             logger.warning('emailbuilder.ai_command_openai.call_failed error=%s', type(exc).__name__)
             raise EmailCommandProviderUnavailable('provider call failed') from exc
 
+        # D4-E3H item 1 — parity with the local provider's own schema-
+        # shaping (see ai_command_local.py::_action_schema()'s docstring).
+        action_json_schema = _action_schema(include_operations=bool(safe_context.get('resolved_targets')))
+
         # R4-B3 §D — parity with the local provider's own bounded tool
         # loop (see ai_command_local.py::resolve()'s own comment).
         raw = None
@@ -706,7 +725,7 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
                     model=settings.EMAILBUILDER_AI_COMMAND_MODEL,
                     max_completion_tokens=settings.EMAILBUILDER_AI_COMMAND_MAX_OUTPUT_TOKENS,
                     timeout=settings.EMAILBUILDER_AI_COMMAND_TIMEOUT_SECONDS,
-                    response_format={'type': 'json_schema', 'json_schema': _action_schema()},
+                    response_format={'type': 'json_schema', 'json_schema': action_json_schema},
                     messages=messages,
                 )
                 elapsed_ms = (time.perf_counter() - started) * 1000
@@ -748,6 +767,12 @@ class OpenAIEmailCommandProvider(EmailCommandProvider):
                 if stripped_fields:
                     logger.info('emailbuilder.ai_command_openai.scope_gate_stripped fields=%s', stripped_fields)
                     local_ai_diagnostics.record_scope_creep_stripped(len(stripped_fields))
+        # D4-E3H §20 — parity with the local provider's own diagnostics
+        # (see ai_command_local.py's own comment on each of these).
+        if raw_action.get('type') == ActionType.NONE:
+            local_ai_diagnostics.record_clarification()
+        if isinstance(safe_context.get('import_reconstruction'), dict):
+            local_ai_diagnostics.record_attachment_grounded_response()
         return CommandResult(
             reply=str(raw.get('reply') or ''),
             action=raw_action,
