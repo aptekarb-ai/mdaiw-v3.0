@@ -147,6 +147,61 @@ const NON_EN_CORRECTION_MARKERS: Record<'hi' | 'es' | 'de', string[]> = {
   de: ['eigentlich', 'stattdessen', 'nein, ich meinte', 'warte, ich meinte'],
 };
 
+// D4-E3L §3 — a SAFE combined transition: "cancel that and make the
+// footer background black" / "apply that, then change the second CTA to
+// red". Splits off a LEADING clause on a plain connector ("and"/"then"/
+// a comma) and re-checks THAT CLAUSE ALONE against the exact same
+// confirm/reject vocabulary matchProposalResponse() and undo-family
+// matching already use for a bare "yes"/"cancel that" — never a new
+// confirm/reject vocabulary of its own. The caller (AIEngineerPanel.tsx)
+// is responsible for actually invoking the existing Apply/Cancel handler
+// for the matched half and then processing the remainder exactly like
+// any other ordinary new turn — this function only ever classifies text,
+// it never mutates anything itself. Returns null for a message that
+// isn't a genuine "resolve-then-continue" combination — including a
+// remainder so short/empty it cannot plausibly be a real new instruction
+// (avoids treating "cancel that, then" or "apply it and" as combined).
+export interface CombinedProposalTransition {
+  kind: 'confirm' | 'reject';
+  remainder: string;
+}
+
+const COMBINED_CONNECTOR_RE = /^\s*(.+?)\s*(?:,?\s+(?:and|then)\s+|,\s+)(.+?)\s*$/i;
+
+// D4-E3L §3 — the leading clause is checked against the SAME reject
+// signal AIEngineerPanel.tsx's own pending-block already uses for a
+// bare rejection (matchUndoIntent()'s cancel/revert/restore family OR
+// matchProposalResponse()'s own 'reject'), passed in by the caller
+// rather than imported directly — undoIntentMatcher.ts is a peer module
+// with no dependency on this file today, and keeping it that way (via
+// this small injected-predicate seam) avoids this module quietly
+// growing a second, wider import surface for what is really a one-line
+// check the caller already has on hand.
+export function matchCombinedProposalTransition(
+  message: string,
+  isRejectClause: (clause: string) => boolean,
+): CombinedProposalTransition | null {
+  const text = (message ?? '').trim();
+  if (!text) return null;
+  const split = text.match(COMBINED_CONNECTOR_RE);
+  if (!split) return null;
+  const [, leading, remainder] = split;
+  if (!leading || !remainder || remainder.trim().length < 3) return null;
+  // D4-E3L §3 hardening — a real defect found via testing: "yes, apply
+  // it" and "Never mind, cancel that." both contain a bare comma
+  // connector, but neither is a genuine two-part instruction — each is
+  // ONE confirm/reject utterance that merely happens to restate itself
+  // across the comma ("apply it" restates "yes"; "cancel that" restates
+  // "never mind"). The distinguishing signal: a genuine combined
+  // transition's remainder is an ORDINARY new command, never itself a
+  // confirm/reject/undo phrase. Declining here — rather than only
+  // checking the LEADING clause — is what correctly tells these apart.
+  if (isRejectClause(remainder) || matchProposalResponse(remainder) === 'confirm') return null;
+  if (isRejectClause(leading)) return { kind: 'reject', remainder };
+  if (matchProposalResponse(leading) === 'confirm') return { kind: 'confirm', remainder };
+  return null;
+}
+
 export function isProposalCorrection(message: string): boolean {
   const text = (message ?? '').trim();
   if (!text) return false;

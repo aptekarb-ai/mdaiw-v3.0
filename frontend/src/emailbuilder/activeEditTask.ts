@@ -26,6 +26,15 @@
 // by proposalResponseMatcher.ts and referenceResolver.ts elsewhere in
 // this module — never a second language-detection engine, never a
 // per-function private copy of detectLanguage.
+//
+// D4-E3L §1/§2 — the ordinal/"last" word tables and the Unicode-safe
+// `wb()` boundary helper now live in ordinalReference.ts, the ONE shared
+// table referenceResolver.ts's own multilingual target resolution also
+// draws from — this file no longer keeps a private copy of either.
+
+import {
+  LAST_WORD_ALT, ORDINAL_ALT, ordinalIndexFor, wb, WB_AFTER, WB_BEFORE,
+} from './ordinalReference';
 
 export interface ActiveEditTaskContext {
   /** Real module ids this task's most recent resolved action targeted. */
@@ -58,23 +67,6 @@ const DEVANAGARI_RE = /[ऀ-ॿ]/;
 const HINGLISH_MARKERS = new Set(['karo', 'kardo', 'kar', 'karna', 'kariye', 'bhi', 'usko', 'wahi', 'vahi', 'yehi', 'sirf', 'bhala', 'nahi', 'nahin', 'dusre', 'doosre']);
 const ES_STOPWORDS = new Set(['el', 'la', 'los', 'las', 'un', 'una', 'de', 'del', 'que', 'para', 'con', 'por', 'como', 'está', 'esta', 'también', 'tambien', 'mismo', 'solo', 'sólo', 'ademas', 'además', 'haz', 'cambies', 'excepto']);
 const DE_STOPWORDS = new Set(['der', 'die', 'das', 'ein', 'eine', 'und', 'ist', 'sind', 'mit', 'für', 'auf', 'zu', 'von', 'nicht', 'auch', 'gleiche', 'gleichen', 'nur', 'außerdem', 'ausserdem', 'mach', 'ändern', 'lass']);
-
-// D4-E3K hardening pass §1 — JS's native `\b` is defined purely in terms
-// of ASCII `\w` ([A-Za-z0-9_]); it is silently unreliable at a Devanagari
-// (or accented-Latin) word edge, since neither the script character nor
-// the adjacent whitespace counts as "word" to it — `\b` can assert FALSE
-// exactly where a real boundary exists. `wb()` builds a Unicode-aware
-// boundary via lookaround instead (requires the 'u' flag on the
-// resulting RegExp, already used everywhere this is called), so every
-// non-English pattern in this file gets a boundary that actually works
-// for its own script — never a second matching engine, just a correct
-// boundary primitive for the ONE existing per-language marker/pattern
-// approach.
-const WB_BEFORE = '(?<![\\p{L}\\p{N}])';
-const WB_AFTER = '(?![\\p{L}\\p{N}])';
-function wb(alternation: string): string {
-  return `${WB_BEFORE}(?:${alternation})${WB_AFTER}`;
-}
 
 function detectLanguage(text: string): SupportedLanguage {
   if (DEVANAGARI_RE.test(text)) return 'hi';
@@ -234,45 +226,48 @@ export function extractPreservationPhrase(message: string): string | null {
 //
 // D4-E3K hardening pass §1 — the ordinal-narrowing path ("only the
 // first/second one") is extended to Hindi/Spanish/German via the SAME
-// detectLanguage() + a small closed per-language ordinal/marker table;
-// NOT_FIRST_THEN_RE and LEAVE_OUT_RE (the two rarer, more English-
-// grammar-specific phrasings) remain English-only — a disclosed,
-// bounded scope limit (see the D4-E3K report) rather than a silent gap.
-const ORDINAL_INDEX: Record<string, number> = {
-  first: 0, '1st': 0, one: 0, second: 1, '2nd': 1, two: 1, third: 2, '3rd': 2, three: 2,
-  pehla: 0, pehli: 0, pahla: 0, ek: 0, 'पहला': 0, 'पहली': 0, 'एक': 0,
-  doosra: 1, dusra: 1, doosri: 1, dusri: 1, do: 1, 'दूसरा': 1, 'दूसरी': 1, 'दो': 1,
-  teesra: 2, tisra: 2, teen: 2, 'तीसरा': 2, 'तीन': 2,
-  primero: 0, primera: 0, uno: 0,
-  segundo: 1, segunda: 1, dos: 1,
-  tercero: 2, tercera: 2, tres: 2,
-  erste: 0, ersten: 0, erster: 0, eins: 0,
-  zweite: 1, zweiten: 1, zweiter: 1, zwei: 1,
-  dritte: 2, dritten: 2, dritter: 2, drei: 2,
-};
-const ORDINAL_ALT: Record<SupportedLanguage, string> = {
-  en: 'first|1st|one|second|2nd|two|third|3rd|three',
-  hi: 'pehla|pehli|pahla|ek|पहला|पहली|एक|doosra|dusra|doosri|dusri|do|दूसरा|दूसरी|दो|teesra|tisra|teen|तीसरा|तीन',
-  es: 'primero|primera|uno|segundo|segunda|dos|tercero|tercera|tres',
-  de: 'erste|ersten|erster|eins|zweite|zweiten|zweiter|zwei|dritte|dritten|dritter|drei',
-};
+// detectLanguage() + a small closed per-language ordinal/marker table
+// (now shared with referenceResolver.ts via ordinalReference.ts — see
+// this file's own top-of-file comment); NOT_FIRST_THEN_RE and
+// LEAVE_OUT_RE (the two rarer, more English-grammar-specific phrasings)
+// remain English-only — a disclosed, bounded scope limit (see the
+// D4-E3L report) rather than a silent gap.
+//
+// D4-E3L §2 — "keep only the last button"/"remove the last one" now
+// narrows too: each language's ordinal alternation is unioned with its
+// own LAST_WORD_ALT entry, and the captured word is resolved via
+// ordinalIndexFor() (candidateCount-aware — "last" always means the
+// REAL last target, never a fixed index) instead of a plain table
+// lookup.
 const ONLY_MARKER_ALT: Record<SupportedLanguage, string> = {
   en: 'only|just',
   hi: 'sirf|सिर्फ|केवल|kewal|bas',
   es: 'solo|sólo|solamente|únicamente|unicamente',
   de: 'nur|lediglich',
 };
-// "only change the first one" / "sirf pehla wala rakho" — allow a few
-// filler tokens between the "only" marker and the ordinal itself so this
-// binds across an intervening verb, never past the NEAREST ordinal.
-const ONLY_ORDINAL_RE_BY_LANG: Record<SupportedLanguage, RegExp> = {
-  en: new RegExp(`\\b(?:${ONLY_MARKER_ALT.en})\\s+(?:\\S+\\s+){0,3}?(${ORDINAL_ALT.en})\\b`, 'i'),
-  hi: new RegExp(`${wb(ONLY_MARKER_ALT.hi)}\\s+(?:\\S+\\s+){0,3}?(${WB_BEFORE}(?:${ORDINAL_ALT.hi})${WB_AFTER})`, 'iu'),
-  es: new RegExp(`${wb(ONLY_MARKER_ALT.es)}\\s+(?:\\S+\\s+){0,3}?(${WB_BEFORE}(?:${ORDINAL_ALT.es})${WB_AFTER})`, 'iu'),
-  de: new RegExp(`${wb(ONLY_MARKER_ALT.de)}\\s+(?:\\S+\\s+){0,3}?(${WB_BEFORE}(?:${ORDINAL_ALT.de})${WB_AFTER})`, 'iu'),
+const ORDINAL_OR_LAST_ALT: Record<SupportedLanguage, string> = {
+  en: `${ORDINAL_ALT.en}|${LAST_WORD_ALT.en}`,
+  hi: `${ORDINAL_ALT.hi}|${LAST_WORD_ALT.hi}`,
+  es: `${ORDINAL_ALT.es}|${LAST_WORD_ALT.es}`,
+  de: `${ORDINAL_ALT.de}|${LAST_WORD_ALT.de}`,
 };
-const NOT_FIRST_THEN_RE = /\bnot\s+the\s+(first|1st|second|2nd|third|3rd)\s+(?:one)?,?\s+(?:the\s+)?(first|1st|second|2nd|third|3rd)\b/i;
+// "only change the first one" / "sirf pehla wala rakho" / "keep only the
+// last one" — allow a few filler tokens between the "only" marker and
+// the ordinal/"last" word itself so this binds across an intervening
+// verb, never past the NEAREST match.
+const ONLY_ORDINAL_RE_BY_LANG: Record<SupportedLanguage, RegExp> = {
+  en: new RegExp(`\\b(?:${ONLY_MARKER_ALT.en})\\s+(?:\\S+\\s+){0,3}?(${ORDINAL_OR_LAST_ALT.en})\\b`, 'i'),
+  hi: new RegExp(`${wb(ONLY_MARKER_ALT.hi)}\\s+(?:\\S+\\s+){0,3}?(${WB_BEFORE}(?:${ORDINAL_OR_LAST_ALT.hi})${WB_AFTER})`, 'iu'),
+  es: new RegExp(`${wb(ONLY_MARKER_ALT.es)}\\s+(?:\\S+\\s+){0,3}?(${WB_BEFORE}(?:${ORDINAL_OR_LAST_ALT.es})${WB_AFTER})`, 'iu'),
+  de: new RegExp(`${wb(ONLY_MARKER_ALT.de)}\\s+(?:\\S+\\s+){0,3}?(${WB_BEFORE}(?:${ORDINAL_OR_LAST_ALT.de})${WB_AFTER})`, 'iu'),
+};
+const NOT_FIRST_THEN_RE = /\bnot\s+the\s+(first|1st|second|2nd|third|3rd|last)\s+(?:one)?,?\s+(?:the\s+)?(first|1st|second|2nd|third|3rd|last)\b/i;
 const LEAVE_OUT_RE = /\bleave\s+(?:the\s+)?([a-z0-9\s]+?)\s+(?:one\s+)?out\b/i;
+// D4-E3L §2 — "remove the footer CTA from that change" / "don't change
+// the first one" as an EXPLICIT-target-drop phrasing distinct from
+// LEAVE_OUT_RE's own "leave X out" grammar — matched against the SAME
+// remembered target labels, never a second label-matching engine.
+const DROP_NAMED_RE = /\bremove\s+(?:the\s+)?([a-z0-9\s]+?)\s+from\s+(?:that|this|the)\s+change\b|\bdon'?t\s+change\s+the\s+([a-z0-9\s]+?)(?:\s+one)?\b(?!\s+(?:as|unchanged))/i;
 
 export interface NarrowResult {
   keepIndices: number[];
@@ -284,16 +279,15 @@ export function tryNarrowPendingOperations(message: string, targetLabels: string
 
   const notFirstThen = text.match(NOT_FIRST_THEN_RE);
   if (notFirstThen) {
-    const keepIndex = ORDINAL_INDEX[notFirstThen[2].toLowerCase()];
-    if (keepIndex !== undefined && keepIndex < targetLabels.length) return { keepIndices: [keepIndex] };
+    const keepIndex = ordinalIndexFor(notFirstThen[2], targetLabels.length);
+    if (keepIndex !== undefined) return { keepIndices: [keepIndex] };
   }
 
   const language = detectLanguage(text);
   const onlyMatch = text.match(ONLY_ORDINAL_RE_BY_LANG[language]);
-  if (onlyMatch) {
-    const word = onlyMatch[1]?.toLowerCase();
-    const keepIndex = word ? ORDINAL_INDEX[word] : undefined;
-    if (keepIndex !== undefined && keepIndex < targetLabels.length) return { keepIndices: [keepIndex] };
+  if (onlyMatch?.[1]) {
+    const keepIndex = ordinalIndexFor(onlyMatch[1], targetLabels.length);
+    if (keepIndex !== undefined) return { keepIndices: [keepIndex] };
   }
 
   const leaveOut = text.match(LEAVE_OUT_RE);
@@ -302,6 +296,17 @@ export function tryNarrowPendingOperations(message: string, targetLabels: string
     const matchIndex = targetLabels.findIndex((label) => label.toLowerCase().includes(namedWord));
     if (matchIndex >= 0) {
       return { keepIndices: targetLabels.map((_, i) => i).filter((i) => i !== matchIndex) };
+    }
+  }
+
+  const dropNamed = text.match(DROP_NAMED_RE);
+  if (dropNamed) {
+    const namedWord = (dropNamed[1] ?? dropNamed[2] ?? '').trim().toLowerCase();
+    if (namedWord) {
+      const matchIndex = targetLabels.findIndex((label) => label.toLowerCase().includes(namedWord));
+      if (matchIndex >= 0) {
+        return { keepIndices: targetLabels.map((_, i) => i).filter((i) => i !== matchIndex) };
+      }
     }
   }
 

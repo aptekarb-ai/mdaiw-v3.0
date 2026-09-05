@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isProposalCorrection, matchProposalResponse } from './proposalResponseMatcher';
+import { isProposalCorrection, matchCombinedProposalTransition, matchProposalResponse } from './proposalResponseMatcher';
+import { matchUndoIntent } from './undoIntentMatcher';
 
 describe('matchProposalResponse — confirmation (English)', () => {
   it.each([
@@ -130,5 +131,56 @@ describe('matchProposalResponse — German', () => {
   });
   it.each(['vergiss es', 'lass es', 'abbrechen'])('matches %j as reject', (phrase) => {
     expect(matchProposalResponse(phrase)).toBe('reject');
+  });
+});
+
+// D4-E3L §3 — safe "resolve current proposal, then continue with a new
+// instruction" combined transitions. isRejectClause mirrors exactly what
+// AIEngineerPanel.tsx's own pending-block already checks for a bare
+// rejection (matchUndoIntent OR matchProposalResponse === 'reject').
+function isRejectClause(clause: string): boolean {
+  return matchUndoIntent(clause) || matchProposalResponse(clause) === 'reject';
+}
+
+describe('matchCombinedProposalTransition', () => {
+  it('"cancel that and make the footer background black" splits into reject + remainder', () => {
+    const result = matchCombinedProposalTransition('cancel that and make the footer background black', isRejectClause);
+    expect(result).toEqual({ kind: 'reject', remainder: 'make the footer background black' });
+  });
+
+  it('"apply that, then change the second CTA to red" splits into confirm + remainder', () => {
+    const result = matchCombinedProposalTransition('apply that, then change the second CTA to red', isRejectClause);
+    expect(result).toEqual({ kind: 'confirm', remainder: 'change the second CTA to red' });
+  });
+
+  it('"never mind, make the footer background black" (comma connector, no and/then) also splits', () => {
+    const result = matchCombinedProposalTransition('never mind, make the footer background black', isRejectClause);
+    expect(result).toEqual({ kind: 'reject', remainder: 'make the footer background black' });
+  });
+
+  it('a plain rejection with no remainder is not a combined transition', () => {
+    expect(matchCombinedProposalTransition('cancel that', isRejectClause)).toBeNull();
+  });
+
+  it('a plain new-task message with "and" in it, but no confirm/reject leading clause, is not combined', () => {
+    expect(matchCombinedProposalTransition('make the hero heading bigger and the footer darker', isRejectClause)).toBeNull();
+  });
+
+  it('a trailing remainder too short to be a real instruction is declined', () => {
+    expect(matchCombinedProposalTransition('cancel that and ok', isRejectClause)).toBeNull();
+  });
+
+  it('an empty message returns null', () => {
+    expect(matchCombinedProposalTransition('', isRejectClause)).toBeNull();
+  });
+
+  // Real defects found via full-suite regression: a bare comma inside a
+  // SINGLE confirm/reject utterance must never be misread as two parts.
+  it('"yes, apply it" is a single confirmation, not a combined transition', () => {
+    expect(matchCombinedProposalTransition('yes, apply it', isRejectClause)).toBeNull();
+  });
+
+  it('"Never mind, cancel that." is a single rejection, not a combined transition', () => {
+    expect(matchCombinedProposalTransition('Never mind, cancel that.', isRejectClause)).toBeNull();
   });
 });

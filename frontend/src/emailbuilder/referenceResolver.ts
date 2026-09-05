@@ -1,6 +1,9 @@
 import type { EmailModule } from './edm';
 import { isLayoutModuleType } from './layoutModel';
 import type { AICommandImportReconstructionContext } from './aiCommand';
+import {
+  LAST_WORD_ALT_ANY_LANGUAGE, ORDINAL_ALT_ANY_LANGUAGE, ordinalIndexFor, WB_BEFORE,
+} from './ordinalReference';
 
 // R4-B3 §B — the Referential Context Resolver R4-B2's own report
 // identified as missing. Resolves referring expressions ("it", "this
@@ -204,9 +207,15 @@ export function resolveReference(ctx: ReferentialResolutionContext): Referential
   // disambiguate, not an error) rather than fabricating a target.
   const ordinalTypedMatch = message.match(ORDINAL_TYPED_RE);
   if (ordinalTypedMatch) {
-    const index = ORDINAL_INDEX[ordinalTypedMatch[1].toLowerCase()];
     const word = normalizeTypeWord(ordinalTypedMatch[2]);
     const candidates = candidatesForWord(flat, word);
+    // D4-E3L §1/§2 — ordinalIndexFor() (ordinalReference.ts) resolves the
+    // shared multilingual first/second/third + "last" vocabulary against
+    // the REAL candidate count ("last" is always candidates.length - 1,
+    // never a fixed number); the local ORDINAL_INDEX fallback covers
+    // this file's own English-only fourth/fifth/sixth extension, which
+    // ordinalIndexFor deliberately does not know about.
+    const index = ordinalIndexFor(ordinalTypedMatch[1], candidates.length) ?? ORDINAL_INDEX[ordinalTypedMatch[1].toLowerCase()];
     if (index !== undefined && index < candidates.length) {
       const only = candidates[index];
       return {
@@ -508,9 +517,24 @@ function normalizeTypeWord(word: string): string {
 
 const MULTI_REF_TYPE_WORDS = [...TYPE_WORDS, 'cta', 'ctas', 'buttons'] as const;
 const MULTI_REF_TYPE_WORD_ALT = MULTI_REF_TYPE_WORDS.join('|');
-const MULTI_REF_ORDINAL_ALT = 'first|second|third|fourth|fifth|sixth|1st|2nd|3rd|4th|5th|6th';
+// D4-E3L §1 — unions the canonical multilingual first/second/third + LAST
+// vocabulary (ordinalReference.ts — the SAME table activeEditTask.ts's
+// own pending-proposal narrowing draws from) with this file's own
+// English-only fourth/fifth/sixth extension. Never a per-language
+// branch (this file has no detectLanguage() at all, by design — see its
+// own top-of-file docstring): one alternation that already recognizes
+// every supported language's own wording for the concepts this
+// checkpoint requires, exactly like ARTICLE_FREE_TYPED_RE already does
+// for module-type words.
+const MULTI_REF_ORDINAL_ALT = `${ORDINAL_ALT_ANY_LANGUAGE}|${LAST_WORD_ALT_ANY_LANGUAGE}|fourth|fifth|sixth|4th|5th|6th`;
 
-const ORDINAL_TYPED_RE = new RegExp(`\\b(${MULTI_REF_ORDINAL_ALT})\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+// D4-E3L §1 — leading boundary is the Unicode-safe wb() primitive
+// (ordinalReference.ts) rather than plain `\b`: the ordinal alternation
+// can now start with a Devanagari character, and JS's native `\b` is
+// silently unreliable there (see ordinalReference.ts's own docstring).
+// The trailing `\b` after the type-word group is untouched — module-
+// type words stay Latin-script/English loanwords only.
+const ORDINAL_TYPED_RE = new RegExp(`${WB_BEFORE}(${MULTI_REF_ORDINAL_ALT})\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'iu');
 const BOTH_TYPED_RE = new RegExp(`\\bboth\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
 // D4-E3J §3/§5 — "all CTAs"/"every button"/"all the buttons". Resolves to
 // EVERY candidate of that type (unlike BOTH_TYPED_RE, which only ever
@@ -663,9 +687,9 @@ function resolveSegmentTargets(segment: string, ctx: ReferentialResolutionContex
   // index is actually within range of the real candidates.
   const ordinalMatch = segment.match(ORDINAL_TYPED_RE);
   if (ordinalMatch) {
-    const index = ORDINAL_INDEX[ordinalMatch[1].toLowerCase()];
     const word = normalizeTypeWord(ordinalMatch[2]);
     const candidates = candidatesForWord(flat, word);
+    const index = ordinalIndexFor(ordinalMatch[1], candidates.length) ?? ORDINAL_INDEX[ordinalMatch[1].toLowerCase()];
     if (index !== undefined && index < candidates.length) {
       const only = candidates[index];
       return {
@@ -746,7 +770,10 @@ export function resolveMultipleReferences(ctx: ReferentialResolutionContext): Mu
 const EXCLUSION_TYPE_WORDS = ['button', 'image', 'hero', 'header', 'footer', 'divider', 'spacer', 'module'] as const;
 const EXCLUSION_TYPE_WORD_ALT = [...EXCLUSION_TYPE_WORDS, 'cta', 'ctas', 'buttons'].join('|');
 
-const EXCLUSION_ORDINAL_TYPED_RE = new RegExp(`\\b(${MULTI_REF_ORDINAL_ALT})\\s+(${EXCLUSION_TYPE_WORD_ALT})\\b`, 'i');
+// D4-E3L §1 — leading boundary via wb() (see ORDINAL_TYPED_RE's own
+// comment above for why plain `\b` is unsafe once the ordinal
+// alternation can start with a Devanagari character).
+const EXCLUSION_ORDINAL_TYPED_RE = new RegExp(`${WB_BEFORE}(${MULTI_REF_ORDINAL_ALT})\\s+(${EXCLUSION_TYPE_WORD_ALT})\\b`, 'iu');
 const EXCLUSION_BARE_TYPED_RE = new RegExp(`\\b(${EXCLUSION_TYPE_WORD_ALT})\\b`, 'i');
 const EXCLUSION_BARE_TYPED_RE_GLOBAL = new RegExp(EXCLUSION_BARE_TYPED_RE.source, 'gi');
 
@@ -872,9 +899,9 @@ export function resolveExclusions(ctx: ReferentialResolutionContext): ExclusionR
 
     const ordinalMatch = phrase.match(EXCLUSION_ORDINAL_TYPED_RE);
     if (ordinalMatch) {
-      const index = ORDINAL_INDEX[ordinalMatch[1].toLowerCase()];
       const word = normalizeTypeWord(ordinalMatch[2]);
       const candidates = candidatesForWord(flat, word);
+      const index = ordinalIndexFor(ordinalMatch[1], candidates.length) ?? ORDINAL_INDEX[ordinalMatch[1].toLowerCase()];
       if (index !== undefined && index < candidates.length) {
         const only = candidates[index];
         if (!seen.has(only.id)) {

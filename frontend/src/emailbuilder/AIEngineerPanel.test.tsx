@@ -4011,3 +4011,135 @@ describe('task-boundary matrix — D4-E3K hardening pass §5', () => {
     expect(secondCall.selected_module).toEqual({ type: 'button', id: button.id, props: button.props });
   });
 });
+
+// D4-E3L §3 — safe combined proposal-transition commands, exercised
+// through the real send path end-to-end.
+describe('combined proposal transitions — D4-E3L', () => {
+  beforeEach(() => {
+    vi.mocked(requestAICommand).mockReset();
+  });
+
+  it('"cancel that and make the footer background black" cancels the pending proposal, then resolves the remainder as a genuine new turn', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    const { onApplyAction } = renderPanel({ selectedModule: button, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will set the footer background to black.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'footer-simple-legal', patch: { backgroundColor: '#000000' } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'cancel that and make the footer background black');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // The FULL sentence is what appears in the transcript — never just
+    // the split-off remainder.
+    expect(await screen.findByText('cancel that and make the footer background black')).toBeInTheDocument();
+    // The old proposal was genuinely cancelled — never applied.
+    expect(onApplyAction).not.toHaveBeenCalled();
+    await screen.findAllByText(/footer background to black/i);
+    expect(requestAICommand).toHaveBeenCalledTimes(2);
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    expect(secondCall.message).toBe('make the footer background black');
+  });
+
+  it('"apply that, then change the second CTA to red" applies the pending proposal, then resolves the remainder as a genuine new turn', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    const { onApplyAction } = renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will change the second CTA to red.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#FF0000' } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'apply that, then change the second CTA to red');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // The old proposal was genuinely applied — exactly once.
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+    expect(onApplyAction).toHaveBeenCalledTimes(1);
+    await screen.findAllByText(/change the second CTA to red/i);
+    expect(requestAICommand).toHaveBeenCalledTimes(2);
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    expect(secondCall.message).toBe('change the second CTA to red');
+  });
+
+  it('a strong-confirmation-gated proposal is never silently applied by a combined command', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'This replaces your Custom CSS. Please confirm.',
+      action: { type: 'SET_CUSTOM_CSS', css: 'body { color: red; }' },
+      requires_strong_confirmation: true,
+    }));
+    const { onApplyDocumentSettingAction } = renderPanel({ selectedModule: button, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'replace the custom css');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/replaces your Custom CSS/i);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'apply that, then make the footer black');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/needs the explicit confirmation checkbox/i)).toBeInTheDocument();
+    expect(onApplyDocumentSettingAction).not.toHaveBeenCalled();
+    // The remainder was never processed either — only one backend call
+    // total, for the original CSS proposal.
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('a plain "yes, apply it" is not misread as a combined transition (regression)', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'yes, apply it');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+    expect(onApplyAction).toHaveBeenCalledTimes(1);
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('a plain "Never mind, cancel that." is not misread as a combined transition (regression)', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'Never mind, cancel that.');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Cancelled.');
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+});

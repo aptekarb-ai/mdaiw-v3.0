@@ -26,7 +26,7 @@ import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } fro
 import { toRepairCandidate } from './reconstructionRepairCandidate';
 import { matchReconstructionIntent } from './reconstructionIntentMatcher';
 import { matchUndoIntent } from './undoIntentMatcher';
-import { isProposalCorrection, matchProposalResponse } from './proposalResponseMatcher';
+import { isProposalCorrection, matchCombinedProposalTransition, matchProposalResponse } from './proposalResponseMatcher';
 import {
   classifyTurnRelation, extractPreservationPhrase, isSameTrigger, tryNarrowPendingOperations, type ActiveEditTaskContext,
 } from './activeEditTask';
@@ -1015,6 +1015,60 @@ export function AIEngineerPanel({
       return;
     }
 
+    // D4-E3L §3 — a SAFE combined transition: "cancel that and make the
+    // footer background black" / "apply that, then change the second CTA
+    // to red". Resolves the CURRENT proposal through the exact existing
+    // Apply/Cancel handlers (never a hidden auto-apply/auto-cancel path
+    // of its own), then lets the remainder fall through to the SAME
+    // shared resolution pipeline every ordinary new turn already uses —
+    // achieved by reassigning `message` to the remainder and NOT
+    // returning, exactly like the correction branch above already does.
+    // A strong-confirmation-gated proposal is never silently applied
+    // this way — the user still has to check the box first, same as a
+    // bare "yes, apply it" would require.
+    // Set true only when the combined-transition branch below actually
+    // resolves the CURRENT proposal — guards every remaining pending-
+    // block check further down (all still reading the ORIGINAL `pending`/
+    // `pendingRepair` closure values, since handleCancel()/handleApply()
+    // only schedule a state update, they never mutate this render's own
+    // captured variables) so a just-resolved proposal is never seen as
+    // "still waiting" by the same-trigger/continuation/correction/bounce
+    // checks that run after it in this same call.
+    let pendingResolvedByCombinedTransition = false;
+    if (pending || pendingRepair) {
+      const combined = matchCombinedProposalTransition(
+        message,
+        (clause) => matchUndoIntent(clause) || matchProposalResponse(clause) === 'reject',
+      );
+      if (combined) {
+        // The user's own full sentence ("cancel that and make the footer
+        // background black") is what appears in the transcript — never
+        // just the split-off remainder — appended here, once, before
+        // `message` is reassigned for internal processing only. The
+        // shared appendMessage('user', ...) further below is skipped for
+        // this turn via pendingResolvedByCombinedTransition, so the
+        // remainder is never shown as if it were its own separate turn.
+        appendMessage('user', message);
+        if (overrideMessage === undefined) setDraft('');
+        if (combined.kind === 'reject') {
+          if (pendingRepair) handleCancelRepair(); else handleCancel();
+          message = combined.remainder;
+          pendingResolvedByCombinedTransition = true;
+        } else if (pending?.requiresStrongConfirmation && !strongConfirmChecked) {
+          appendMessage(
+            'assistant',
+            'This change needs the explicit confirmation checkbox below before I can apply it — please check it, then Apply.',
+          );
+          return;
+        } else {
+          if (pendingRepair) handleApplyRepair(); else await handleApply();
+          message = combined.remainder;
+          pendingResolvedByCombinedTransition = true;
+        }
+      }
+    }
+    if (!pendingResolvedByCombinedTransition) {
+
     // D4-E3K completion pass §G — cross-turn "do the same to X": the
     // prior turn's own bounded, already-validated field->value pairs
     // (activeTaskRef) are propagated to a NEWLY named target, still
@@ -1188,9 +1242,16 @@ export function AIEngineerPanel({
       }
       return;
     }
+    }
 
-    appendMessage('user', message);
-    if (overrideMessage === undefined) setDraft('');
+    // D4-E3L §3 — already appended (the full original sentence, before
+    // the split) and already cleared inside the combined-transition
+    // branch above; `message` here is now the REMAINDER, an internal
+    // continuation of the SAME turn, never a second user-visible message.
+    if (!pendingResolvedByCombinedTransition) {
+      appendMessage('user', message);
+      if (overrideMessage === undefined) setDraft('');
+    }
 
     // R4-D Checkpoint D2 — Conversational Undo. Checked before every
     // other local intent matcher and before the backend request path:

@@ -556,6 +556,64 @@ describe('resolveReference — standalone ordinal reference (D4-E3J)', () => {
   });
 });
 
+// D4-E3L §1 — "last" is a genuinely new target-selection concept (never
+// existed even in English before this checkpoint): its resolved index is
+// always the REAL last candidate, computed fresh, never a fixed number.
+describe('resolveReference — "last" target reference (D4-E3L)', () => {
+  it('"make the last CTA green" resolves to whichever candidate is actually last', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveReference(baseContext({ message: 'make the last CTA green', modules: [buttonA, buttonB, buttonC] }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonC.id } });
+  });
+
+  it('"last" still resolves correctly with only one real candidate', () => {
+    const buttonA = mod('button');
+    const result = resolveReference(baseContext({ message: 'make the last button bigger', modules: [buttonA] }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonA.id } });
+  });
+
+  it('never fabricates a target when there are zero real candidates of that type', () => {
+    const text = mod('text');
+    const result = resolveReference(baseContext({ message: 'make the last button green', modules: [text] }));
+    expect(result.status).toBe('no-referring-expression');
+  });
+});
+
+// D4-E3L §1 — the SAME ordinal/"last" vocabulary now recognizes Hindi
+// (Devanagari)/Hinglish/Spanish/German wording for first/second/third/
+// last, reused from ordinalReference.ts — never a per-language branch in
+// this file (see MULTI_REF_ORDINAL_ALT's own docstring).
+describe('resolveReference — multilingual ordinal/"last" target reference (D4-E3L)', () => {
+  it.each([
+    ['English', 'make the second CTA green', 1],
+    ['Hindi (Devanagari)', 'दूसरे CTA को हरा करो', 1],
+    ['Hinglish', 'doosre CTA ko green karo', 1],
+    ['Spanish', 'haz el segundo CTA verde', 1],
+    ['German', 'mach den zweiten CTA grün', 1],
+  ])('%s "second" resolves to the second candidate', (_label, message) => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveReference(baseContext({ message, modules: [buttonA, buttonB] }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonB.id } });
+  });
+
+  it.each([
+    ['English', 'make the last CTA green'],
+    ['Hindi (Devanagari)', 'आख़िरी CTA को हरा करो'],
+    ['Hinglish', 'aakhri CTA ko green karo'],
+    ['Spanish', 'haz el último CTA verde'],
+    ['German', 'mach den letzten CTA grün'],
+  ])('%s "last" resolves to the actual last candidate', (_label, message) => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveReference(baseContext({ message, modules: [buttonA, buttonB, buttonC] }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonC.id } });
+  });
+});
+
 describe('resolveReference — standalone "the other X" reference (D4-E3K)', () => {
   it('resolves the remaining candidate when the antecedent names one of two real modules of that type', () => {
     const buttonA = mod('button');
@@ -761,6 +819,28 @@ describe('resolveExclusions (D4-E3J)', () => {
     const buttonA = mod('button');
     const buttonB = mod('button');
     const result = resolveExclusions(baseContext({ message: 'keep the second CTA unchanged', modules: [buttonA, buttonB] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([buttonB.id]);
+  });
+
+  it('D4-E3L — "keep the last CTA unchanged" excludes the actual last candidate', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveExclusions(baseContext({ message: 'keep the last CTA unchanged', modules: [buttonA, buttonB, buttonC] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([buttonC.id]);
+  });
+
+  it('D4-E3L — Spanish "excepto el segundo CTA" resolves the ordinal exclusion target', () => {
+    // "excepto" itself is pre-existing D4-E3J Spanish exclusion-trigger
+    // support; this test's own point is narrower — that the ORDINAL word
+    // inside the captured phrase ("segundo") now resolves too, which it
+    // did not before this checkpoint (EXCLUSION_ORDINAL_TYPED_RE was
+    // English-only).
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveExclusions(baseContext({ message: 'haz todos los CTA verdes excepto el segundo CTA', modules: [buttonA, buttonB] }));
     expect(result).toMatchObject({ status: 'resolved' });
     if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([buttonB.id]);
   });

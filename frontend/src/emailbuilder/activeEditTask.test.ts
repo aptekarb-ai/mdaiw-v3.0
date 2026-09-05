@@ -132,3 +132,46 @@ describe('tryNarrowPendingOperations — purely subtractive, never invents or ad
     expect(tryNarrowPendingOperations('', labels)).toBeNull();
   });
 });
+
+// D4-E3L §2 — "last" as a narrowing concept, and multilingual narrowing
+// via the SAME shared ordinal/"last" table referenceResolver.ts now also
+// draws from (ordinalReference.ts).
+describe('tryNarrowPendingOperations — "last" and multilingual narrowing (D4-E3L)', () => {
+  const labels = ['the first button module', 'the second button module'];
+  const three = ['the first button module', 'the second button module', 'the third button module'];
+
+  it('"keep only the last button" keeps the actual last index, dynamically', () => {
+    expect(tryNarrowPendingOperations('keep only the last button', three)).toEqual({ keepIndices: [2] });
+  });
+
+  it.each([
+    ['Hindi (Devanagari)', 'सिर्फ आख़िरी वाला रखो'],
+    ['Hinglish', 'sirf aakhri wala rakho'],
+    ['Spanish', 'solo el último'],
+    ['German', 'nur das letzte'],
+  ])('%s "only the last one" keeps the actual last index', (_label, message) => {
+    expect(tryNarrowPendingOperations(message, three)).toEqual({ keepIndices: [2] });
+  });
+
+  it.each([
+    ['Hindi (Devanagari)', 'सिर्फ दूसरा वाला रखो'],
+    ['Hinglish', 'sirf doosra wala rakho'],
+    ['Spanish', 'solo el segundo'],
+    ['German', 'nur das zweite'],
+  ])('%s "only the second one" keeps index 1', (_label, message) => {
+    expect(tryNarrowPendingOperations(message, labels)).toEqual({ keepIndices: [1] });
+  });
+
+  it('"remove the footer CTA from that change" drops the matching-label target', () => {
+    const withFooter = ['the CTA banner module', 'the footer CTA module'];
+    expect(tryNarrowPendingOperations('remove the footer CTA from that change', withFooter)).toEqual({ keepIndices: [0] });
+  });
+
+  it('"don\'t change the first one" drops the first target (a genuine multi-target narrowing, not a field-preservation clause)', () => {
+    expect(tryNarrowPendingOperations("don't change the first one", labels)).toEqual({ keepIndices: [1] });
+  });
+
+  it('"don\'t change the copy" (a field-preservation clause) matches no label and narrows nothing', () => {
+    expect(tryNarrowPendingOperations("don't change the copy", labels)).toBeNull();
+  });
+});
