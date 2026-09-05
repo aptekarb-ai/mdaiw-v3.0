@@ -281,6 +281,23 @@ _session_stats = {
     'llm_assisted_cross_module_plans': 0,
     'plan_operations_generated': 0,
     'plan_operations_rejected': 0,
+    # D4-E3J §3/§17 — one real module was genuinely kept out of a
+    # MULTI_MODULE_UPDATE plan this turn because of an explicit
+    # preservation/exclusion instruction ("leave the footer alone", "all
+    # CTAs except the footer one") — counts BOTH the deterministic
+    # subtraction path (CanonicalIntentEmailCommandProvider, before any
+    # operation is even built) and the LLM-tier defense-in-depth strip
+    # (_strip_excluded_operations, after the model proposed one anyway).
+    # Audited against D4-E3J §17's own candidate list: target_resolution_
+    # successes/target_confidence_unique have no discrete event to count
+    # without inventing one (target confidence today is a ROUTING
+    # decision, not a recordable outcome — see the D4-E3J report's own
+    # Phase 17 section); module_exclusion_clarifications ->
+    # `clarifications` (existing, D4-E3H) already covers "asked instead of
+    # guessing" generically; preserved_modules is this SAME signal under a
+    # different candidate name. This is the one genuinely new, non-
+    # duplicate counter this checkpoint's own new mechanism warrants.
+    'module_exclusions_enforced': 0,
     'unresolved_target_references': 0,
     # D4-E3G hardening §16 — a DIFFERENT signal from `plan_operations_
     # rejected` above (which counts fields validate_action()/apply_scope_
@@ -487,6 +504,19 @@ def record_scope_creep_stripped(count):
         logger.info('emailbuilder.local_ai_diagnostics.record_scope_creep_stripped_failed')
 
 
+def record_module_exclusion_enforced(count):
+    """D4-E3J §3/§17 — called with the number of real modules kept out of
+    (or removed from) a MULTI_MODULE_UPDATE plan this turn because of an
+    explicit preservation/exclusion instruction — from either the
+    deterministic subtraction path or the LLM-tier defense-in-depth strip
+    (see _strip_excluded_operations's own docstring for why both paths
+    feed this ONE counter rather than two). Best-effort — never raises."""
+    try:
+        _session_stats['module_exclusions_enforced'] += int(count or 0)
+    except Exception:  # noqa: BLE001
+        logger.info('emailbuilder.local_ai_diagnostics.record_module_exclusion_enforced_failed')
+
+
 def record_conversation_turn():
     """D4-E3H §20 — called exactly once per AI Engineer request, at the
     ONE choke point every request passes through regardless of which
@@ -631,6 +661,7 @@ def get_session_stats():
         'llm_assisted_cross_module_plans': _session_stats['llm_assisted_cross_module_plans'],
         'plan_operations_generated': _session_stats['plan_operations_generated'],
         'plan_operations_rejected': _session_stats['plan_operations_rejected'],
+        'module_exclusions_enforced': _session_stats['module_exclusions_enforced'],
         'unresolved_target_references': _session_stats['unresolved_target_references'],
         'user_requested_unsupported_operations': _session_stats['user_requested_unsupported_operations'],
         'scope_creep_operations_stripped': _session_stats['scope_creep_operations_stripped'],

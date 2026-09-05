@@ -497,6 +497,21 @@ class EmailAICommandRequestSerializer(serializers.Serializer):
     resolved_targets = ResolvedTargetContextSerializer(
         many=True, required=False, default=list, max_length=MAX_MULTI_MODULE_OPERATIONS,
     )
+    # D4-E3J §3/§6 — the MODULE-level counterpart to resolved_targets
+    # above: real modules the frontend's own resolveExclusions() (new,
+    # referenceResolver.ts) already resolved as explicitly preserved
+    # ("leave the footer alone", "except the footer CTA"). Same shape/
+    # trust posture as resolved_targets — `matched_phrase` here is the
+    # exclusion phrase itself (e.g. "leave the footer alone"), never a
+    # mutation instruction. Additive/optional; a request that omits this
+    # (every pre-D4-E3J client) behaves exactly as before. See
+    # ai_command.py's _excluded_target_ids_from_context/
+    # _strip_excluded_operations for how this is enforced — deterministic
+    # subtraction before planning, plus a defense-in-depth strip of any
+    # LLM-proposed operation that names an excluded target anyway.
+    excluded_targets = ResolvedTargetContextSerializer(
+        many=True, required=False, default=list, max_length=MAX_MULTI_MODULE_OPERATIONS,
+    )
     # D4-E3H §20/§4 — a single, additive, optional boolean: did the
     # frontend's OWN reference resolver (referenceResolver.ts's
     # resolveReference/resolveMultipleReferences) already resolve an

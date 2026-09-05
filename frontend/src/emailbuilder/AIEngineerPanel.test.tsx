@@ -3068,3 +3068,66 @@ describe('AIEngineerPanel — D4-D builder-aware construction planner', () => {
     await screen.findByText(/We could not build a construction plan/);
   });
 });
+
+// D4-E3J §2/§3/§6 — end-to-end proof that the panel's own outgoing
+// request actually carries resolved_targets/excluded_targets for the
+// two real gaps this checkpoint found and fixed: (1) a single-segment
+// "all X"/"both X" message never used to populate resolved_targets at
+// all (see AIEngineerPanel.tsx's own comment on the relaxed
+// typedSegments.length gate), and (2) module-level exclusion had no
+// resolver/wiring before this checkpoint.
+describe('cross-module target resolution — D4-E3J', () => {
+  it('"make both buttons green" (a single segment) resolves 2 distinct targets', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: "I'll update 2 modules", action: { type: 'MULTI_MODULE_UPDATE', operations: [] },
+    }));
+    renderPanel({ content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make both buttons green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findAllByText(/I'll update 2 modules/);
+    const call = vi.mocked(requestAICommand).mock.calls[0][0];
+    expect(call.resolved_targets?.map((t) => t.id).sort()).toEqual([buttonA.id, buttonB.id].sort());
+  });
+
+  it('"make all CTAs green except the footer CTA" excludes the named target from resolved_targets and sends excluded_targets', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    const footerButton = createModule('button', 3);
+    vi.mocked(requestAICommand).mockResolvedValue(response({
+      reply: "I'll update 2 modules. I'll leave the third button module unchanged.",
+      action: { type: 'MULTI_MODULE_UPDATE', operations: [] },
+    }));
+    renderPanel({ content: { version: 1, modules: [buttonA, buttonB, footerButton] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make all CTAs green except the third button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findAllByText(/I'll update 2 modules/);
+    const call = vi.mocked(requestAICommand).mock.calls[0][0];
+    expect(call.resolved_targets?.map((t) => t.id).sort()).toEqual([buttonA.id, buttonB.id].sort());
+    expect(call.excluded_targets?.map((t) => t.id)).toEqual([footerButton.id]);
+  });
+
+  it('an ordinary single-target message never sends excluded_targets', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    renderPanel({ content: { version: 1, modules: [button] }, selectedModule: button });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Add a button module');
+    const call = vi.mocked(requestAICommand).mock.calls[0][0];
+    expect(call.excluded_targets).toBeUndefined();
+  });
+});

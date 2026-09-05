@@ -186,6 +186,13 @@ class EmailAICommandView(APIView):
             # _target_segments_from_context, apply_scope_gate()'s and
             # apply_semantic_consistency_gate()'s consumers of this).
             'resolved_targets': data.get('resolved_targets') or [],
+            # D4-E3J §3/§6 — additive, optional; real modules the
+            # frontend's resolveExclusions() already resolved as
+            # explicitly preserved (see serializers.
+            # EmailAICommandRequestSerializer's own docstring for this
+            # field, and ai_command.py's _excluded_target_ids_from_context/
+            # _strip_excluded_operations for enforcement).
+            'excluded_targets': data.get('excluded_targets') or [],
             # D4-E3I §3 — additive, optional; a bounded, manifest-driven
             # overview of the CURRENT document's top-level module types
             # only (see serializers.DocumentSummaryContextSerializer's own

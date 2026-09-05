@@ -193,6 +193,30 @@ export function resolveReference(ctx: ReferentialResolutionContext): Referential
     };
   }
 
+  // 3.5. D4-E3J §2/Phase 13 test E — a standalone ordinal+type reference
+  // named as the SOLE target of a message ("make the second CTA green"),
+  // never part of a 2+-target compound (that case is resolveMultipleReferences'
+  // own job). Reuses the EXACT SAME ORDINAL_TYPED_RE/ORDINAL_INDEX/
+  // normalizeTypeWord/candidatesForWord machinery defined below for the
+  // multi-reference case — never a second ordinal-resolution engine. Only
+  // ever resolves when that ordinal index is genuinely in range of the
+  // real candidates; out-of-range falls through untouched (nothing to
+  // disambiguate, not an error) rather than fabricating a target.
+  const ordinalTypedMatch = message.match(ORDINAL_TYPED_RE);
+  if (ordinalTypedMatch) {
+    const index = ORDINAL_INDEX[ordinalTypedMatch[1].toLowerCase()];
+    const word = normalizeTypeWord(ordinalTypedMatch[2]);
+    const candidates = candidatesForWord(flat, word);
+    if (index !== undefined && index < candidates.length) {
+      const only = candidates[index];
+      return {
+        status: 'resolved',
+        referent: { kind: 'module', id: only.id, label: moduleLabel(only, flat.indexOf(only)) },
+        note: `The user is referring to the ${ordinalTypedMatch[1].toLowerCase()} ${word} module.`,
+      };
+    }
+  }
+
   // 4. Typed module reference — "this button", "that image", "the hero".
   const typedMatch = message.match(TYPED_MODULE_RE);
   if (typedMatch) {
@@ -439,6 +463,15 @@ const MULTI_REF_ORDINAL_ALT = 'first|second|third|fourth|fifth|sixth|1st|2nd|3rd
 
 const ORDINAL_TYPED_RE = new RegExp(`\\b(${MULTI_REF_ORDINAL_ALT})\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
 const BOTH_TYPED_RE = new RegExp(`\\bboth\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
+// D4-E3J §3/§5 — "all CTAs"/"every button"/"all the buttons". Resolves to
+// EVERY candidate of that type (unlike BOTH_TYPED_RE, which only ever
+// fires for exactly two) — the module-level exclusion resolver
+// (resolveExclusions, below) is what then subtracts a preserved target
+// from this full candidate set, e.g. "make all CTAs green except the
+// footer CTA". Zero or one candidate is not itself an error here — the
+// caller's own distinctTargetIds.size >= 2 check is still what decides
+// whether this ever becomes a real cross-module plan.
+const ALL_TYPED_RE = new RegExp(`\\b(?:all|every)\\s+(?:the\\s+)?(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
 const OTHER_TYPED_RE = new RegExp(`\\b(?:the\\s+)?other\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
 const BARE_TYPED_RE = new RegExp(`\\b(?:this|that|the)\\s+(${MULTI_REF_TYPE_WORD_ALT})\\b`, 'i');
 // D4-E3G hardening §11/§12 — many of the required multilingual examples
@@ -489,6 +522,31 @@ function candidatesForWord(flat: EmailModule[], rawWord: string): EmailModule[] 
 }
 
 function resolveSegmentTargets(segment: string, ctx: ReferentialResolutionContext, flat: EmailModule[]): MultiReferenceItem {
+  // "all CTAs" / "every button" — every real candidate of that type, not
+  // just a pair. Checked BEFORE "both" (a message could theoretically
+  // contain both words, but "all"/"every" is the more specific, more
+  // common phrasing for this case — e.g. Phase 14's own "make all CTAs
+  // green except the footer CTA").
+  const allMatch = segment.match(ALL_TYPED_RE);
+  if (allMatch) {
+    const word = normalizeTypeWord(allMatch[1]);
+    // D4-E3J pre-commit pass — "every module"/"all modules" means EVERY
+    // real module regardless of type, same special case resolveSegmentTargets'
+    // own bare-typed branch and resolveExclusions() already give 'module'
+    // (matchesTypeWord('module', ...) would otherwise search for a
+    // literal type NAMED "module", which does not exist, silently
+    // resolving to zero candidates instead of "everything").
+    const candidates = word === 'module' ? flat : candidatesForWord(flat, word);
+    if (candidates.length >= 1) {
+      return {
+        status: 'resolved',
+        matchedPhrase: segment,
+        targets: candidates.map((m) => ({ id: m.id, type: m.type, label: moduleLabel(m, flat.indexOf(m)), matchedPhrase: segment })),
+      };
+    }
+    return { status: 'unresolved', matchedPhrase: segment };
+  }
+
   // "both buttons" / "both CTAs" — only meaningful when exactly two
   // candidates of that type exist; more than two is genuinely ambiguous
   // (which two?), fewer than two means there is nothing to pair up.
@@ -611,6 +669,217 @@ export function resolveMultipleReferences(ctx: ReferentialResolutionContext): Mu
   const flat = flattenModules(ctx.modules);
   const segments = splitIntoTargetSegments(ctx.message);
   return { items: segments.map((segment) => resolveSegmentTargets(segment, ctx, flat)) };
+}
+
+// D4-E3J §3/§6/§7 — module-level preservation/exclusion ("leave the
+// footer alone", "don't touch the hero", "except the footer CTA", "keep
+// the second CTA unchanged"). A DELIBERATELY SEPARATE mechanism from
+// everything above: resolveReference()/resolveMultipleReferences() answer
+// "what should be MUTATED"; this answers "what must NEVER be mutated,
+// regardless of anything else in the message" — see ai_command.py's
+// _excluded_target_ids_from_context/_strip_excluded_operations for how
+// the backend then subtracts these ids before planning (deterministic
+// subtraction) and strips them again from any LLM-proposed operation that
+// names one anyway (defense in depth). Reuses the EXACT SAME
+// flattenModules/matchesTypeWord/moduleLabel/ORDINAL_INDEX/normalizeTypeWord
+// machinery every other resolver in this file already uses — never a
+// second module-lookup engine.
+//
+// Deliberately excludes bare "text" from its own type-word vocabulary
+// (unlike TYPE_WORDS/MULTI_REF_TYPE_WORDS above): "don't change the text"
+// is overwhelmingly a FIELD-level instruction (see ai_command.py's own
+// D4-E3H/I _NEGATIVE_CONSTRAINT_RE, which already owns that exact
+// phrasing) — treating it as a request to exclude a "text" MODULE here
+// would silently misroute the far more common field-level meaning into
+// the wrong mechanism. A user who genuinely means the module can still
+// say "the text module" (bare "module" is unambiguous and stays
+// supported for exclusion, same as everywhere else in this file).
+const EXCLUSION_TYPE_WORDS = ['button', 'image', 'hero', 'header', 'footer', 'divider', 'spacer', 'module'] as const;
+const EXCLUSION_TYPE_WORD_ALT = [...EXCLUSION_TYPE_WORDS, 'cta', 'ctas', 'buttons'].join('|');
+
+const EXCLUSION_ORDINAL_TYPED_RE = new RegExp(`\\b(${MULTI_REF_ORDINAL_ALT})\\s+(${EXCLUSION_TYPE_WORD_ALT})\\b`, 'i');
+const EXCLUSION_BARE_TYPED_RE = new RegExp(`\\b(${EXCLUSION_TYPE_WORD_ALT})\\b`, 'i');
+const EXCLUSION_BARE_TYPED_RE_GLOBAL = new RegExp(EXCLUSION_BARE_TYPED_RE.source, 'gi');
+
+// D4-E3J pre-commit acceptance pass §6 — a real defect found while
+// verifying "make all buttons green except the footer button": a
+// captured phrase like "footer button" contains TWO type words (footer,
+// button) — one is the actual TYPE, one is a qualifier that only
+// resembles a type word. Which one comes first vs. last is a matter of
+// WORD ORDER, and word order is language-specific: English puts the
+// qualifier first ("footer button" — button is the type), German puts it
+// last ("button im Footer" — button is still the type, but now first,
+// not last). Neither a first-match nor a last-match heuristic
+// generalizes across languages — this was verified directly (a last-match
+// fix that repaired the English case broke the German one).
+//
+// The robust, language-order-independent alternative: try every DISTINCT
+// type word actually present in the phrase, and use whichever one is the
+// only one with any real candidates in the current document — an
+// elimination strategy, never a word-order guess. If the phrase names no
+// recognized type word, or more than one distinct type word each has
+// real candidates (genuinely ambiguous about which noun IS the type),
+// this returns null and the trigger contributes nothing, exactly the
+// same conservative "unclassifiable -> no effect" posture every other
+// unresolvable case in this file already takes.
+function resolveBareTypeWord(phrase: string, flat: EmailModule[]): { word: string; candidates: EmailModule[] } | null {
+  const rawWords = [...phrase.matchAll(EXCLUSION_BARE_TYPED_RE_GLOBAL)].map((m) => m[1].toLowerCase());
+  const distinctWords = [...new Set(rawWords.map((w) => normalizeTypeWord(w)))];
+  const withCandidates = distinctWords
+    .map((word) => ({ word, candidates: word === 'module' ? flat : candidatesForWord(flat, word) }))
+    .filter((entry) => entry.candidates.length > 0);
+  return withCandidates.length === 1 ? withCandidates[0] : null;
+}
+
+// Each trigger captures a short noun-phrase window after the trigger
+// word(s), up to the next clause boundary — the captured text is then
+// matched against EXCLUSION_ORDINAL_TYPED_RE/EXCLUSION_BARE_TYPED_RE
+// above, never used directly. A trigger firing on a captured phrase that
+// names no recognizable module type/ordinal simply resolves nothing
+// (same conservative "unclassifiable -> no effect" posture
+// _requested_concepts_with_constraints() already takes on the backend).
+//
+// D4-E3J §8 — "except"/"leave"/"touch"/"change" equivalents for the
+// four required languages are added as extra alternatives on the SAME
+// trigger, exactly like CONJUNCTION_SPLIT_RE's own aur/und/y precedent —
+// never a second, per-language exclusion engine.
+const EXCLUSION_CLAUSE_BOUNDARY = '(?=[,.]|$|\\band\\b|\\baur\\b|\\bund\\b|\\by\\b)';
+// D4-E3J pre-commit acceptance pass §6 — a real defect: the Hindi/
+// Hinglish "ko mat X" alternatives below have no fixed LEFT anchor (the
+// trigger words "ko mat badlo" etc. come AFTER the captured phrase, not
+// before it, unlike every other alternative here which anchors right
+// after "leave"/"except"/"don't touch"/etc.). An unbounded `[a-z0-9\s]+?`
+// capture with no left anchor greedily backtracks all the way to the
+// START of the message when nothing stops it, swallowing an entire
+// preceding clause ("sab buttons green karo lekin footer button ko mat
+// badlo" captured the whole "sab buttons green karo lekin footer button"
+// prefix instead of just "footer button") — silently picking up the
+// WRONG type word from earlier in the sentence. Bounded to at most 4
+// words, which comfortably covers every real qualifier+noun phrase this
+// vocabulary needs ("footer button", "the second CTA") without ever
+// reaching back across an earlier clause.
+const _HINDI_BOUNDED_PHRASE = '[a-z0-9]+(?:\\s+[a-z0-9]+){0,3}';
+const LEAVE_ALONE_RE = new RegExp(
+  `\\bleave\\s+(?:the\\s+)?([a-z0-9\\s]+?)\\s+(?:alone|unchanged|as[\\s-]is)\\b`
+  + `|\\b(${_HINDI_BOUNDED_PHRASE})\\s+ko\\s+mat\\s+chhedo\\b|\\b(${_HINDI_BOUNDED_PHRASE})\\s+ko\\s+waise\\s+hi\\s+rehne\\s+do\\b`,
+  'i',
+);
+const DONT_TOUCH_RE = new RegExp(
+  `\\b(?:don'?t|do\\s+not|never)\\s+touch\\s+(?:the\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`
+  + `|\\b(${_HINDI_BOUNDED_PHRASE})\\s+ko\\s+touch\\s+mat\\s+karo?\\b|\\b(${_HINDI_BOUNDED_PHRASE})\\s+ko\\s+haath\\s+mat\\s+lagao\\b`,
+  'i',
+);
+const DONT_CHANGE_MODULE_RE = new RegExp(
+  `\\b(?:don'?t|do\\s+not|never)\\s+(?:change|modify|alter)\\s+(?:the\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`
+  + `|\\b(${_HINDI_BOUNDED_PHRASE})\\s+ko\\s+mat\\s+badlo\\b|\\b(${_HINDI_BOUNDED_PHRASE})\\s+mat\\s+badlo\\b`,
+  'i',
+);
+const EXCEPT_RE = new RegExp(
+  `\\b(?:except|excluding|apart\\s+from)\\s+(?:the\\s+|for\\s+the\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`
+  + `|\\bexcepto\\s+(?:el\\s+|la\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`
+  + `|\\bau[ß\\u00df]er\\s+(?:dem\\s+|der\\s+|des\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`,
+  'i',
+);
+const EXCLUDE_RE = new RegExp(`\\bexclude\\s+(?:the\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`, 'i');
+const KEEP_UNCHANGED_MODULE_RE = new RegExp(
+  `\\bkeep\\s+(?:the\\s+)?([a-z0-9\\s]+?)\\s+(?:unchanged|as\\s+(?:it|they)\\s+(?:is|are)|the\\s+same)\\b`,
+  'i',
+);
+const SKIP_MODULE_RE = new RegExp(`\\bskip\\s+(?:the\\s+)?([a-z0-9\\s]+?)${EXCLUSION_CLAUSE_BOUNDARY}`, 'i');
+
+const EXCLUSION_TRIGGERS = [LEAVE_ALONE_RE, DONT_TOUCH_RE, DONT_CHANGE_MODULE_RE, EXCEPT_RE, EXCLUDE_RE, KEEP_UNCHANGED_MODULE_RE, SKIP_MODULE_RE];
+
+function firstCaptureGroup(match: RegExpMatchArray): string | null {
+  for (let i = 1; i < match.length; i += 1) {
+    if (match[i]) return match[i];
+  }
+  return null;
+}
+
+export type ExclusionResolution =
+  | { status: 'none' }
+  | { status: 'resolved'; excluded: ResolvedTarget[] }
+  | { status: 'ambiguous'; clarifyingQuestion: string };
+
+// Resolves EVERY module-level exclusion phrase found in the message
+// (a request may exclude more than one target: "update the CTAs but
+// leave the footer alone and don't touch the header either"). Only ever
+// returns 'ambiguous' when a genuinely unresolvable phrase is found — a
+// trigger phrase whose captured text names no recognizable module type/
+// ordinal contributes nothing (never a false ambiguity), matching every
+// other resolver in this file's "no usable candidates is not the same as
+// multiple candidates" distinction.
+export function resolveExclusions(ctx: ReferentialResolutionContext): ExclusionResolution {
+  const flat = flattenModules(ctx.modules);
+  const excluded: ResolvedTarget[] = [];
+  const seen = new Set<string>();
+
+  for (const trigger of EXCLUSION_TRIGGERS) {
+    const match = ctx.message.match(trigger);
+    if (!match) continue;
+    const captured = firstCaptureGroup(match);
+    if (!captured) continue;
+    const phrase = captured.trim();
+
+    const ordinalMatch = phrase.match(EXCLUSION_ORDINAL_TYPED_RE);
+    if (ordinalMatch) {
+      const index = ORDINAL_INDEX[ordinalMatch[1].toLowerCase()];
+      const word = normalizeTypeWord(ordinalMatch[2]);
+      const candidates = candidatesForWord(flat, word);
+      if (index !== undefined && index < candidates.length) {
+        const only = candidates[index];
+        if (!seen.has(only.id)) {
+          seen.add(only.id);
+          excluded.push({ id: only.id, type: only.type, label: moduleLabel(only, flat.indexOf(only)), matchedPhrase: match[0] });
+        }
+      }
+      continue;
+    }
+
+    const bareMatch = resolveBareTypeWord(phrase, flat);
+    if (!bareMatch) continue;
+    const { word, candidates } = bareMatch;
+    if (candidates.length === 1) {
+      const only = candidates[0];
+      if (!seen.has(only.id)) {
+        seen.add(only.id);
+        excluded.push({ id: only.id, type: only.type, label: moduleLabel(only, flat.indexOf(only)), matchedPhrase: match[0] });
+      }
+    } else if (candidates.length > 1) {
+      const labels = candidates.map((m) => moduleLabel(m, flat.indexOf(m)));
+      return {
+        status: 'ambiguous',
+        clarifyingQuestion: `There are ${candidates.length} ${word} modules — ${labels.join(', ')}. Which one should I leave unchanged?`,
+      };
+    }
+    // Zero candidates of that type — nothing to exclude, not an error;
+    // continue checking the remaining triggers.
+  }
+
+  return excluded.length > 0 ? { status: 'resolved', excluded } : { status: 'none' };
+}
+
+// D4-E3J pre-commit acceptance pass §5 — a real defect found while
+// verifying "change everything except the header": resolveMultipleReferences'/
+// resolveReference's own type-word matching has no awareness of an
+// "except"/"leave alone" clause — "the header" inside "except the
+// header" would otherwise ALSO satisfy their bare "the <type>" pattern,
+// getting misread as a MUTATION target (the exact opposite of the user's
+// intent) rather than correctly resolving nothing. Fixing this inside
+// resolveReference/resolveSegmentTargets themselves would mean teaching
+// every type-word matcher about exclusion syntax — instead, the caller
+// (AIEngineerPanel.tsx) removes each excluded target's own matched
+// exclusion phrase from the message BEFORE handing it to the inclusion-
+// side resolvers, so the excluded module's name is never visible to them
+// at all. Pure string removal, never a second parsing pass — a message
+// with no exclusions is returned completely unchanged.
+export function stripExclusionPhrases(message: string, excluded: ResolvedTarget[]): string {
+  if (excluded.length === 0) return message;
+  let result = message;
+  for (const target of excluded) {
+    if (target.matchedPhrase) result = result.split(target.matchedPhrase).join(' ');
+  }
+  return result;
 }
 
 export function resolveCopySourceRequest(ctx: ReferentialResolutionContext): CopySourceRequest {

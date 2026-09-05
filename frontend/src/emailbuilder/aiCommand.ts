@@ -301,6 +301,12 @@ export interface AICommandRequest {
   // and behaving unchanged, same convention as every prior additive
   // context field.
   resolved_targets?: AICommandResolvedTargetContext[];
+  // D4-E3J §3/§6 — real modules the frontend's resolveExclusions() (new,
+  // referenceResolver.ts) already resolved as explicitly preserved
+  // ("leave the footer alone", "except the footer CTA"). Same shape/trust
+  // posture as resolved_targets above. Every existing caller/test that
+  // omits this keeps compiling and behaving unchanged.
+  excluded_targets?: AICommandResolvedTargetContext[];
   // D4-E3H §20/§4 — diagnostics-only: did this turn's target come from
   // the reference resolver (anaphora/follow-up) rather than the live
   // canvas selection. Never read for routing or validation server-side.

@@ -1266,3 +1266,134 @@ class InsertClauseBoundaryTests(SimpleTestCase):
         trimmed = ai_command._insert_search_window('add a countdown timer and also make the button green')
         self.assertNotIn('button', trimmed)
         self.assertIn('countdown timer', trimmed)
+
+
+class ModuleExclusionContextHelperTests(SimpleTestCase):
+    """D4-E3J §3/§6 — _excluded_target_ids_from_context/_excluded_labels_
+    from_context read context['excluded_targets'] (the same shape as one
+    resolved_targets entry) into a plain id set / label list."""
+
+    def test_extracts_ids_from_well_formed_entries(self):
+        context = {'excluded_targets': [
+            {'id': 'mod-footer', 'type': 'button', 'label': 'the footer CTA', 'matched_phrase': 'leave the footer alone'},
+        ]}
+        self.assertEqual(ai_command._excluded_target_ids_from_context(context), {'mod-footer'})
+
+    def test_extracts_labels_in_order(self):
+        context = {'excluded_targets': [
+            {'id': 'a', 'type': 'button', 'label': 'the first button module', 'matched_phrase': 'x'},
+            {'id': 'b', 'type': 'button', 'label': 'the footer CTA', 'matched_phrase': 'y'},
+        ]}
+        self.assertEqual(ai_command._excluded_labels_from_context(context), ['the first button module', 'the footer CTA'])
+
+    def test_absent_key_returns_empty(self):
+        self.assertEqual(ai_command._excluded_target_ids_from_context({}), set())
+        self.assertEqual(ai_command._excluded_labels_from_context({}), [])
+
+    def test_malformed_input_never_raises(self):
+        self.assertEqual(ai_command._excluded_target_ids_from_context({'excluded_targets': 'not-a-list'}), set())
+        self.assertEqual(ai_command._excluded_target_ids_from_context({'excluded_targets': [None, 42, {'id': 5}]}), set())
+        self.assertEqual(ai_command._excluded_labels_from_context({'excluded_targets': [{'label': 7}]}), [])
+
+
+class StripExcludedOperationsTests(SimpleTestCase):
+    """D4-E3J §3/§4/Core Principle — the real, deterministic enforcement
+    point: an LLM-proposed MULTI_MODULE_UPDATE operation naming an
+    excluded module id is removed unconditionally, regardless of what the
+    model proposed or why."""
+
+    def _action(self, *target_ids):
+        return {
+            'type': ActionType.MULTI_MODULE_UPDATE,
+            'operations': [
+                {'target_module_id': tid, 'module_type': 'button', 'props_patch': {'backgroundColor': '#76C043'}, 'settings_patch': None}
+                for tid in target_ids
+            ],
+        }
+
+    def test_removes_only_the_excluded_operation(self):
+        action, removed = ai_command._strip_excluded_operations(self._action('a', 'b', 'c'), {'b'})
+        self.assertEqual([op['target_module_id'] for op in action['operations']], ['a', 'c'])
+        self.assertEqual(removed, ['b'])
+
+    def test_removing_every_operation_returns_none_action(self):
+        action, removed = ai_command._strip_excluded_operations(self._action('a', 'b'), {'a', 'b'})
+        self.assertEqual(action, {'type': ActionType.NONE})
+        self.assertEqual(sorted(removed), ['a', 'b'])
+
+    def test_no_excluded_ids_is_a_no_op(self):
+        original = self._action('a', 'b')
+        action, removed = ai_command._strip_excluded_operations(original, set())
+        self.assertIs(action, original)
+        self.assertEqual(removed, [])
+
+    def test_non_multi_module_update_action_is_untouched(self):
+        action = {'type': ActionType.UPDATE_MODULE_PROPS, 'target': 'selected', 'module_type': 'button', 'patch': {}}
+        result, removed = ai_command._strip_excluded_operations(action, {'a'})
+        self.assertIs(result, action)
+        self.assertEqual(removed, [])
+
+    def test_excluded_id_that_is_not_actually_in_the_plan_changes_nothing(self):
+        original = self._action('a', 'b')
+        action, removed = ai_command._strip_excluded_operations(original, {'nonexistent-id'})
+        self.assertIs(action, original)
+        self.assertEqual(removed, [])
+
+
+class DeterministicMultiModulePlanExclusionTests(SimpleTestCase):
+    """D4-E3J §3/§4/§5 — CanonicalIntentEmailCommandProvider subtracts
+    excluded targets from resolved_targets BEFORE ever building an
+    operation for them (never built-then-discarded). Covers the module-
+    level mechanism end to end through the real provider chain, real
+    validate_action(), and the real reply-text builder — no mocking."""
+
+    def setUp(self):
+        self.provider = CanonicalIntentEmailCommandProvider(fallback=RuleBasedEmailCommandProvider())
+
+    def _target(self, target_id, label, phrase='make all CTAs green'):
+        return {'id': target_id, 'type': 'button', 'label': label, 'matched_phrase': phrase, 'props': {'backgroundColor': '#000'}}
+
+    def test_excluded_target_never_gets_an_operation(self):
+        context = {
+            'resolved_targets': [
+                self._target('cta-1', 'the first button module'),
+                self._target('cta-2', 'the second button module'),
+                self._target('footer-cta', 'the footer CTA'),
+            ],
+            'excluded_targets': [{'id': 'footer-cta', 'type': 'button', 'label': 'the footer CTA', 'matched_phrase': 'except the footer CTA'}],
+        }
+        result = self.provider.resolve('make all CTAs green except the footer CTA', context)
+        self.assertEqual(result.action['type'], ActionType.MULTI_MODULE_UPDATE)
+        target_ids = {op['target_module_id'] for op in result.action['operations']}
+        self.assertEqual(target_ids, {'cta-1', 'cta-2'})
+        self.assertIn('footer CTA', result.reply)
+
+    def test_collapse_to_a_single_remaining_target_still_produces_a_valid_plan(self):
+        context = {
+            'resolved_targets': [self._target('cta-1', 'the first button module'), self._target('cta-2', 'the second button module')],
+            'excluded_targets': [{'id': 'cta-2', 'type': 'button', 'label': 'the second button module', 'matched_phrase': 'except the second one'}],
+        }
+        result = self.provider.resolve('make both CTAs green except the second one', context)
+        self.assertEqual(result.action['type'], ActionType.MULTI_MODULE_UPDATE)
+        self.assertEqual(len(result.action['operations']), 1)
+        self.assertEqual(result.action['operations'][0]['target_module_id'], 'cta-1')
+        self.assertIn('1 module:', result.reply)
+
+    def test_excluding_every_resolved_target_is_an_honest_no_op_not_a_clarification(self):
+        context = {
+            'resolved_targets': [self._target('cta-1', 'first'), self._target('cta-2', 'second')],
+            'excluded_targets': [
+                {'id': 'cta-1', 'type': 'button', 'label': 'first', 'matched_phrase': 'x'},
+                {'id': 'cta-2', 'type': 'button', 'label': 'second', 'matched_phrase': 'y'},
+            ],
+        }
+        result = self.provider.resolve('make both CTAs green', context)
+        self.assertEqual(result.action, {'type': ActionType.NONE})
+        self.assertIn('nothing left to change', result.reply)
+
+    def test_no_excluded_targets_behaves_exactly_as_before(self):
+        context = {'resolved_targets': [self._target('cta-1', 'first'), self._target('cta-2', 'second')]}
+        result = self.provider.resolve('make all CTAs green', context)
+        self.assertEqual(result.action['type'], ActionType.MULTI_MODULE_UPDATE)
+        target_ids = {op['target_module_id'] for op in result.action['operations']}
+        self.assertEqual(target_ids, {'cta-1', 'cta-2'})

@@ -36,7 +36,8 @@ import {
 } from './reconstructionSessionStorage';
 import { findModuleById } from './layoutModel';
 import {
-  resolveCopySourceRequest, resolveMultipleReferences, resolveReference, type LastReferent,
+  resolveCopySourceRequest, resolveExclusions, resolveMultipleReferences, resolveReference, stripExclusionPhrases,
+  type LastReferent,
 } from './referenceResolver';
 import { FIDELITY_CATEGORY_ORDER } from './htmlImportFidelity';
 import {
@@ -690,6 +691,13 @@ export function AIEngineerPanel({
   // in which case the request behaves exactly as it did before D4-E3G.
   const resolvedTargetsContextRef = useRef<AICommandResolvedTargetContext[] | null>(null);
 
+  // D4-E3J §3/§6 — module-level exclusions resolveExclusions() found for
+  // this turn (real modules the user explicitly asked to leave
+  // unchanged). Same convention as resolvedTargetsContextRef above — null
+  // for the overwhelming common case (no exclusion phrase in the
+  // message).
+  const excludedTargetsContextRef = useRef<AICommandResolvedTargetContext[] | null>(null);
+
   // C-3 remediation — explicit pending-repair context for the placeholder-
   // link conversational flow: which real module (never "whatever's
   // currently selected") is awaiting a destination URL, so a later bare
@@ -1322,7 +1330,55 @@ export function AIEngineerPanel({
     // is answered locally with a clarifying question — never guessed,
     // never silently dropped, never sent to the backend to guess either.
     resolvedTargetsContextRef.current = null;
-    const multiReferenceResolution = resolveMultipleReferences(referentialCtx);
+    excludedTargetsContextRef.current = null;
+
+    // D4-E3J §3/§6 — module-level exclusion, resolved BEFORE the
+    // candidate-target resolution below so an excluded id can be
+    // subtracted from an "all X"/"both X" candidate set before it is ever
+    // sent as a resolved_targets entry (never built then discarded — see
+    // ai_command.py's own _excluded_target_ids_from_context docstring for
+    // why the backend ALSO re-enforces this independently). An
+    // unresolvable exclusion phrase (2+ real candidates, none of them
+    // distinguishable) is answered locally, same posture as every other
+    // ambiguous resolution in this function.
+    const exclusionResolution = resolveExclusions(referentialCtx);
+    if (exclusionResolution.status === 'ambiguous') {
+      appendMessage('assistant', exclusionResolution.clarifyingQuestion);
+      setHistory((current) => [...current, {
+        id: newId('hist'),
+        command: message,
+        interpretation: exclusionResolution.clarifyingQuestion,
+        action: { type: 'NONE' },
+        status: 'clarification',
+        summary: exclusionResolution.clarifyingQuestion,
+        provider: 'deterministic',
+        requiresConfirmation: false,
+      }]);
+      return;
+    }
+    const excludedIds = exclusionResolution.status === 'resolved'
+      ? new Set(exclusionResolution.excluded.map((target) => target.id))
+      : new Set<string>();
+    if (exclusionResolution.status === 'resolved') {
+      excludedTargetsContextRef.current = exclusionResolution.excluded.map((target) => ({
+        id: target.id, type: target.type as AICommandResolvedTargetContext['type'],
+        label: target.label, matched_phrase: target.matchedPhrase,
+      }));
+    }
+
+    // D4-E3J pre-commit acceptance pass §5 — the inclusion-side resolvers
+    // (resolveMultipleReferences/resolveReference) never see an excluded
+    // module's own name: without this, "change everything except the
+    // header" would have "the header" satisfy their own bare "the
+    // <type>" pattern and get misread as a MUTATION target — exactly
+    // backwards from the user's intent. See stripExclusionPhrases' own
+    // docstring. A message with no exclusions is passed through
+    // unchanged.
+    const inclusionCtx = exclusionResolution.status === 'resolved'
+      ? { ...referentialCtx, message: stripExclusionPhrases(referentialCtx.message, exclusionResolution.excluded) }
+      : referentialCtx;
+
+    const multiReferenceResolution = resolveMultipleReferences(inclusionCtx);
     const typedSegments = multiReferenceResolution.items.filter((item) => item.status !== 'unresolved');
     if (typedSegments.length >= 2) {
       const ambiguousSegment = typedSegments.find((item) => item.status === 'ambiguous');
@@ -1340,7 +1396,18 @@ export function AIEngineerPanel({
         }]);
         return;
       }
-      const resolvedTargets = typedSegments.flatMap((item) => (item.status === 'resolved' ? item.targets : []));
+    }
+    // D4-E3J §2 — this check no longer requires typedSegments.length >= 2:
+    // "all CTAs"/"both buttons" can resolve 2+ real targets from a SINGLE
+    // segment (a compound-request ARTIFACT of the original design, not an
+    // intentional restriction — see the D4-E3J report's own Phase 1
+    // finding). Multi-segment ambiguity is still only ever intercepted
+    // above, exactly as before; this is strictly an ADDITIVE relaxation —
+    // every message that used to satisfy typedSegments.length >= 2 still
+    // does, unchanged.
+    {
+      const resolvedTargets = typedSegments.flatMap((item) => (item.status === 'resolved' ? item.targets : []))
+        .filter((target) => !excludedIds.has(target.id));
       const distinctTargetIds = new Set(resolvedTargets.map((target) => target.id).filter((id) => id !== 'none'));
       if (distinctTargetIds.size >= 2) {
         const seen = new Set<string>();
@@ -1362,7 +1429,7 @@ export function AIEngineerPanel({
       }
     }
 
-    const referentialResolution = resolveReference(referentialCtx);
+    const referentialResolution = resolveReference(inclusionCtx);
 
     if (referentialResolution.status === 'ambiguous') {
       appendMessage('assistant', referentialResolution.clarifyingQuestion);
@@ -1482,6 +1549,10 @@ export function AIEngineerPanel({
         // function; undefined/empty on every ordinary (single-target)
         // turn.
         resolved_targets: resolvedTargetsContextRef.current ?? undefined,
+        // D4-E3J §3/§6 — see the exclusion-resolution block earlier in
+        // this function; undefined/empty on every ordinary (no
+        // preservation phrase) turn.
+        excluded_targets: excludedTargetsContextRef.current ?? undefined,
         reference_resolved: referenceWasResolved,
         document_summary: documentSummaryContext,
       });

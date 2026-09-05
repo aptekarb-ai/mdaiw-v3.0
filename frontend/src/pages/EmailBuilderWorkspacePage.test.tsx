@@ -3618,6 +3618,156 @@ describe('EmailBuilderWorkspacePage — Feature 14 AI Engineer Voice', () => {
     expect(afterUndo.value).toBe(beforeApply);
   });
 
+  // D4-E3J pre-commit acceptance pass §2 — the exact required exclusion
+  // atomicity integration test: 6 real modules (header, hero, CTA1, CTA2,
+  // footer CTA, footer), "make all CTAs green except the footer CTA"
+  // resolved as a real, already-approved MULTI_MODULE_UPDATE naming only
+  // CTA1/CTA2 (the excluded footer CTA never appears in the proposed
+  // operations at all — proving the deterministic subtraction, not the
+  // defense-in-depth strip, which is unit-tested separately in
+  // test_action_grounding.py::StripExcludedOperationsTests). Exercises
+  // the REAL frontend path: AI action -> handleApplyAiAction ->
+  // applyRepairPatch -> commitEntry/history (renderPage/openAiEngineer/
+  // Apply/Undo, exactly like every other test in this describe block —
+  // never a direct call to a helper function).
+  it('MULTI_MODULE_UPDATE exclusion: CTA1/CTA2 change, footer CTA/header/hero/footer stay byte-identical, one history entry, one Undo restores everything', async () => {
+    const header = { ...createModule('header-compact', 1), id: 'test-header-1' };
+    const hero = { ...createModule('hero-text-only', 2), id: 'test-hero-1' };
+    const cta1 = { ...createModule('button', 3), id: 'test-cta-1' };
+    const cta2 = { ...createModule('button', 4), id: 'test-cta-2' };
+    const footerCta = { ...createModule('button', 5), id: 'test-footer-cta' };
+    const footer = { ...createModule('footer-simple-legal', 6), id: 'test-footer-1' };
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      baseDocument({ content: { version: 1, modules: [header, hero, cta1, cta2, footerCta, footer] } }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const beforeApply = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+
+    // This is the ALREADY-APPROVED action the deterministic exclusion
+    // subtraction would produce for "make all CTAs green except the
+    // footer CTA" — asserting on the real Apply/Undo path, not
+    // re-deriving the plan (that derivation is covered separately by
+    // DeterministicMultiModulePlanExclusionTests in test_action_grounding.py
+    // and the live-QA table in the delta report).
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I'll update 2 modules:\n- the first button module: backgroundColor -> #76C043\n- the second button module: backgroundColor -> #76C043\nI'll leave the footer CTA unchanged.\nReview and Apply, or Cancel to change nothing.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: 'test-cta-1', module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: 'test-cta-2', module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make all CTAs green except the footer CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // BEFORE APPLY — the proposal itself already names only CTA1/CTA2 and
+    // explicitly states the footer CTA is preserved; footer/header/hero
+    // are never mentioned as targets at all. (The text appears twice —
+    // once as the chat reply, once as the proposal-card detail — so
+    // findAllByText, not findByText, matching this file's own
+    // established convention elsewhere.)
+    expect((await screen.findAllByText(/leave the footer CTA unchanged/, {}, { timeout: 3000 })).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/I'll update 2 modules/, {}, { timeout: 3000 })).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    await screen.findByText(/Applied:/);
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const afterApply = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+
+    // APPLY — CTA1 and CTA2 changed...
+    const cta1MarkerAfter = afterApply.value.match(/MODULE-3:[\s\S]*?ENDS/)?.[0];
+    const cta2MarkerAfter = afterApply.value.match(/MODULE-4:[\s\S]*?ENDS/)?.[0];
+    expect(cta1MarkerAfter).toContain('#76C043');
+    expect(cta2MarkerAfter).toContain('#76C043');
+
+    // ...and the footer CTA, header, hero, and footer are byte-for-byte
+    // identical before and after — the excluded target AND every
+    // genuinely unrelated module are untouched.
+    const markersBefore = {
+      header: beforeApply.match(/MODULE-1:[\s\S]*?ENDS/)?.[0],
+      hero: beforeApply.match(/MODULE-2:[\s\S]*?ENDS/)?.[0],
+      footerCta: beforeApply.match(/MODULE-5:[\s\S]*?ENDS/)?.[0],
+      footer: beforeApply.match(/MODULE-6:[\s\S]*?ENDS/)?.[0],
+    };
+    const markersAfter = {
+      header: afterApply.value.match(/MODULE-1:[\s\S]*?ENDS/)?.[0],
+      hero: afterApply.value.match(/MODULE-2:[\s\S]*?ENDS/)?.[0],
+      footerCta: afterApply.value.match(/MODULE-5:[\s\S]*?ENDS/)?.[0],
+      footer: afterApply.value.match(/MODULE-6:[\s\S]*?ENDS/)?.[0],
+    };
+    expect(markersBefore.header).toBeTruthy();
+    expect(markersAfter.header).toBe(markersBefore.header);
+    expect(markersAfter.hero).toBe(markersBefore.hero);
+    expect(markersAfter.footerCta).toBe(markersBefore.footerCta);
+    expect(markersAfter.footerCta).not.toContain('#76C043');
+    expect(markersAfter.footer).toBe(markersBefore.footer);
+
+    // UNDO — one Undo restores CTA1 + CTA2 (the complete approved
+    // multi-target change committed as ONE history entry) and everything
+    // else remains exactly as it already was.
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    const afterUndo = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(afterUndo.value).toBe(beforeApply);
+  });
+
+  it('MULTI_MODULE_UPDATE exclusion: Cancel leaves the document and history completely unchanged', async () => {
+    const cta1 = { ...createModule('button', 1), id: 'test-cta-1' };
+    const cta2 = { ...createModule('button', 2), id: 'test-cta-2' };
+    const footerCta = { ...createModule('button', 3), id: 'test-footer-cta' };
+    vi.mocked(client.getEmailDocument).mockResolvedValue(
+      baseDocument({ content: { version: 1, modules: [cta1, cta2, footerCta] } }),
+    );
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText('August Newsletter');
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const beforeApply = (await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement).value;
+    await user.click(screen.getByRole('button', { name: 'Visual' }));
+
+    vi.mocked(client.requestAICommand).mockResolvedValue({
+      success: true,
+      reply: "I'll update 2 modules. I'll leave the footer CTA unchanged. Review and Apply, or Cancel to change nothing.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: 'test-cta-1', module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: 'test-cta-2', module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+      requires_confirmation: false,
+      requires_strong_confirmation: false,
+      confidence: 0.85,
+      provider: 'deterministic',
+    });
+    const input = await openAiEngineer(user);
+    await user.type(input, 'make all CTAs green except the footer CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/I'll update 2 modules/, {}, { timeout: 3000 });
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.click(screen.getByRole('button', { name: 'Code' }));
+    const afterCancel = await screen.findByLabelText('Generated email HTML (read-only)') as HTMLTextAreaElement;
+    expect(afterCancel.value).toBe(beforeApply);
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled();
+  });
+
   it('APPLY_OUTLOOK_WRAPPER enables the background-image VML fallback, visible in Code view', async () => {
     vi.mocked(client.getEmailDocument).mockResolvedValue(baseDocument());
     const user = userEvent.setup();

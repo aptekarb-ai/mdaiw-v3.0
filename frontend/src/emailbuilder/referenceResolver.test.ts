@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  resolveCopySourceRequest, resolveMultipleReferences, resolveReference, type ReferentialResolutionContext,
+  resolveCopySourceRequest, resolveExclusions, resolveMultipleReferences, resolveReference, stripExclusionPhrases,
+  type ReferentialResolutionContext,
 } from './referenceResolver';
 import type { EmailModule } from './edm';
 import { createModule } from './moduleFactory';
@@ -533,6 +534,58 @@ describe('resolveMultipleReferences — "both X"', () => {
   });
 });
 
+describe('resolveReference — standalone ordinal reference (D4-E3J)', () => {
+  it('"make the second CTA green" resolves the ordinal target when in range', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveReference(baseContext({ message: 'make the second CTA green', modules: [buttonA, buttonB] }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonB.id } });
+  });
+
+  it('"make the first button bigger" resolves the first candidate', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveReference(baseContext({ message: 'make the first button bigger', modules: [buttonA, buttonB] }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonA.id } });
+  });
+
+  it('an out-of-range ordinal falls through rather than fabricating a target', () => {
+    const buttonA = mod('button');
+    const result = resolveReference(baseContext({ message: 'make the third CTA green', modules: [buttonA] }));
+    expect(result.status).toBe('no-referring-expression');
+  });
+});
+
+describe('resolveMultipleReferences — "all X" (D4-E3J)', () => {
+  it('resolves every candidate of that type, not just a pair', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveMultipleReferences(baseContext({
+      message: 'make all CTAs green', modules: [buttonA, buttonB, buttonC],
+    }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') {
+      expect(result.items[0].targets.map((t) => t.id).sort()).toEqual([buttonA.id, buttonB.id, buttonC.id].sort());
+    }
+  });
+
+  it('"every button" resolves the same way as "all buttons"', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveMultipleReferences(baseContext({ message: 'make every button green', modules: [buttonA, buttonB] }));
+    expect(result.items[0]).toMatchObject({ status: 'resolved' });
+    if (result.items[0].status === 'resolved') {
+      expect(result.items[0].targets).toHaveLength(2);
+    }
+  });
+
+  it('is unresolved when no candidate of that type exists', () => {
+    const result = resolveMultipleReferences(baseContext({ message: 'make all buttons green', modules: [mod('text')] }));
+    expect(result.items[0]).toMatchObject({ status: 'unresolved' });
+  });
+});
+
 describe('resolveMultipleReferences — "the other X"', () => {
   it('resolves to the one remaining candidate when a conversational antecedent names the other one', () => {
     const buttonA = mod('button');
@@ -633,5 +686,258 @@ describe('ResolvedTarget — props field', () => {
     const button = mod('button');
     const result = resolveMultipleReferences(baseContext({ message: 'make the button green and the hero red', modules: [button, mod('hero-text-only')] }));
     if (result.items[0].status === 'resolved') expect(result.items[0].targets[0].props).toBeUndefined();
+  });
+});
+
+describe('resolveExclusions (D4-E3J)', () => {
+  it('"leave the footer alone" resolves the sole footer module as excluded', () => {
+    const footer = mod('footer-simple-legal');
+    const result = resolveExclusions(baseContext({ message: 'update the CTAs but leave the footer alone', modules: [footer] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([footer.id]);
+  });
+
+  it('"don\'t touch the hero" resolves the sole hero module as excluded', () => {
+    const hero = mod('hero-text-only');
+    const result = resolveExclusions(baseContext({ message: "change everything, don't touch the hero", modules: [hero] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([hero.id]);
+  });
+
+  it('"change everything except the header" resolves the sole header module as excluded', () => {
+    const header = mod('header-compact');
+    const result = resolveExclusions(baseContext({ message: 'change everything except the header', modules: [header] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([header.id]);
+  });
+
+  it('"keep the second CTA unchanged" resolves the ordinal target as excluded', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveExclusions(baseContext({ message: 'keep the second CTA unchanged', modules: [buttonA, buttonB] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([buttonB.id]);
+  });
+
+  it("\"don't touch the second CTA\" resolves the ordinal target as excluded", () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveExclusions(baseContext({ message: "don't touch the second CTA", modules: [buttonA, buttonB] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([buttonB.id]);
+  });
+
+  it('asks a clarifying question when the excluded phrase is genuinely ambiguous', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveExclusions(baseContext({ message: 'leave the button alone', modules: [buttonA, buttonB] }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('resolves nothing (never a false positive) for an ordinary message with no exclusion phrase', () => {
+    const result = resolveExclusions(baseContext({ message: 'make the button green', modules: [mod('button')] }));
+    expect(result).toEqual({ status: 'none' });
+  });
+
+  it('does not treat field-level "don\'t change the text" as a module exclusion', () => {
+    // "text" is deliberately excluded from this resolver's own type-word
+    // vocabulary (see the module docstring) — this phrasing means "don't
+    // change the text FIELD", a backend field-level concern
+    // (_NEGATIVE_CONSTRAINT_RE), never a module to remove from a plan.
+    const textModule = mod('text');
+    const result = resolveExclusions(baseContext({ message: "make it green, don't change the text", modules: [textModule] }));
+    expect(result).toEqual({ status: 'none' });
+  });
+
+  it('resolves multiple distinct exclusions named in one message', () => {
+    const hero = mod('hero-text-only');
+    const footer = mod('footer-simple-legal');
+    const result = resolveExclusions(baseContext({
+      message: "update everything, but leave the hero alone and don't touch the footer",
+      modules: [hero, footer],
+    }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id).sort()).toEqual([footer.id, hero.id].sort());
+  });
+
+  it('Spanish "excepto el botón del pie" resolves the sole button as excluded', () => {
+    const button = mod('button');
+    const result = resolveExclusions(baseContext({ message: 'Cambia todos los botones a verde excepto el button.', modules: [button] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([button.id]);
+  });
+
+  it('German "außer dem Button im Footer" resolves the sole button as excluded', () => {
+    const button = mod('button');
+    const result = resolveExclusions(baseContext({ message: 'Ändere alle Buttons auf Grün, außer dem button im Footer.', modules: [button] }));
+    expect(result).toMatchObject({ status: 'resolved' });
+    if (result.status === 'resolved') expect(result.excluded.map((t) => t.id)).toEqual([button.id]);
+  });
+
+  it('DEFECT FIXED: "except the footer button" with 3 identical buttons fails SAFE (ambiguous), never silently "none"', () => {
+    // D4-E3J pre-commit acceptance pass §6 — real defect found via the
+    // multilingual verification: a plain first-match lookup on "footer
+    // button" picked "footer" (zero real candidates in an all-button
+    // fixture) and silently resolved NOTHING, meaning the intended
+    // exclusion would have been dropped entirely — the worst possible
+    // outcome (worse than asking, it just does the wrong thing quietly).
+    // resolveBareTypeWord's elimination strategy fixes this: "footer" has
+    // zero candidates here, "button" has three, so 'button' is the only
+    // viable interpretation — but three real buttons is still genuinely
+    // ambiguous about WHICH one, so this must come back 'ambiguous', not
+    // 'resolved' and never 'none'.
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveExclusions(baseContext({
+      message: 'Make all buttons green except the footer button.', modules: [buttonA, buttonB, buttonC],
+    }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('DEFECT FIXED: German word order ("button im Footer") with 3 identical buttons also fails SAFE, not "none"', () => {
+    // The English fix (elimination by candidate count, not word position)
+    // must not be an English-only heuristic — German puts the qualifier
+    // AFTER the type word ("button im Footer"), the opposite order from
+    // English's "footer button". A position-based fix that worked for
+    // English broke this case; the candidate-count elimination strategy
+    // handles both without knowing anything about word order.
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveExclusions(baseContext({
+      message: 'Ändere alle Buttons auf Grün, außer dem button im Footer.', modules: [buttonA, buttonB, buttonC],
+    }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('DEFECT FIXED: the Hindi "ko mat badlo" capture no longer swallows an earlier clause of the sentence', () => {
+    // Real defect: the unbounded capture group had no left anchor, so it
+    // greedily backtracked all the way to the START of the message,
+    // capturing "sab buttons green karo lekin footer button" as ONE
+    // phrase — whose FIRST type-word match was "buttons" (from "sab
+    // BUTTONS green"), not "footer button" at all. Bounding the capture
+    // to 4 words fixes this; verified here against 3 real buttons (so a
+    // silently-wrong single resolution would be caught, not just an
+    // accidentally-correct one).
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveExclusions(baseContext({
+      message: 'Sab buttons green karo lekin footer button ko mat badlo.', modules: [buttonA, buttonB, buttonC],
+    }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('a genuinely unresolvable exclusion phrase ("the promotional CTA") is ambiguous when 3+ real CTAs exist', () => {
+    // D4-E3J pre-commit pass §4.9 — "promotional" names no recognizable
+    // module type; the phrase still contains the bare word "CTA", which
+    // DOES match this resolver's own type-word vocabulary, so with 3 real
+    // candidates and nothing to disambiguate which one is "promotional"
+    // this must come back ambiguous — never silently applied to all 3,
+    // and never silently applied to none. AIEngineerPanel.tsx intercepts
+    // this status locally and never sends the request to the backend at
+    // all (see its own exclusionResolution.status === 'ambiguous' branch).
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveExclusions(baseContext({
+      message: 'Change every CTA except the promotional CTA.', modules: [buttonA, buttonB, buttonC],
+    }));
+    expect(result.status).toBe('ambiguous');
+  });
+});
+
+describe('target-set resolution vs. mutation-semantic-completeness (D4-E3J pre-commit pass §5)', () => {
+  it('DEFECT (pre-fix behavior, documented): without sanitization, "the header" inside an exclusion clause would be misread as a mutation target', () => {
+    // This is the real defect this pre-commit pass found and fixed:
+    // resolveMultipleReferences has no awareness of "except" — run on
+    // the RAW message, it satisfies its own bare "the <type>" pattern
+    // against "the header" (which is only there as part of an EXCLUSION
+    // clause) and resolves it as if the user asked to change the header.
+    // The fix is not inside this function — see the next test.
+    const header = mod('header-compact');
+    const multi = resolveMultipleReferences(baseContext({ message: 'change everything except the header', modules: [header] }));
+    expect(multi.items[0]).toMatchObject({ status: 'resolved' });
+    if (multi.items[0].status === 'resolved') expect(multi.items[0].targets.map((t) => t.id)).toEqual([header.id]);
+  });
+
+  it('FIXED: stripping the resolved exclusion phrase before inclusion-side resolution leaves NO target set', () => {
+    // This is what AIEngineerPanel.tsx now actually does: resolve
+    // exclusions first, strip their matched phrases out of the message,
+    // THEN run the inclusion-side resolvers on the sanitized text.
+    // "everything" itself is also not a recognized type word (only "all
+    // X"/"every X" for a real type word is), so once "except the header"
+    // is removed, there is honestly nothing left to resolve — never
+    // fabricated, never misread as the header itself.
+    const header = mod('header-compact');
+    const ctx = baseContext({ message: 'change everything except the header', modules: [header] });
+    const excl = resolveExclusions(ctx);
+    expect(excl).toMatchObject({ status: 'resolved' });
+    if (excl.status !== 'resolved') return;
+    expect(excl.excluded.map((t) => t.id)).toEqual([header.id]);
+
+    const sanitized = stripExclusionPhrases(ctx.message, excl.excluded);
+    const multi = resolveMultipleReferences({ ...ctx, message: sanitized });
+    expect(multi.items.every((item) => item.status === 'unresolved')).toBe(true);
+    const single = resolveReference({ ...ctx, message: sanitized });
+    expect(single.status).toBe('no-referring-expression');
+  });
+
+  it('the semantically-complete equivalent ("every button") resolves a real inclusion-side candidate set, header excluded and never among it', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const header = mod('header-compact');
+    const ctx = baseContext({
+      message: "make every button's background green except the header", modules: [buttonA, buttonB, header],
+    });
+    const excl = resolveExclusions(ctx);
+    expect(excl).toMatchObject({ status: 'resolved' });
+    if (excl.status !== 'resolved') return;
+    expect(excl.excluded.map((t) => t.id)).toEqual([header.id]);
+
+    const sanitized = stripExclusionPhrases(ctx.message, excl.excluded);
+    const multi = resolveMultipleReferences({ ...ctx, message: sanitized });
+    expect(multi.items[0]).toMatchObject({ status: 'resolved' });
+    if (multi.items[0].status === 'resolved') {
+      const ids = multi.items[0].targets.map((t) => t.id);
+      expect(ids.sort()).toEqual([buttonA.id, buttonB.id].sort());
+      expect(ids).not.toContain(header.id);
+    }
+  });
+
+  it('"make every module green except the header" — resolveMultipleReferences resolves ALL modules (a real "everything" candidate set, header legitimately included as a document member); the header is subtracted downstream, not by this resolver', () => {
+    // D4-E3J Phase 4's own diagram: candidate targets -> reference
+    // resolution -> ... -> explicit module exclusions are SEPARATE,
+    // sequential steps. resolveMultipleReferences' job stops at "every
+    // real candidate of that type" — "module" legitimately means every
+    // module including the header, since the header genuinely IS a
+    // module in this document. Subtracting the excluded id from this
+    // candidate set is AIEngineerPanel.tsx's own combination logic
+    // (`resolvedTargets.filter((t) => !excludedIds.has(t.id))`), mirrored
+    // here directly rather than re-mounting the whole component.
+    const header = mod('header-compact');
+    const hero = mod('hero-text-only');
+    const button = mod('button');
+    const ctx = baseContext({ message: 'make every module green except the header', modules: [header, hero, button] });
+    const excl = resolveExclusions(ctx);
+    expect(excl).toMatchObject({ status: 'resolved' });
+    if (excl.status !== 'resolved') return;
+    const excludedIds = new Set(excl.excluded.map((t) => t.id));
+
+    const sanitized = stripExclusionPhrases(ctx.message, excl.excluded);
+    const multi = resolveMultipleReferences({ ...ctx, message: sanitized });
+    expect(multi.items[0]).toMatchObject({ status: 'resolved' });
+    if (multi.items[0].status !== 'resolved') return;
+    const allCandidateIds = multi.items[0].targets.map((t) => t.id);
+    expect(allCandidateIds.sort()).toEqual([header.id, hero.id, button.id].sort());
+
+    const finalTargetIds = allCandidateIds.filter((id) => !excludedIds.has(id));
+    expect(finalTargetIds.sort()).toEqual([hero.id, button.id].sort());
+    expect(finalTargetIds).not.toContain(header.id);
+  });
+
+  it('stripExclusionPhrases leaves an ordinary message with no exclusions completely unchanged', () => {
+    expect(stripExclusionPhrases('make the button green', [])).toBe('make the button green');
   });
 });

@@ -45,6 +45,8 @@ from .ai_command import (
     MAX_TOOL_LOOP_ITERATIONS,
     READ_TOOL_NAMES,
     apply_scope_gate,
+    _excluded_target_ids_from_context,
+    _strip_excluded_operations,
     _target_segments_from_context,
     build_active_target_context,
     describe_action_validation_failure,
@@ -131,6 +133,13 @@ _MULTI_MODULE_UPDATE_GUIDANCE = (
     'MULTI_MODULE_UPDATE with an operation for only some of the named targets and silently drop '
     'the rest. If resolved_targets is absent, never use MULTI_MODULE_UPDATE — treat the message as '
     'targeting only the current selection, exactly as before this capability existed. '
+    'D4-E3J — context may ALSO include excluded_targets (present only when the user named a module to '
+    'explicitly preserve, e.g. "leave the footer alone", "all CTAs except the footer one"): never '
+    'include ANY of excluded_targets[].id as a target_module_id in your operations array, no matter how '
+    'plausible it seems — this is a hard exclusion the application enforces independently of you, but a '
+    'proposal that already respects it is faster and clearer for the user. If honoring the request '
+    'would require touching an excluded module (e.g. it is the ONLY module of the type being changed), '
+    'say so plainly in `reply` and return action type NONE rather than silently including it. '
 )
 
 _SYSTEM_PROMPT_PART_B = (
@@ -150,10 +159,14 @@ _SYSTEM_PROMPT_PART_B = (
     'instruction is ambiguous, unsupported, or targets something other than the current '
     'selection, return action type NONE and ask a brief clarifying question in `reply`. Reply '
     'in the same language the user wrote in, unless they explicitly asked for a different one. '
-    'D4-E2 — the context JSON may include active_target_context (present only when a module is '
-    'selected/resolved): module_id (its identifier, already resolved — if selected_module is present '
-    'in context, that module IS the target; never ask the user which module they mean, and never ask '
-    'them to re-select it, unless active_target_context is genuinely absent), editable_props (the EXACT '
+    'D4-E2/D4-E3J — the context JSON may include active_target_context (present only when a module is '
+    "selected/resolved): `selected: true` is the ONLY signal you need to trust this target completely — "
+    'it means the application (not you) already resolved exactly one real module, through the current UI '
+    'selection, an unambiguous reference in the message, or a unique candidate in the document, and it is '
+    'always safe to act on. Do NOT withhold that trust because module_id happens to be missing or null in '
+    'a particular payload — module_id is an identifier for bookkeeping, not the trust signal; `selected: '
+    'true` alone means the module IS the target. Never ask the user which module they mean, and never ask '
+    'them to re-select it, while active_target_context.selected is true. editable_props (the EXACT '
     'list of editable field names, value types, and allowed values for THAT module type, taken directly '
     'from the real builder schema — a patch key not listed there does not exist on this module, never '
     'invent one; a common mistake is proposing "content" when the real field is named "text", always use '
@@ -241,10 +254,10 @@ _SYSTEM_PROMPT_PART_B = (
     "selected_module or selected_validation_issue is present, that IS what the user means — don't ask "
     'which module/issue they mean, and never ask the user to re-select it. D4-E2 — this holds even when '
     'the message itself names a property generically (e.g. "change the color" with no module named): '
-    'active_target_context.module_id, if present, is the authoritative, already-resolved target — treat '
-    'it exactly as if the user had pointed at that module. Only ask which module is meant when '
-    'active_target_context is absent AND no other context (conversation history, a named module type) '
-    'resolves it. If knowledge or import_reconstruction entries are present and '
+    'active_target_context with selected: true is the authoritative, already-resolved target regardless '
+    'of module_id — treat it exactly as if the user had pointed at that module. Only ask which module is '
+    'meant when active_target_context is absent (or selected is not true) AND no other context '
+    '(conversation history, a named module type) resolves it. If knowledge or import_reconstruction entries are present and '
     "relevant, use their specifics (exact colors, ratios, category names) instead of a textbook answer. "
     'Bad: "Select a module on the canvas first." Better, when context exists: "I can make that change, '
     "but I can't tell whether you're referring to the hero text or its button. Which one should I "
@@ -790,6 +803,17 @@ def _build_safe_context(context):
     if safe_resolved_targets:
         safe_context['resolved_targets'] = safe_resolved_targets
 
+    # D4-E3J §3/§6 — same validation shape as resolved_targets above
+    # (reused directly, never a second parallel target-validation
+    # function): real modules the user explicitly asked to leave
+    # unchanged. Surfaced to the model as INFORMATION (a better first
+    # proposal never needs the deterministic strip at all), never as the
+    # actual enforcement — see _strip_excluded_operations's own docstring
+    # for why the real guarantee never depends on the model reading this.
+    safe_excluded_targets = _build_safe_resolved_targets(context.get('excluded_targets'))
+    if safe_excluded_targets:
+        safe_context['excluded_targets'] = safe_excluded_targets
+
     return safe_context, safe_history
 
 
@@ -1264,6 +1288,19 @@ class LocalEmailCommandProvider(EmailCommandProvider):
                     # docstring on why these two failure directions are
                     # never conflated).
                     local_ai_diagnostics.record_scope_creep_stripped(len(stripped_fields))
+                # D4-E3J §3/§4/Core Principle — module-level exclusion
+                # enforcement, a SEPARATE axis from the field-level scope
+                # gate just above: no matter what the model proposed, an
+                # operation targeting a module the deterministic resolver
+                # already excluded is removed unconditionally. See
+                # ai_command.py::_strip_excluded_operations's own
+                # docstring.
+                raw_action, removed_targets = _strip_excluded_operations(
+                    raw_action, _excluded_target_ids_from_context(context if isinstance(context, dict) else {}),
+                )
+                if removed_targets:
+                    logger.info('emailbuilder.ai_command_local.excluded_targets_stripped targets=%s', removed_targets)
+                    local_ai_diagnostics.record_module_exclusion_enforced(len(removed_targets))
             else:
                 validated_successfully = False
                 raw_action = {'type': ActionType.NONE}

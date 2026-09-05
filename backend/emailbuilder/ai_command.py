@@ -1419,6 +1419,88 @@ def _target_segments_from_context(context):
     return segments
 
 
+def _excluded_target_ids_from_context(context):
+    """D4-E3J §3/§6 — the deterministic MODULE-level counterpart to
+    `_target_segments_from_context` above. Reads context['excluded_targets']
+    (same {id, type, label} shape as one `resolved_targets` entry, already
+    vouched for client-side by referenceResolver.ts's new resolveExclusions())
+    and returns a plain set of module ids. This is a DIFFERENT axis from
+    every field-level preservation mechanism in this file
+    (_requested_concepts_with_constraints/_scope_gate_patch/
+    _FIELD_KEY_CONCEPT_HINTS, all D4-E3H): those decide which PROPERTIES of
+    an already-chosen target may change; this decides which MODULES may
+    never appear as a target at all, regardless of what any field-level
+    gate would otherwise allow on them. Never conflate the two — a message
+    can carry both at once ("make all buttons green except the footer
+    button, but don't change the text either").
+
+    Returns an empty (falsy) set for anything malformed — the same "absent
+    exclusions changes nothing" posture every other optional context field
+    in this module already takes."""
+    excluded_targets = context.get('excluded_targets') if isinstance(context, dict) else None
+    if not isinstance(excluded_targets, list):
+        return set()
+    ids = set()
+    for entry in excluded_targets:
+        if isinstance(entry, dict):
+            target_id = entry.get('id')
+            if isinstance(target_id, str) and target_id:
+                ids.add(target_id)
+    return ids
+
+
+def _excluded_labels_from_context(context):
+    """Companion to `_excluded_target_ids_from_context` — the human-
+    readable labels (never ids) for the reply text a proposal shows the
+    user, so an excluded module is named the same way the resolver itself
+    described it ("the footer CTA"), never a raw module id."""
+    excluded_targets = context.get('excluded_targets') if isinstance(context, dict) else None
+    if not isinstance(excluded_targets, list):
+        return []
+    labels = []
+    for entry in excluded_targets:
+        if isinstance(entry, dict):
+            label = entry.get('label')
+            if isinstance(label, str) and label:
+                labels.append(label)
+    return labels
+
+
+def _strip_excluded_operations(action, excluded_ids):
+    """D4-E3J §3/§4/§5/Core Principle — the REAL enforcement point for
+    module-level exclusion against an LLM-PROPOSED MULTI_MODULE_UPDATE.
+    Deterministic and unconditional: an operation whose target_module_id
+    is in `excluded_ids` is removed from the plan NO MATTER what the model
+    proposed for it or why — the LLM may reason about which modules to
+    touch, but it can never re-admit a module the deterministic resolver
+    already excluded (Core Principle: "It cannot enlarge that target
+    set."). Mirrors apply_scope_gate()'s own MULTI_MODULE_UPDATE shape
+    (returns action unchanged + empty list when nothing needed stripping)
+    but operates at the OPERATION level, never the field level — a
+    deliberately separate function from apply_scope_gate() itself so the
+    two axes (field-level scope, module-level exclusion) are never
+    conflated in one code path.
+
+    Returns (action, removed_target_ids: list[str])."""
+    if not excluded_ids or not isinstance(action, dict) or action.get('type') != ActionType.MULTI_MODULE_UPDATE:
+        return action, []
+    operations = action.get('operations')
+    if not isinstance(operations, list) or not operations:
+        return action, []
+    kept, removed = [], []
+    for operation in operations:
+        target_id = operation.get('target_module_id') if isinstance(operation, dict) else None
+        if target_id in excluded_ids:
+            removed.append(target_id)
+        else:
+            kept.append(operation)
+    if not removed:
+        return action, []
+    if not kept:
+        return {'type': ActionType.NONE}, removed
+    return {**action, 'operations': kept}, removed
+
+
 def apply_scope_gate(message, action, target_segments=None):
     """Returns (possibly-narrowed) `action`, and a list of stripped field
     keys (empty when nothing was stripped) — the caller decides how to
@@ -4030,8 +4112,19 @@ def build_deterministic_multi_module_plan(message, resolved_targets):
     the PRECEDING target's own resolved (concept, value) pairs ONLY — not
     its whole props object, and not any concept that target itself did not
     resolve (e.g. if the first CTA got a padding change too, "do the same"
-    still only copies concepts, tracked per-key, never a blind clone)."""
-    if not isinstance(resolved_targets, list) or len(resolved_targets) < 2:
+    still only copies concepts, tracked per-key, never a blind clone).
+
+    D4-E3J §3/§4 — the minimum was relaxed from 2 to 1: a genuine 2+-target
+    compound request can legitimately collapse to exactly one remaining
+    target once module-level exclusions are subtracted (e.g. "make both
+    CTAs green except the footer one" against a document with only two
+    CTAs total). The frontend itself still never sets context
+    ['resolved_targets'] for an ordinary single-target message (see
+    AIEngineerPanel.tsx's own `distinctTargetIds.size >= 2` gate) — the
+    ONLY way this function is ever called with exactly one entry is via
+    CanonicalIntentEmailCommandProvider's own post-exclusion filtering
+    below, never from an unmodified frontend request."""
+    if not isinstance(resolved_targets, list) or len(resolved_targets) < 1:
         return None
 
     per_target = []
@@ -4183,13 +4276,20 @@ def _describe_target_change(target):
     return f"{target['label']}: {', '.join(parts)}" if parts else f"{target['label']}: no change"
 
 
-def _command_result_from_multi_module_plan(plan):
+def _command_result_from_multi_module_plan(plan, excluded_labels=None):
     """Builds the CommandResult for a deterministic multi-module plan.
     NEVER returns a real MULTI_MODULE_UPDATE action unless
     `fully_understood` is True — a target with a requested-but-unresolved
     concept forces a clarification (action NONE) instead, per D4-E3G
     hardening §5/§6: partial understanding must never masquerade as a
     complete, Apply-ready proposal.
+
+    D4-E3J §11 — `excluded_labels` (optional, plain display strings from
+    _excluded_labels_from_context) names modules this plan deliberately
+    left out, so the proposal text states the preservation explicitly
+    ("I'll leave the footer CTA unchanged.") rather than silently omitting
+    it — Phase 11's own "never say an excluded target will be changed,
+    and never say nothing about it either" requirement.
 
     Deliberately does NOT call local_ai_diagnostics.record_cross_module_plan()
     itself — views.py already does that exactly once, for EVERY provider
@@ -4201,8 +4301,15 @@ def _command_result_from_multi_module_plan(plan):
     equivalent anywhere else — is still recorded directly below."""
     if plan['fully_understood']:
         operations = plan['operations']
-        lines = [f"I'll update {len(operations)} modules:"]
+        # D4-E3J — the exclusion-collapse case (§3/§4) makes a genuine
+        # single-operation plan reachable here for the first time; this
+        # singular/plural split was unreachable before (the frontend never
+        # sends resolved_targets with fewer than 2 entries on its own).
+        module_word = 'module' if len(operations) == 1 else 'modules'
+        lines = [f"I'll update {len(operations)} {module_word}:"]
         lines.extend(f'- {_describe_target_change(t)}' for t in plan['per_target'])
+        if excluded_labels:
+            lines.append(f"I'll leave {', '.join(excluded_labels)} unchanged.")
         lines.append('Review and Apply, or Cancel to change nothing.')
         return CommandResult(
             reply='\n'.join(lines), action={'type': ActionType.MULTI_MODULE_UPDATE, 'operations': operations},
@@ -4294,11 +4401,42 @@ class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
         #      resolved target (0 or 1 entries — the overwhelming common
         #      case) never trips any of this; the whole deterministic
         #      chain below is unaffected.
+        # D4-E3J §3/§4 — module-level exclusion is subtracted from the
+        # candidate list BEFORE planning, never after — the excluded
+        # module never has an operation built for it in the first place,
+        # rather than being built then discarded. Only ever has an effect
+        # when the frontend already resolved 2+ distinct targets AND at
+        # least one of them was also named in an exclusion phrase (e.g.
+        # "make all CTAs green except the footer CTA" — resolveExclusions()
+        # + the "all X" resolver both fire from the SAME message); an
+        # ordinary compound request with no exclusion phrase is completely
+        # unaffected (excluded_ids is empty, filtered_targets == resolved_targets).
         resolved_targets = (context or {}).get('resolved_targets')
         if isinstance(resolved_targets, list) and len(resolved_targets) >= 2:
-            plan = build_deterministic_multi_module_plan(message, resolved_targets)
+            excluded_ids = _excluded_target_ids_from_context(context or {})
+            filtered_targets = (
+                [t for t in resolved_targets if not (isinstance(t, dict) and t.get('id') in excluded_ids)]
+                if excluded_ids else resolved_targets
+            )
+            if excluded_ids:
+                removed_count = len(resolved_targets) - len(filtered_targets)
+                if removed_count:
+                    from . import local_ai_diagnostics
+
+                    local_ai_diagnostics.record_module_exclusion_enforced(removed_count)
+            if not filtered_targets:
+                # Every genuinely resolved target was also excluded —
+                # an honest no-op, never a clarification (nothing is
+                # actually ambiguous here) and never silently falling
+                # through to the LLM tier to invent something to do.
+                return CommandResult(
+                    reply="Every module in that request is also one you asked me to leave unchanged, so there's nothing left to change.",
+                    action={'type': ActionType.NONE}, confidence=0.6,
+                )
+            plan = build_deterministic_multi_module_plan(message, filtered_targets)
             if plan is not None:
-                return _command_result_from_multi_module_plan(plan)
+                excluded_labels = _excluded_labels_from_context(context or {}) if excluded_ids else None
+                return _command_result_from_multi_module_plan(plan, excluded_labels=excluded_labels)
             return CommandResult(reply=_CLARIFY_REPLY, action={'type': ActionType.NONE}, confidence=0.2)
 
         # R4-D Checkpoint D1-A/D1-C — the two reconstruction-conversation
