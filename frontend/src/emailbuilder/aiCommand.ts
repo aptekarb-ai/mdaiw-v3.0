@@ -347,6 +347,16 @@ export interface AICommandResolvedTargetContext {
   // requests ("make it bigger") and by the LLM tier (residual reasoning
   // path) for per-target capability grounding. Never the whole document.
   props?: Record<string, unknown>;
+  // D4-E3K completion pass §G — cross-turn "do the same to X": the
+  // bounded field->value pairs a PRIOR turn's own already-validated
+  // action resolved (never a raw module snapshot), carried so the
+  // backend's existing same-trigger propagation/capability-validation
+  // machinery (ai_command.py's build_deterministic_multi_module_plan)
+  // can apply the SAME semantic values to THIS newly-named target — it
+  // is re-validated against this target's own capability manifest
+  // exactly like any other patch; authority never shifts to the client.
+  // undefined on every ordinary (non-"do the same") turn.
+  propagated_patch?: Record<string, unknown>;
 }
 
 // Phase A — 3-way provider identifier, extended from V1's

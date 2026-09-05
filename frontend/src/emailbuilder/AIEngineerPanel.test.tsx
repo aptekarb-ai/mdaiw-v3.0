@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AIEngineerPanel } from './AIEngineerPanel';
 import {
   createEmailAttachment, deleteEmailAttachment, listEmailAttachments, requestAICommand, requestConstructionPlan,
@@ -3129,5 +3129,885 @@ describe('cross-module target resolution — D4-E3J', () => {
     await screen.findByText('Add a button module');
     const call = vi.mocked(requestAICommand).mock.calls[0][0];
     expect(call.excluded_targets).toBeUndefined();
+  });
+});
+
+// D4-E3K §10/§11 — typed confirmation/rejection of a still-pending
+// proposal, exercised through the real send path (never a direct call to
+// matchProposalResponse/handleApply/handleCancel).
+// D4-E3K §3/§4/§25 scenarios A/B — verifies the checkpoint's own Core
+// Principle worked examples already behave correctly through EXISTING
+// architecture (single-slot pending proposal state + per-turn
+// independent deterministic resolution + persistent antecedent) — no new
+// production code was needed for these two scenarios; this is
+// permanent regression evidence that the audit's own conclusion holds.
+describe('correction and continuation via existing architecture — D4-E3K', () => {
+  it('scenario A: "actually make it blue" after "make this button green" replaces green with blue — never both', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    const { onApplyAction } = renderPanel({ selectedModule: button, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#0082AD' } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'actually make it blue');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#0082AD/i);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    // The applied action carries ONLY the corrected color — green never
+    // lingers as a competing patch value.
+    const lastApplyCall = vi.mocked(onApplyAction).mock.calls.at(-1);
+    expect(lastApplyCall?.[0]).toMatchObject({ patch: { backgroundColor: '#0082AD' } });
+    expect(JSON.stringify(lastApplyCall?.[0])).not.toContain('76C043');
+  });
+
+  it('scenario B: "also increase the padding" after "make this button green" resolves the SAME antecedent target without re-asking', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: button, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I will update the selected button module's padding.",
+      action: { type: 'UPDATE_MODULE_SETTINGS', target: 'selected', module_type: 'button', patch: { desktop: { paddingTop: 20, paddingRight: 20, paddingBottom: 20, paddingLeft: 20 } } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'also increase the padding to 20px');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // No re-selection prompt — the SAME antecedent resolved silently.
+    await screen.findAllByText(/padding/i);
+    expect(screen.queryByText(/select a module/i)).not.toBeInTheDocument();
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    expect(secondCall.selected_module).toEqual({ type: 'button', id: button.id, props: button.props });
+  });
+
+  it('scenario H: a correction marker on a still-pending proposal triggers a fresh resolution pass rather than being blocked', async () => {
+    // Note: with NOTHING selected, resolveReference() re-resolves the
+    // target fresh from the corrected message's own text every time —
+    // the same pre-existing "unique candidate / current selection wins"
+    // precedence a first-turn message already uses (see the "live canvas
+    // selection always wins" test elsewhere in this file for that
+    // established, deliberate rule). This test's job is narrower: prove
+    // the correction marker itself unblocks a second resolution attempt
+    // at all, rather than getting stuck behind "there is a proposal
+    // waiting" — the pending proposal from the first message is
+    // discarded, never left standing alongside the correction.
+    mockSpeech();
+    const onlyButton = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: null, content: { version: 1, modules: [onlyButton] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make that button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/Update the selected button module/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'no, I meant the button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText('Add a button module');
+    expect(requestAICommand).toHaveBeenCalledTimes(2);
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    expect(secondCall.selected_module).toEqual({ type: 'button', id: onlyButton.id, props: onlyButton.props });
+  });
+});
+
+describe('typed proposal confirmation/rejection — D4-E3K', () => {
+  it('"yes, apply it" applies the pending proposal without a second backend request', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'yes, apply it');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Applied:/)).toBeInTheDocument();
+    expect(onApplyAction).toHaveBeenCalledWith(
+      { type: 'INSERT_MODULE', modules: [{ module_type: 'button', patch: {} }] },
+      null,
+    );
+    // Confirming a pending proposal is answered locally — it must never
+    // trigger a second /ai-command/ round trip.
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('"never mind" cancels the pending proposal with zero mutation and no second backend request', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { onApplyAction } = renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'never mind');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('Cancelled.')).toBeInTheDocument();
+    expect(onApplyAction).not.toHaveBeenCalled();
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('a genuinely unrecognized reply while a proposal is pending gets the existing "use the buttons" guidance, never a guess', async () => {
+    mockSpeech();
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    renderPanel();
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a button');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'what does this do to the layout');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/proposal waiting for Apply or Cancel/)).toBeInTheDocument();
+  });
+});
+
+// D4-E3K §16/§25 scenario M — a conversational antecedent must not be
+// trusted forever; after several genuinely unrelated turns, "the other
+// button" must clarify rather than silently reusing a module discussed
+// several turns ago.
+describe('stale conversational antecedent — D4-E3K', () => {
+  it('an antecedent still resolves "the other button" within the staleness window', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { rerenderWithProps } = renderPanel({
+      selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] },
+    });
+    const user = userEvent.setup();
+
+    // Turn 1 — establishes buttonA as the conversational antecedent via
+    // the currently-selected module.
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make it green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Deselect, then one ordinary, unrelated turn — well within the
+    // staleness window.
+    rerenderWithProps({ selectedModule: null });
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'add a divider');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the other button blue');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const call = vi.mocked(requestAICommand).mock.calls.at(-1)?.[0];
+    expect(call?.selected_module).toEqual({ type: 'button', id: buttonB.id, props: buttonB.props });
+  }, 15000);
+
+  it('the SAME antecedent no longer resolves "the other button" after several unrelated turns — clarifies instead of guessing', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValue(response());
+    const { rerenderWithProps } = renderPanel({
+      selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] },
+    });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make it green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText('Add a button module');
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    rerenderWithProps({ selectedModule: null });
+
+    // Four genuinely unrelated turns — exceeds the staleness window.
+    for (let i = 0; i < 4; i += 1) {
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'add a divider');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText('Add a button module');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    }
+
+    const callCountBefore = vi.mocked(requestAICommand).mock.calls.length;
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the other button blue');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // Locally answered as ambiguous — no antecedent to resolve against,
+    // and no backend call for this turn.
+    expect(await screen.findByText(/other button.*isn't clear yet|isn't clear yet.*other button/i)).toBeInTheDocument();
+    expect(vi.mocked(requestAICommand).mock.calls.length).toBe(callCountBefore);
+  }, 15000);
+});
+
+// D4-E3K completion pass — the three material requirements the D4-E3K
+// review flagged as unimplemented: multi-target pending-proposal
+// narrowing, cross-turn "do the same to X" semantic propagation, and
+// cross-turn additive continuation of a still-pending proposal. Every
+// test here exercises the real handleSend path — never a direct call to
+// activeEditTask.ts's own exports (see activeEditTask.test.ts for that
+// unit-level coverage).
+describe('multi-target pending-proposal narrowing — D4-E3K completion pass', () => {
+  it('"actually only change the first one" narrows a 2-target pending proposal to 1, with zero mutation, zero history entry, and no second backend request', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll update 2 modules",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+    }));
+    const { onApplyAction } = renderPanel({ content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make both CTAs green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/I'll update 2 modules/);
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'actually only change the first one');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findAllByText(/narrowed to the first button module/i);
+    // Purely local — no second request, nothing applied yet.
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+    expect(onApplyAction).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(onApplyAction).toHaveBeenCalledTimes(1);
+    const appliedAction = vi.mocked(onApplyAction).mock.calls[0][0] as { operations: Array<{ target_module_id: string }> };
+    expect(appliedAction.operations).toHaveLength(1);
+    expect(appliedAction.operations[0].target_module_id).toBe(buttonA.id);
+  });
+
+  it('"only the second one" keeps the second operation only', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll update 2 modules",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+    }));
+    const { onApplyAction } = renderPanel({ content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make both CTAs green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/I'll update 2 modules/);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'only the second one');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/narrowed to the second button module/i);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    const appliedAction = vi.mocked(onApplyAction).mock.calls[0][0] as { operations: Array<{ target_module_id: string }> };
+    expect(appliedAction.operations).toHaveLength(1);
+    expect(appliedAction.operations[0].target_module_id).toBe(buttonB.id);
+  });
+});
+
+describe('cross-turn "do the same to X" — D4-E3K completion pass', () => {
+  it('propagates the prior turn\'s own resolved field to a newly named target, covering both, with propagated_patch on the wire', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the first CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll update 2 modules",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the second CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findAllByText(/I'll update 2 modules/);
+    expect(requestAICommand).toHaveBeenCalledTimes(2);
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    expect(secondCall.resolved_targets).toHaveLength(2);
+    expect(secondCall.resolved_targets?.every((t) => t.propagated_patch?.backgroundColor === '#76C043')).toBe(true);
+    expect(secondCall.resolved_targets?.map((t) => t.id).sort()).toEqual([buttonA.id, buttonB.id].sort());
+  });
+
+  it('an ambiguous or unresolvable "do the same" target is answered locally — no backend call, no mutation', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the footer CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/not sure which target you mean/i)).toBeInTheDocument();
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('Apply clears the active task — a later "do the same" is no longer treated as a cross-turn propagation', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the first CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the second CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const call = vi.mocked(requestAICommand).mock.calls.at(-1)?.[0];
+    // No active task survives Apply, so this is resolved as an ordinary
+    // turn — never with a propagated_patch on the wire.
+    const targets = call?.resolved_targets ?? [];
+    expect(targets.every((t) => t.propagated_patch === undefined)).toBe(true);
+  });
+});
+
+describe('additive continuation of a still-pending proposal — D4-E3K completion pass', () => {
+  it('"increase the padding too" while pending prepends the original command and re-derives both changes, without a narrowing/correction bounce', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: button, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), "make this button green but don't change the copy");
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I will update the selected button module's padding.",
+      action: { type: 'UPDATE_MODULE_SETTINGS', target: 'selected', module_type: 'button', patch: { desktop: { paddingTop: 20, paddingRight: 20, paddingBottom: 20, paddingLeft: 20 } } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'increase the padding too');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findAllByText(/padding/i);
+    expect(requestAICommand).toHaveBeenCalledTimes(2);
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    // The combined text carries BOTH turns' own wording — the backend's
+    // existing compound-sentence extractor and preservation parsing get
+    // the full picture, never a frontend-side merge of two patches.
+    expect(secondCall.message).toContain("don't change the copy");
+    expect(secondCall.message).toContain('increase the padding too');
+  });
+
+  it('a classified NEW_TASK turn while pending does not get the continuation treatment — the old proposal text is never prepended', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    const footer = createModule('footer-simple-legal', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: button, content: { version: 1, modules: [button, footer] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), "make this button green but don't change the copy");
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'now make the footer CTA blue');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    // Bounced by the existing "there is a proposal waiting" gate — a
+    // classified new task never silently discards a still-pending
+    // proposal on its own (only Cancel/a recognized correction/
+    // continuation/narrowing/same-trigger phrase does). This is a
+    // deliberate, disclosed scope boundary — see the completion report.
+    expect(await screen.findByText(/there is a proposal waiting/i)).toBeInTheDocument();
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+  });
+});
+
+// D4-E3K hardening pass — full end-to-end conversational sequences (real
+// AIEngineerPanel -> resolver -> backend -> proposal -> Apply/Cancel/Undo
+// path, never a direct call into activeEditTask.ts's own exports) plus an
+// explicit task-boundary matrix, per the review's own numbered
+// requirements.
+describe('end-to-end conversational sequences — D4-E3K hardening pass', () => {
+  // Isolates this describe's own tests from any queued
+  // mockResolvedValueOnce() left over by an earlier test elsewhere in
+  // this large shared file — afterEach's own vi.clearAllMocks() clears
+  // call history but not a still-queued once-implementation (only
+  // mockReset does). Every test below queues exactly what it consumes,
+  // so a clean reset here is enough for each to be self-contained.
+  beforeEach(() => {
+    vi.mocked(requestAICommand).mockReset();
+  });
+
+  it('sequence A: "make both CTAs green" -> "actually only the first one" -> Apply -> only CTA1 applied, then Undo is available and invoked', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll update 2 modules",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+    }));
+    const { onApplyAction, onUndo, rerenderWithProps } = renderPanel({ content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make both CTAs green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/I'll update 2 modules/);
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'actually only the first one');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/narrowed to the first button module/i);
+
+    await user.click(screen.getByRole('button', { name: 'Apply' }));
+    const appliedAction = vi.mocked(onApplyAction).mock.calls[0][0] as { operations: Array<{ target_module_id: string }> };
+    expect(appliedAction.operations).toHaveLength(1);
+    expect(appliedAction.operations[0].target_module_id).toBe(buttonA.id);
+
+    // Undo is the parent's own history primitive — this proves the panel
+    // correctly reaches it (canUndo now true after the real Apply), not
+    // that the parent's reducer restores state (out of this component's
+    // scope, already covered by useEmailBuilderState's own tests).
+    rerenderWithProps({ canUndo: true });
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'undo that');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(onUndo).toHaveBeenCalledTimes(1);
+  });
+
+  it('sequence B: "make both buttons green but keep the copy" -> "increase the padding too" keeps the preservation clause active for the continuation', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll update 2 modules and leave the text unchanged.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+    }));
+    renderPanel({ content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make both buttons green but keep the copy');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/leave the text unchanged/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll increase the padding on both, without touching the copy.",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: null, settings_patch: { desktop: { paddingTop: 20, paddingRight: 20, paddingBottom: 20, paddingLeft: 20 } } },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: null, settings_patch: { desktop: { paddingTop: 20, paddingRight: 20, paddingBottom: 20, paddingLeft: 20 } } },
+        ],
+      },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'increase the padding too');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/without touching the copy/i);
+
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    // The preservation clause from the establishing turn is still present
+    // in the outgoing text of the continuation turn — the backend's own
+    // existing (already-tested) preservation parser sees it fresh on
+    // every turn, exactly as it would on a first turn.
+    expect(secondCall.message).toMatch(/keep the copy/i);
+  });
+
+  it('sequence C: "make the first CTA green" -> "do the same to the second CTA" propagates the resolved value, never a re-derived guess', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the first CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I'll update 2 modules",
+      action: {
+        type: 'MULTI_MODULE_UPDATE',
+        operations: [
+          { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+        ],
+      },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the second CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findAllByText(/I'll update 2 modules/);
+
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    const propagated = secondCall.resolved_targets?.find((t) => t.id === buttonB.id)?.propagated_patch;
+    // Exactly turn 1's own resolved value — not '#0082AD', not any other
+    // color the deterministic extractor might otherwise guess from
+    // "green" on a fresh, un-propagated resolution of this same message.
+    expect(propagated).toEqual({ backgroundColor: '#76C043' });
+  });
+
+  describe('sequence D: task-lifecycle boundary — no stale state leaks into an unrelated new request', () => {
+    async function establishAndResolve(user: ReturnType<typeof userEvent.setup>) {
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'make the first CTA green');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText(/#76C043/i);
+    }
+
+    it('after Apply, an unrelated new request carries no leftover resolved_targets/propagated_patch', async () => {
+      mockSpeech();
+      const buttonA = createModule('button', 1);
+      const buttonB = createModule('button', 2);
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: 'I will update the selected button module.',
+        action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+      }));
+      renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+      const user = userEvent.setup();
+
+      await establishAndResolve(user);
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'add a divider');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      const call = vi.mocked(requestAICommand).mock.calls.at(-1)?.[0];
+      expect(call?.resolved_targets).toBeUndefined();
+    });
+
+    it('after Cancel, "do the same to the second CTA" is no longer a cross-turn propagation', async () => {
+      mockSpeech();
+      const buttonA = createModule('button', 1);
+      const buttonB = createModule('button', 2);
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: 'I will update the selected button module.',
+        action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+      }));
+      renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+      const user = userEvent.setup();
+
+      await establishAndResolve(user);
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the second CTA');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      const call = vi.mocked(requestAICommand).mock.calls.at(-1)?.[0];
+      const targets = call?.resolved_targets ?? [];
+      expect(targets.every((t) => t.propagated_patch === undefined)).toBe(true);
+    });
+
+    it('after a real Undo, "do the same to the second CTA" is no longer a cross-turn propagation', async () => {
+      mockSpeech();
+      const buttonA = createModule('button', 1);
+      const buttonB = createModule('button', 2);
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: 'I will update the selected button module.',
+        action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+      }));
+      const { rerenderWithProps } = renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+      const user = userEvent.setup();
+
+      await establishAndResolve(user);
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      rerenderWithProps({ canUndo: true });
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'undo that');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the second CTA');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      const call = vi.mocked(requestAICommand).mock.calls.at(-1)?.[0];
+      const targets = call?.resolved_targets ?? [];
+      expect(targets.every((t) => t.propagated_patch === undefined)).toBe(true);
+    });
+
+    it('switching documents (rerender with a new documentId) leaves no stale active-task state for "do the same"', async () => {
+      mockSpeech();
+      const buttonA = createModule('button', 1);
+      const buttonB = createModule('button', 2);
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: 'I will update the selected button module.',
+        action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+      }));
+      const { rerenderWithProps } = renderPanel({
+        documentId: 1, selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] },
+      });
+      const user = userEvent.setup();
+
+      await establishAndResolve(user);
+      // Cancel the still-pending proposal from the OLD document first —
+      // a document switch does not itself clear a pending proposal (a
+      // real navigation would unmount the panel; this test only
+      // re-renders the same instance), so leaving it pending would
+      // correctly bounce the next message rather than ever leaking
+      // anything. Cancelling isolates THIS test's own concern: does
+      // switching documents leave stale activeTaskRef state behind.
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      // Simulate switching to a different document — a new documentId,
+      // a fresh (different) module tree.
+      const otherButtonA = createModule('button', 1);
+      const otherButtonB = createModule('button', 2);
+      rerenderWithProps({
+        documentId: 2, selectedModule: otherButtonA, content: { version: 1, modules: [otherButtonA, otherButtonB] },
+      });
+
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response());
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the second CTA');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(requestAICommand).toHaveBeenCalledTimes(2);
+      const call = vi.mocked(requestAICommand).mock.calls.at(-1)?.[0];
+      const targets = call?.resolved_targets ?? [];
+      expect(targets.every((t) => t.propagated_patch === undefined)).toBe(true);
+    });
+  });
+
+  describe('sequence E: equivalent continuation/narrowing across supported languages', () => {
+    it.each([
+      ['Hindi (Devanagari)', 'सिर्फ पहला वाला रखो'],
+      ['Hinglish', 'sirf pehla wala rakho'],
+      ['Spanish', 'solo cambia el primero'],
+      ['German', 'nur das erste ändern'],
+    ])('%s narrowing phrase keeps only CTA1', async (_label, phrase) => {
+      mockSpeech();
+      const buttonA = createModule('button', 1);
+      const buttonB = createModule('button', 2);
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: "I'll update 2 modules",
+        action: {
+          type: 'MULTI_MODULE_UPDATE',
+          operations: [
+            { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+            { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          ],
+        },
+      }));
+      const { onApplyAction } = renderPanel({ content: { version: 1, modules: [buttonA, buttonB] } });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'make both CTAs green');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findAllByText(/I'll update 2 modules/);
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), phrase);
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findAllByText(/narrowed to the first button module/i);
+      expect(requestAICommand).toHaveBeenCalledTimes(1);
+
+      await user.click(screen.getByRole('button', { name: 'Apply' }));
+      const appliedAction = vi.mocked(onApplyAction).mock.calls[0][0] as { operations: Array<{ target_module_id: string }> };
+      expect(appliedAction.operations).toHaveLength(1);
+      expect(appliedAction.operations[0].target_module_id).toBe(buttonA.id);
+    });
+
+    // The trigger half ("do the same"/wahi karo/lo mismo/das gleiche) is
+    // genuinely non-English, proving isSameTrigger()'s own multilingual
+    // reach; the target half ("second CTA") stays the English ordinal+
+    // type-word fragment referenceResolver.ts's own (pre-existing,
+    // English-only) ordinal matching already resolves — extending THAT
+    // file's ordinal vocabulary to Hindi/Spanish/German is a separate,
+    // larger, disclosed limitation out of this pass's bounded scope (see
+    // the D4-E3K report), not a gap in the mechanism this test targets.
+    it.each([
+      ['Hindi (Devanagari)', 'दूसरे second CTA के लिए भी वही करो'],
+      ['Hinglish', 'second CTA ke liye bhi wahi karo'],
+      ['Spanish', 'haz lo mismo con el second CTA'],
+      ['German', 'mach das gleiche für den second CTA'],
+    ])('%s "do the same" phrase propagates the resolved value across languages', async (_label, phrase) => {
+      mockSpeech();
+      const buttonA = createModule('button', 1);
+      const buttonB = createModule('button', 2);
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: 'I will update the selected button module.',
+        action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+      }));
+      renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB] } });
+      const user = userEvent.setup();
+
+      await user.type(screen.getByPlaceholderText(/Type your command/), 'make the first CTA green');
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByText(/#76C043/i);
+
+      vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+        reply: "I'll update 2 modules",
+        action: {
+          type: 'MULTI_MODULE_UPDATE',
+          operations: [
+            { target_module_id: buttonA.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+            { target_module_id: buttonB.id, module_type: 'button', props_patch: { backgroundColor: '#76C043' }, settings_patch: null },
+          ],
+        },
+      }));
+      await user.type(screen.getByPlaceholderText(/Type your command/), phrase);
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findAllByText(/I'll update 2 modules/);
+
+      const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+      const propagated = secondCall.resolved_targets?.find((t) => t.id === buttonB.id)?.propagated_patch;
+      expect(propagated).toEqual({ backgroundColor: '#76C043' });
+    });
+  });
+});
+
+// D4-E3K hardening pass §5 — explicit task-boundary matrix. Several rows
+// are already proven by tests elsewhere in this file; this describe
+// collects the ones with no existing direct coverage and cross-
+// references the rest so the matrix reads as complete in one place.
+describe('task-boundary matrix — D4-E3K hardening pass §5', () => {
+  beforeEach(() => {
+    vi.mocked(requestAICommand).mockReset();
+  });
+
+  // continuation -> inherits only intended bounded state: see sequence B
+  // above (preservation) and the narrowing/"do the same" tests (bounded
+  // resolvedFields only, never a raw module snapshot).
+  // correction -> replaces relevant pending value: see "correction and
+  // continuation via existing architecture — D4-E3K" scenario A above.
+  // confirmation -> uses existing Apply; rejection -> uses existing
+  // Cancel: see "typed proposal confirmation/rejection — D4-E3K" above.
+  // Apply/Cancel/Undo clear activeTaskRef: see "sequence D" above.
+  // clearly unrelated new task does not inherit: see "a classified
+  // NEW_TASK turn while pending..." above (still-pending case) and
+  // "after Apply, an unrelated new request..." above (post-Apply case).
+
+  it('an ambiguous "do the same" target fails closed — clarifies, never inherits by guessing', async () => {
+    mockSpeech();
+    const buttonA = createModule('button', 1);
+    const buttonB = createModule('button', 2);
+    const buttonC = createModule('button', 3);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: buttonA, content: { version: 1, modules: [buttonA, buttonB, buttonC] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make the first CTA green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    // "the other CTA" is genuinely ambiguous with THREE buttons in the
+    // document (buttonB or buttonC) — must clarify, never silently pick
+    // one and propagate a value onto a guessed target.
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'do the same to the other CTA');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(requestAICommand).toHaveBeenCalledTimes(1);
+    const lastMessage = screen.getAllByText(/not sure which target you mean|isn't clear yet/i);
+    expect(lastMessage.length).toBeGreaterThan(0);
+  });
+
+  it('refinement (an additive continuation naming a NEW field on the same target) inherits the same antecedent — no re-selection prompt', async () => {
+    mockSpeech();
+    const button = createModule('button', 1);
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: 'I will update the selected button module.',
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043' } },
+    }));
+    renderPanel({ selectedModule: button, content: { version: 1, modules: [button] } });
+    const user = userEvent.setup();
+
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'make this button green');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/#76C043/i);
+
+    vi.mocked(requestAICommand).mockResolvedValueOnce(response({
+      reply: "I will also center the selected button module's text.",
+      action: { type: 'UPDATE_MODULE_PROPS', target: 'selected', module_type: 'button', patch: { backgroundColor: '#76C043', textAlign: 'center' } },
+    }));
+    await user.type(screen.getByPlaceholderText(/Type your command/), 'also center it');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findAllByText(/also center/i);
+    expect(screen.queryByText(/select a module/i)).not.toBeInTheDocument();
+    const secondCall = vi.mocked(requestAICommand).mock.calls[1][0];
+    expect(secondCall.selected_module).toEqual({ type: 'button', id: button.id, props: button.props });
   });
 });

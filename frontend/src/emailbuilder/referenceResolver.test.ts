@@ -556,6 +556,52 @@ describe('resolveReference — standalone ordinal reference (D4-E3J)', () => {
   });
 });
 
+describe('resolveReference — standalone "the other X" reference (D4-E3K)', () => {
+  it('resolves the remaining candidate when the antecedent names one of two real modules of that type', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveReference(baseContext({
+      message: 'make the other button blue', modules: [buttonA, buttonB],
+      lastReferent: { kind: 'module', id: buttonA.id, label: 'the first button module' },
+    }));
+    expect(result).toMatchObject({ status: 'resolved', referent: { kind: 'module', id: buttonB.id } });
+  });
+
+  it('is ambiguous when the antecedent is absent', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveReference(baseContext({ message: 'make the other button blue', modules: [buttonA, buttonB], lastReferent: null }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('is ambiguous when the antecedent is a different type entirely (never guessed)', () => {
+    const hero = mod('hero-text-only');
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const result = resolveReference(baseContext({
+      message: 'make the other button blue', modules: [hero, buttonA, buttonB],
+      lastReferent: { kind: 'module', id: hero.id, label: 'the hero module' },
+    }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('is ambiguous when 2+ candidates remain after removing the antecedent', () => {
+    const buttonA = mod('button');
+    const buttonB = mod('button');
+    const buttonC = mod('button');
+    const result = resolveReference(baseContext({
+      message: 'make the other button blue', modules: [buttonA, buttonB, buttonC],
+      lastReferent: { kind: 'module', id: buttonA.id, label: 'the first button module' },
+    }));
+    expect(result.status).toBe('ambiguous');
+  });
+
+  it('falls through when no candidate of that type exists at all', () => {
+    const result = resolveReference(baseContext({ message: 'make the other button blue', modules: [mod('text')], lastReferent: null }));
+    expect(result.status).toBe('no-referring-expression');
+  });
+});
+
 describe('resolveMultipleReferences — "all X" (D4-E3J)', () => {
   it('resolves every candidate of that type, not just a pair', () => {
     const buttonA = mod('button');

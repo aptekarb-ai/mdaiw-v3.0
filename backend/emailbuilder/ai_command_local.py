@@ -862,10 +862,23 @@ def _build_safe_resolved_targets(raw):
         raw_props = entry.get('props') if isinstance(entry.get('props'), dict) else {}
         allowed_keys = {field['key'] for field in module_capabilities.get_editable_fields(module_type)}
         safe_props = {k: v for k, v in raw_props.items() if k in allowed_keys and isinstance(v, (str, int, float))}
+        # D4-E3K hardening pass §2 — propagated_patch (cross-turn "do the
+        # same to X") is grounding-only here, same as props above; it
+        # carries NO mutation authority in this LLM tier at all (the
+        # deterministic provider's own build_deterministic_multi_module_
+        # plan/_validate_patch is the ONLY place a propagated_patch can
+        # ever become a real mutation). Filtered through the EXACT SAME
+        # allowed_keys/primitive-only comprehension as safe_props above —
+        # never a second/new filtering rule — so an unsupported or
+        # unrequested field can never even appear as trusted state in the
+        # LLM's own prompt context, let alone influence a mutation.
+        raw_propagated = entry.get('propagated_patch') if isinstance(entry.get('propagated_patch'), dict) else {}
+        safe_propagated = {k: v for k, v in raw_propagated.items() if k in allowed_keys and isinstance(v, (str, int, float))}
         safe.append({
             'id': target_id[:200], 'type': module_type, 'label': label[:200], 'matched_phrase': matched_phrase[:500],
             'props': safe_props,
             'editable_props': sorted(allowed_keys),
+            **({'propagated_patch': safe_propagated} if safe_propagated else {}),
         })
     return safe
 

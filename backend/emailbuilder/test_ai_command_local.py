@@ -27,7 +27,7 @@ from . import ai_command_local, local_ai_diagnostics
 from .ai_command import EmailCommandProviderUnavailable, get_default_email_command_provider
 from .ai_command_local import (
     LocalEmailCommandProvider, _build_safe_context, _build_safe_construction_plan_summary,
-    _build_untrusted_attachment_message,
+    _build_safe_resolved_targets, _build_untrusted_attachment_message,
 )
 
 
@@ -272,6 +272,63 @@ class CapabilityHonestyTests(SimpleTestCase):
         raw = [{'section_role': 'hero', 'module_type': 'hero-text-only', 'classification': 'normalized', 'reason': 'default'}]
         safe_context, _history = _build_safe_context({'construction_plan_summary': raw})
         self.assertEqual(safe_context['construction_plan_summary'][0]['module_type'], 'hero-text-only')
+
+
+class PropagatedPatchGroundingSanitizationTests(SimpleTestCase):
+    """D4-E3K hardening pass §2 — propagated_patch (cross-turn "do the
+    same to X") must never reach the LLM tier's own prompt grounding as
+    an unfiltered field: it is filtered through the EXACT SAME
+    allowed_keys/primitive-only comprehension _build_safe_resolved_targets
+    already applies to `props` — never a new/second filtering rule. This
+    is grounding-only; the real mutation-authority gate is
+    _validate_patch() inside build_deterministic_multi_module_plan
+    (ai_command.py), covered separately in test_action_grounding.py."""
+
+    def test_supported_field_passes_through(self):
+        result = _build_safe_resolved_targets([{
+            'id': 'cta-2', 'type': 'button', 'label': 'the second button module', 'matched_phrase': 'do the same',
+            'props': {}, 'propagated_patch': {'backgroundColor': '#76C043'},
+        }])
+        self.assertEqual(result[0]['propagated_patch'], {'backgroundColor': '#76C043'})
+
+    def test_unsupported_field_for_this_target_type_is_stripped(self):
+        # 'fontSize' is not an editable field on this builder's footer
+        # module — must never appear in the grounding payload, even
+        # though it was present on the wire.
+        result = _build_safe_resolved_targets([{
+            'id': 'footer-1', 'type': 'footer-simple-legal', 'label': 'the footer module', 'matched_phrase': 'do the same',
+            'props': {}, 'propagated_patch': {'fontSize': 20},
+        }])
+        self.assertNotIn('propagated_patch', result[0])
+        self.assertNotIn('fontSize', json.dumps(result[0]))
+
+    def test_non_primitive_value_is_stripped(self):
+        result = _build_safe_resolved_targets([{
+            'id': 'cta-2', 'type': 'button', 'label': 'the second button module', 'matched_phrase': 'do the same',
+            'props': {}, 'propagated_patch': {'backgroundColor': {'nested': 'object'}},
+        }])
+        self.assertNotIn('propagated_patch', result[0])
+
+    def test_missing_propagated_patch_is_simply_absent_never_an_empty_key(self):
+        result = _build_safe_resolved_targets([{
+            'id': 'cta-1', 'type': 'button', 'label': 'the first button module', 'matched_phrase': 'make it green',
+            'props': {},
+        }])
+        self.assertNotIn('propagated_patch', result[0])
+
+    def test_malformed_propagated_patch_never_raises(self):
+        result = _build_safe_resolved_targets([{
+            'id': 'cta-1', 'type': 'button', 'label': 'the first button module', 'matched_phrase': 'do the same',
+            'props': {}, 'propagated_patch': 'not-a-dict',
+        }])
+        self.assertNotIn('propagated_patch', result[0])
+
+    def test_mixed_supported_and_unsupported_keys_keeps_only_supported(self):
+        result = _build_safe_resolved_targets([{
+            'id': 'cta-2', 'type': 'button', 'label': 'the second button module', 'matched_phrase': 'do the same',
+            'props': {}, 'propagated_patch': {'backgroundColor': '#76C043', 'notARealField': 'x'},
+        }])
+        self.assertEqual(result[0]['propagated_patch'], {'backgroundColor': '#76C043'})
 
 
 class NeverFallsThroughToOpenAITests(TestCase):

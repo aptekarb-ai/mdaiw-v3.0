@@ -425,6 +425,20 @@ class ResolvedTargetContextSerializer(serializers.Serializer):
     label = serializers.CharField(max_length=200, trim_whitespace=True, allow_blank=False)
     matched_phrase = serializers.CharField(max_length=500, trim_whitespace=True, allow_blank=False)
     props = serializers.DictField(required=False, default=dict)
+    # D4-E3K completion pass §G/§H — a CROSS-TURN "do the same" request
+    # ("do the same to the second CTA" as its OWN later turn, never within
+    # one message's compound resolution — that case is already handled by
+    # _SAME_TRIGGER_RE inside build_deterministic_multi_module_plan
+    # itself). The frontend remembers only the bounded, already-resolved
+    # field->value pairs from the PRIOR turn's own validated action patch
+    # (never a raw module snapshot, never an unrelated current-state
+    # field) and resends them here as the candidate patch for THIS target.
+    # Authority never shifts to the client: build_deterministic_multi_
+    # module_plan validates this exactly like any other candidate patch,
+    # through the SAME _validate_patch()/capability-manifest gate every
+    # other action type uses — an unsupported field is dropped, never
+    # silently trusted.
+    propagated_patch = serializers.DictField(required=False, default=dict)
 
 
 # D4-E3I §3/§13 — same bounding posture as MAX_MULTI_MODULE_OPERATIONS:

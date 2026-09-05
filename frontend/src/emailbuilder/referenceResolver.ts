@@ -217,6 +217,55 @@ export function resolveReference(ctx: ReferentialResolutionContext): Referential
     }
   }
 
+  // 3.6. D4-E3K §16/Scenario M — a standalone "the other X" reference as
+  // the SOLE target of a message ("make the other button blue"), never
+  // part of a 2+-target compound (that case is resolveMultipleReferences'
+  // own OTHER_TYPED_RE branch, unchanged). Before this checkpoint, "the
+  // other X" had NO resolution path at all outside a compound request —
+  // a real, confirmed gap that directly blocked the checkpoint's own
+  // named acceptance scenario. Reuses the EXACT SAME OTHER_TYPED_RE/
+  // candidatesForWord/normalizeTypeWord/matchesTypeWord machinery the
+  // compound case already uses — never a second "other" engine. Only
+  // ever resolves when ctx.lastReferent names one real candidate of that
+  // same type AND exactly one other candidate remains; a stale/absent/
+  // type-mismatched antecedent, or 2+ remaining candidates, correctly
+  // falls through to an honest ambiguous/unresolved outcome rather than
+  // guessing (§6's own rule, applied here identically).
+  const otherTypedMatch = message.match(OTHER_TYPED_RE);
+  if (otherTypedMatch) {
+    const word = normalizeTypeWord(otherTypedMatch[1]);
+    const candidates = candidatesForWord(flat, word);
+    const antecedent = ctx.lastReferent?.kind === 'module' ? flat.find((m) => m.id === ctx.lastReferent!.id) : undefined;
+    if (antecedent && matchesTypeWord(antecedent.type, word)) {
+      const remaining = candidates.filter((m) => m.id !== antecedent.id);
+      if (remaining.length === 1) {
+        const only = remaining[0];
+        return {
+          status: 'resolved',
+          referent: { kind: 'module', id: only.id, label: moduleLabel(only, flat.indexOf(only)) },
+          note: `The user is referring to the other ${word} module.`,
+        };
+      }
+      if (remaining.length > 1) {
+        const labels = remaining.map((m) => moduleLabel(m, flat.indexOf(m)));
+        return {
+          status: 'ambiguous',
+          clarifyingQuestion: `There is more than one other ${word} module — ${labels.join(', ')}. Which one do you mean?`,
+        };
+      }
+      // Zero remaining candidates — nothing else to disambiguate against;
+      // fall through rather than fabricate a target.
+    } else if (candidates.length > 0) {
+      // No trustworthy antecedent of this type at all (absent, stale, or
+      // a type mismatch) — genuinely unclear which one is "the other"
+      // one, never guessed.
+      return {
+        status: 'ambiguous',
+        clarifyingQuestion: `"The other ${word}" isn't clear yet — which ${word} did you mean, and which one is the "other" one?`,
+      };
+    }
+  }
+
   // 4. Typed module reference — "this button", "that image", "the hero".
   const typedMatch = message.match(TYPED_MODULE_RE);
   if (typedMatch) {

@@ -26,6 +26,10 @@ import { clearLearnedRepairSignals, newLearningEventId, recordRepairSignal } fro
 import { toRepairCandidate } from './reconstructionRepairCandidate';
 import { matchReconstructionIntent } from './reconstructionIntentMatcher';
 import { matchUndoIntent } from './undoIntentMatcher';
+import { isProposalCorrection, matchProposalResponse } from './proposalResponseMatcher';
+import {
+  classifyTurnRelation, extractPreservationPhrase, isSameTrigger, tryNarrowPendingOperations, type ActiveEditTaskContext,
+} from './activeEditTask';
 import { analyzeImportedHtml } from './htmlImportAnalysis';
 import { buildImportReconstructionContext } from './importReconstructionContext';
 import {
@@ -101,6 +105,14 @@ interface PendingProposal {
   // only changes what the proposal card RENDERS (see
   // constructionPlanSummary below), never how it's applied.
   constructionPlan?: ConstructionPlan;
+  // D4-E3K completion pass §D — one label per MULTI_MODULE_UPDATE
+  // operation, in the SAME order, captured at proposal-creation time from
+  // the resolver's own already-vouched-for labels ("the footer CTA").
+  // Used ONLY by tryNarrowPendingOperations() to match a named-target
+  // narrowing phrase ("leave the footer one out") — never sent anywhere,
+  // never used to drive the mutation itself. undefined for a single-
+  // target proposal (nothing to narrow by name).
+  targetLabels?: string[];
 }
 
 interface AIEngineerPanelProps {
@@ -599,6 +611,25 @@ export function AIEngineerPanel({
   // same handleSend tick that sets them.
   const lastDiscussedReconstructionCategoryRef = useRef<string | null>(null);
   const lastReferentRef = useRef<LastReferent | null>(null);
+  // D4-E3K §16/§25 scenario M — a conversational antecedent must not be
+  // treated as trustworthy forever. "Make the other one blue" after
+  // several genuinely unrelated turns should clarify, not silently reuse
+  // whatever module was discussed many turns ago. Counts sent messages
+  // since lastReferentRef was last set OR successfully reused; reset to
+  // 0 at both of those points (see the two write sites below), and
+  // checked/enforced once per turn, right before resolution, in
+  // handleSend. A small, bounded turn-count heuristic — never a persistent
+  // memory system, never a second conversation-state store.
+  const turnsSinceLastReferentRef = useRef(0);
+  const STALE_REFERENT_TURN_LIMIT = 3;
+  // D4-E3K completion pass §A/§C — the bounded active-edit-task context
+  // (see activeEditTask.ts's own docstring for exactly what this is and
+  // is not). Cleared on Apply, Cancel, Undo, a classified NEW_TASK turn,
+  // staleness, and a document switch (see the SAME documentId-change
+  // effect that already resets lastReferentRef/resolvedTargetsContextRef
+  // below) — never persists indefinitely, never a second source of truth
+  // for the document.
+  const activeTaskRef = useRef<ActiveEditTaskContext | null>(null);
 
   // R4-C3/C4 — the persisted reconstruction session (source HTML + pass
   // bookkeeping), loaded synchronously at mount for the SAME reason
@@ -738,6 +769,7 @@ export function AIEngineerPanel({
     lastReferentRef.current = null;
     resolvedModuleOverrideRef.current = null;
     resolvedTargetsContextRef.current = null;
+    activeTaskRef.current = null;
     reconstructionSessionRef.current = loadReconstructionSession(documentId);
     pendingReconstructionPassRef.current = null;
     setHistory([]);
@@ -910,7 +942,19 @@ export function AIEngineerPanel({
   }
 
   async function handleSend(overrideMessage?: string) {
-    const message = (overrideMessage ?? draft).trim();
+    // D4-E3K completion pass §E/§F — reassigned (never reassigned for any
+    // OTHER branch in this function) exactly once, only by the additive-
+    // continuation branch below, to prepend the still-pending proposal's
+    // OWN original command text ("Make this button green but don't
+    // change the copy.") ahead of this turn's own text ("Increase the
+    // padding too."). This is the "text re-injection" design: the
+    // EXISTING backend preservation/exclusion parsing and the EXISTING
+    // deterministic compound-sentence extractor re-derive the SAME
+    // constraints and combine both requested changes, with zero new
+    // parsing/merge logic here — never a second planning universe. Every
+    // other code path in this function reads the original, unmodified
+    // turn text.
+    let message = (overrideMessage ?? draft).trim();
     if (!message || sending) return;
 
     // R4-D Checkpoint D2 — a proposal is still pending Apply. The composer
@@ -925,11 +969,217 @@ export function AIEngineerPanel({
     // Cancel button already calls — never a second cancel path. Any
     // OTHER message here is answered honestly rather than silently
     // dropped now that the field no longer looks disabled.
-    if (pending || pendingRepair) {
+    // D4-E3K §3/§6/§9 (bounded) — an EXPLICIT correction marker ("actually
+    // make it blue", "no, I meant the footer CTA") silently replaces a
+    // still-PENDING (never yet applied) single-action proposal, instead
+    // of being blocked by the "there is a proposal waiting" bounce below.
+    // Scoped deliberately narrow: only a plain `pending` (never
+    // `pendingRepair` — a repair batch's own revision semantics are a
+    // materially different, out-of-scope shape for this pass, see the
+    // D4-E3K report), and only when the message carries an unambiguous
+    // marker — never a general "is this a continuation" classifier. The
+    // OLD proposal is discarded with no separate "Cancelled." message
+    // (this is a correction, not a rejection); the message then falls
+    // through to the exact same resolution pipeline an ordinary,
+    // non-pending message already uses below — never a second mutation-
+    // extraction engine, and the result becomes the new pending
+    // proposal exactly like any other turn's result would.
+    // D4-E3K completion pass §D — SUBTRACTIVE narrowing of a still-
+    // PENDING (never yet applied) MULTI_MODULE_UPDATE proposal: "actually
+    // only change the first one", "leave the footer one out". Purely
+    // local — no backend round trip, no document mutation, no history
+    // entry, no Apply. Checked before the correction bypass below because
+    // a narrowing phrase ("only the first one") can also look like a bare
+    // correction marker; narrowing is the more specific, safer reading
+    // when there is a real multi-target proposal to narrow. Declines
+    // (falls through) when nothing recognizable matches, or when the
+    // match would keep every operation (nothing to narrow) or none at all
+    // (never silently discard the whole proposal on a narrowing phrase
+    // alone — that is what Cancel is for).
+    const pendingOps = pending && pending.action.type === 'MULTI_MODULE_UPDATE' ? pending.action.operations : null;
+    const narrowed = pendingOps && pending && pending.targetLabels
+      ? tryNarrowPendingOperations(message, pending.targetLabels)
+      : null;
+    if (pending && pendingOps && narrowed && narrowed.keepIndices.length > 0 && narrowed.keepIndices.length < pendingOps.length) {
       appendMessage('user', message);
       if (overrideMessage === undefined) setDraft('');
-      if (matchUndoIntent(message)) {
+      const keptOps = narrowed.keepIndices.map((i: number) => pendingOps[i]);
+      const keptLabels = narrowed.keepIndices.map((i: number) => pending.targetLabels![i]);
+      setPending({ ...pending, action: { ...pending.action, operations: keptOps } as AICommandAction, targetLabels: keptLabels });
+      appendMessage(
+        'assistant',
+        keptOps.length === 1
+          ? `Got it — narrowed to ${keptLabels[0]} only. Review the updated proposal below.`
+          : `Got it — narrowed to ${keptOps.length} targets. Review the updated proposal below.`,
+      );
+      return;
+    }
+
+    // D4-E3K completion pass §G — cross-turn "do the same to X": the
+    // prior turn's own bounded, already-validated field->value pairs
+    // (activeTaskRef) are propagated to a NEWLY named target, still
+    // covering the original target(s) too — "make both green" arrived at
+    // over two turns instead of one. Handled as its own small branch
+    // (never folded into the general resolver pipeline below) so
+    // propagated_patch is only ever sent on a real "do the same" turn.
+    // Only engages with a genuinely resolved, unambiguous, NOT-already-
+    // targeted new module — see resolveReference's own ambiguous/none
+    // handling below, mirrored exactly from the ordinary pipeline: an
+    // uncertain match is answered locally, never guessed, never sent.
+    if (pending && !pendingRepair && isSameTrigger(message) && activeTaskRef.current) {
+      appendMessage('user', message);
+      if (overrideMessage === undefined) setDraft('');
+      const task = activeTaskRef.current;
+      const sameResolution = resolveReference({
+        message, modules: content.modules, selectedModule: null, selectedColumn: null,
+        lastDiscussedValidationIssue: null, openValidationIssues: [],
+        importReconstructionContext: null, lastDiscussedReconstructionCategory: null, lastReferent: null,
+      });
+      if (sameResolution.status === 'ambiguous') {
+        appendMessage('assistant', sameResolution.clarifyingQuestion);
+        return;
+      }
+      if (sameResolution.status !== 'resolved' || sameResolution.referent.kind !== 'module' || sameResolution.referent.id === 'none') {
+        appendMessage('assistant', 'I’m not sure which target you mean — please name it directly, for example "do the same to the footer CTA".');
+        return;
+      }
+      const newTarget = sameResolution.referent;
+      if (task.targetIds.includes(newTarget.id)) {
+        appendMessage('assistant', 'That target already has this change.');
+        return;
+      }
+      const newTargetModule = findModuleById(content.modules, newTarget.id);
+      if (!newTargetModule) {
+        appendMessage('assistant', 'I’m not sure which target you mean — please name it directly, for example "do the same to the footer CTA".');
+        return;
+      }
+      setPending(null);
+      setStrongConfirmChecked(false);
+      setSending(true);
+      const priorEntries: AICommandResolvedTargetContext[] = task.targetIds.map((id) => ({
+        id, type: task.moduleType as AICommandResolvedTargetContext['type'], label: `the ${task.moduleType} module`,
+        matched_phrase: message, props: findModuleById(content.modules, id)?.props ?? {},
+        propagated_patch: task.resolvedFields,
+      }));
+      const newEntry: AICommandResolvedTargetContext = {
+        id: newTarget.id, type: newTargetModule.type as AICommandResolvedTargetContext['type'], label: newTarget.label,
+        matched_phrase: message, props: newTargetModule.props ?? {},
+        propagated_patch: task.resolvedFields,
+      };
+      resolvedTargetsContextRef.current = [...priorEntries, newEntry];
+      try {
+        const response = await requestAICommand({
+          message, selected_module: null, platform, width, editor_mode: editorMode,
+          selected_column: null, selected_validation_issue: null,
+          conversation_history: boundedHistoryForRequest(messages).map((m) => ({ role: m.role, content: m.text })),
+          import_reconstruction: null, copy_source: null,
+          resolved_targets: resolvedTargetsContextRef.current,
+          excluded_targets: undefined, reference_resolved: true,
+          document_summary: { module_count: content.modules.length, module_types: content.modules.slice(0, MAX_DOCUMENT_SUMMARY_MODULES).map((m) => m.type) },
+        });
+        resolvedTargetsContextRef.current = null;
+        appendMessage('assistant', response.reply);
+        setLastProvider(response.provider);
+        if (response.action.type === 'NONE') {
+          setHistory((current) => [...current, {
+            id: newId('hist'), command: message, interpretation: response.reply, action: response.action,
+            status: 'clarification', summary: response.reply, provider: response.provider, requiresConfirmation: false,
+          }]);
+        } else {
+          setStrongConfirmChecked(false);
+          const targetLabels = response.action.type === 'MULTI_MODULE_UPDATE'
+            ? (response.action as { operations?: Array<{ target_module_id: string; module_type: string }> }).operations
+              ?.map((op) => [...priorEntries, newEntry].find((t) => t.id === op.target_module_id)?.label ?? `the ${op.module_type} module`)
+            : undefined;
+          setPending({
+            messageId: newId('proposal'), command: message, interpretation: response.reply, action: response.action,
+            requiresConfirmation: response.requires_confirmation, requiresStrongConfirmation: response.requires_strong_confirmation,
+            provider: response.provider, capturedSelectedModuleId: null, targetLabels,
+          });
+          if (response.action.type === 'MULTI_MODULE_UPDATE') {
+            const ops = (response.action as { operations?: Array<{ target_module_id: string; module_type: string }> }).operations ?? [];
+            if (ops.length > 0) establishActiveTask(response.action, ops.map((op) => op.target_module_id), ops[0].module_type, message);
+          }
+        }
+      } catch {
+        appendMessage('assistant', 'We could not reach the AI Engineer. Please try again.');
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    // D4-E3K completion pass §E/§F — an ADDITIVE continuation of the SAME
+    // still-pending single-target proposal ("increase the padding too",
+    // "also center it") — classifyTurnRelation() recognizes only a
+    // narrow, closed continuation vocabulary and fails closed to
+    // 'new_task' for anything else, so this never fires on an ordinary
+    // unrelated message. The OLD proposal's own original command text is
+    // prepended to THIS turn's text and the combined text is handed to
+    // the EXACT SAME resolution pipeline below (never a new merge/patch-
+    // combination engine) — the backend's own existing compound-sentence
+    // extractor and preservation/exclusion parsing re-derive both
+    // requested changes and any still-active constraint straight from
+    // that combined text — including a MULTI_MODULE_UPDATE pending's own
+    // "except the footer CTA" exclusion clause, re-parsed fresh by
+    // resolveExclusions() off the SAME concatenated text (see D4-E3J's
+    // own resolveExclusions, unchanged): no exclusion tracking of its
+    // own is needed here at all. Checked before isProposalCorrection: a
+    // correction REPLACES the old text, this PREPENDS it, and the two
+    // marker vocabularies can overlap.
+    if (
+      pending && !pendingRepair && !narrowed
+      && !isProposalCorrection(message) && matchProposalResponse(message) === 'none' && !isSameTrigger(message)
+      && classifyTurnRelation(message, true) === 'continuation'
+    ) {
+      // D4-E3K hardening pass §1 — the establishing turn's own
+      // preservation clause is ALWAYS re-appended in its canonical
+      // English form (activeTaskRef.preservationPhrase is canonicalized
+      // by extractPreservationPhrase regardless of source language — see
+      // its own docstring), never relying solely on pending.command's
+      // raw original wording. For an English establishing turn this is
+      // harmless — the clause already appears once in pending.command
+      // and the backend's own preservation parser is idempotent — but
+      // for a non-English establishing turn (whose raw wording the
+      // backend's English-only parser cannot itself recognize) this is
+      // the ONLY thing that keeps the constraint alive into a
+      // continuation turn.
+      const preservationBoost = activeTaskRef.current?.preservationPhrase
+        ? ` (${activeTaskRef.current.preservationPhrase})` : '';
+      message = `${pending.command} ${message}${preservationBoost}`;
+      setPending(null);
+      setStrongConfirmChecked(false);
+    } else if (pending && !pendingRepair && isProposalCorrection(message)) {
+      setPending(null);
+      setStrongConfirmChecked(false);
+    } else if (pending || pendingRepair) {
+      appendMessage('user', message);
+      if (overrideMessage === undefined) setDraft('');
+      // D4-E3K §10/§11 — typed CONFIRMATION ("yes, apply it") and
+      // REJECTION ("never mind") of a still-pending proposal, on top of
+      // the existing matchUndoIntent()-based cancel/revert/restore
+      // vocabulary already reused here (see this block's own long-
+      // standing comment above for why undo-family phrases route to
+      // Cancel, never Undo, in this branch). matchProposalResponse()
+      // covers exactly what that vocabulary never did — a bare
+      // dismissal with no undo-shaped verb, and the wholly new
+      // confirmation side. The normal Apply/Cancel pipeline and
+      // validation rules remain the ONLY way anything is ever applied —
+      // this only decides WHICH existing handler a typed reply calls.
+      const proposalResponse = matchProposalResponse(message);
+      if (matchUndoIntent(message) || proposalResponse === 'reject') {
         if (pendingRepair) handleCancelRepair(); else handleCancel();
+      } else if (proposalResponse === 'confirm') {
+        if (pending?.requiresStrongConfirmation && !strongConfirmChecked) {
+          appendMessage(
+            'assistant',
+            'This change needs the explicit confirmation checkbox below before I can apply it — please check it, then Apply.',
+          );
+        } else if (pendingRepair) {
+          handleApplyRepair();
+        } else {
+          void handleApply();
+        }
       } else {
         appendMessage(
           'assistant',
@@ -964,6 +1214,11 @@ export function AIEngineerPanel({
           action: { type: 'NONE' }, status: 'applied', summary: 'Restored the previous email state.',
           provider: 'deterministic', requiresConfirmation: false,
         }]);
+        // D4-E3K completion pass §C — a real Undo just reverted the
+        // document to before the active task's own Apply; fail closed
+        // rather than risk a later "do the same" propagating a field
+        // value that document state no longer reflects.
+        activeTaskRef.current = null;
       } else {
         const reply = "There isn't a previous applied change to undo.";
         appendMessage('assistant', reply);
@@ -1249,6 +1504,22 @@ export function AIEngineerPanel({
     // DiscussedIssueId) so the provider answers with real grounding
     // instead of generic language. A message with no referring
     // expression at all (the common case) passes through unchanged.
+    // D4-E3K §16 — invalidate a stale conversational antecedent BEFORE
+    // this turn's resolution ever sees it. Counted from the turn it was
+    // last set/reused (see the two reset sites below); once STALE_
+    // REFERENT_TURN_LIMIT ordinary turns have passed without it being
+    // touched again, it stops being offered as a candidate — a later
+    // genuinely ambiguous "the other one" then correctly falls through
+    // to a clarifying question instead of silently reusing a module the
+    // conversation moved on from several turns ago.
+    if (lastReferentRef.current) {
+      turnsSinceLastReferentRef.current += 1;
+      if (turnsSinceLastReferentRef.current > STALE_REFERENT_TURN_LIMIT) {
+        lastReferentRef.current = null;
+        turnsSinceLastReferentRef.current = 0;
+      }
+    }
+
     const resolverLayoutModule = selectedColumn ? findModuleById(content.modules, selectedColumn.layoutId) : null;
     const resolverColumnIndex = resolverLayoutModule?.columns?.findIndex((c) => c.id === selectedColumn?.columnId) ?? -1;
     const referentialCtx = {
@@ -1447,7 +1718,13 @@ export function AIEngineerPanel({
     }
     if (referentialResolution.status === 'resolved') {
       const { referent } = referentialResolution;
-      lastReferentRef.current = referent.id !== 'none' ? referent : lastReferentRef.current;
+      if (referent.id !== 'none') {
+        lastReferentRef.current = referent;
+        // D4-E3K §16 — a fresh/reused referent resets the staleness
+        // clock; it is trustworthy again for the next
+        // STALE_REFERENT_TURN_LIMIT turns.
+        turnsSinceLastReferentRef.current = 0;
+      }
       if (referent.kind === 'validationIssue' && referent.id !== 'none') {
         setLastDiscussedIssueId(referent.id);
       }
@@ -1557,6 +1834,12 @@ export function AIEngineerPanel({
         document_summary: documentSummaryContext,
       });
       copySourceContextRef.current = null;
+      // D4-E3K completion pass §D — captured before the ref is cleared,
+      // so a resulting MULTI_MODULE_UPDATE proposal can remember each
+      // operation's own resolved label (only ever used later to match a
+      // named-target narrowing phrase like "leave the footer one out" —
+      // see PendingProposal.targetLabels' own docstring).
+      const resolvedTargetsForLabels = resolvedTargetsContextRef.current;
       resolvedTargetsContextRef.current = null;
 
       appendMessage('assistant', response.reply);
@@ -1594,6 +1877,15 @@ export function AIEngineerPanel({
         }]);
       } else {
         setStrongConfirmChecked(false);
+        // D4-E3K completion pass §D — one label per operation, in the
+        // SAME order the backend returned them, matched back to the
+        // resolver's own already-vouched-for labels by module id (never
+        // trusted purely by array position — the backend is free to
+        // reorder). undefined for anything but a real MULTI_MODULE_UPDATE.
+        const targetLabels = response.action.type === 'MULTI_MODULE_UPDATE'
+          ? (response.action as { operations?: Array<{ target_module_id: string; module_type: string }> }).operations
+            ?.map((op) => resolvedTargetsForLabels?.find((t) => t.id === op.target_module_id)?.label ?? `the ${op.module_type} module`)
+          : undefined;
         setPending({
           messageId: newId('proposal'),
           command: message,
@@ -1603,7 +1895,18 @@ export function AIEngineerPanel({
           requiresStrongConfirmation: response.requires_strong_confirmation,
           provider: response.provider,
           capturedSelectedModuleId: selectedModule?.id ?? null,
+          targetLabels,
         });
+        // D4-E3K completion pass §A — establish/update the active-task
+        // context from whatever real target(s) this response's own
+        // action actually named, so a LATER continuation/correction/
+        // "do the same" turn has something bounded to work from.
+        if (response.action.type === 'MULTI_MODULE_UPDATE') {
+          const ops = (response.action as { operations?: Array<{ target_module_id: string; module_type: string }> }).operations ?? [];
+          if (ops.length > 0) establishActiveTask(response.action, ops.map((op) => op.target_module_id), ops[0].module_type, message);
+        } else if (selectedContext?.id) {
+          establishActiveTask(response.action, [selectedContext.id], selectedContext.type, message);
+        }
       }
     } catch {
       appendMessage('assistant', 'We could not reach the AI Engineer. Please try again.');
@@ -1620,6 +1923,53 @@ export function AIEngineerPanel({
     } finally {
       setSending(false);
     }
+  }
+
+  // D4-E3K completion pass §A/§H — the SMALLEST transient facts needed
+  // for a bounded sequence of turns about ONE active edit task: which
+  // real module(s) the most recent resolved action targeted, and the
+  // already-validated field->value pairs that action's own patch
+  // actually contained (never a raw module snapshot, never an unrelated
+  // current-state field — see activeEditTask.ts's own docstring). For a
+  // MULTI_MODULE_UPDATE, only the FIRST operation's own target/patch is
+  // captured as the "do the same" seed — a deliberate, disclosed
+  // narrowing (chaining a THIRD "do the same" off a just-resolved
+  // multi-target compound is out of this pass's scope; see the
+  // completion report). Never establishes anything from a NONE/
+  // clarification response — that path leaves any existing active task
+  // completely untouched, never clears it just because one turn didn't
+  // resolve to a mutation.
+  function establishActiveTask(action: AICommandAction, targetIds: string[], moduleType: string, sourceMessage: string) {
+    let resolvedFields: Record<string, unknown> = {};
+    if (action.type === 'UPDATE_MODULE_PROPS' || action.type === 'BATCH_UPDATE') {
+      const patch = (action as { patch?: Record<string, unknown>; props_patch?: Record<string, unknown> });
+      resolvedFields = { ...(patch.patch ?? {}), ...(patch.props_patch ?? {}) };
+    } else if (action.type === 'MULTI_MODULE_UPDATE') {
+      const ops = (action as { operations?: Array<{ props_patch?: Record<string, unknown> | null }> }).operations;
+      resolvedFields = ops?.[0]?.props_patch ?? {};
+    }
+    if (Object.keys(resolvedFields).length === 0 || targetIds.length === 0) return;
+    // D4-E3K completion pass §E/§F — a genuine continuation of the SAME
+    // active task (targets overlap) inherits its preservation/exclusion
+    // phrase unless THIS turn's own message states a fresh one; a
+    // brand-new task (no overlap, or no prior task at all) only ever
+    // gets what THIS message itself says — never inherited from
+    // whatever came before.
+    const continuingSameTask = activeTaskRef.current !== null && sameTaskTargets(activeTaskRef.current.targetIds, targetIds);
+    const freshPreservation = extractPreservationPhrase(sourceMessage);
+    const freshExclusion = excludedTargetsContextRef.current?.[0]?.matched_phrase ?? null;
+    activeTaskRef.current = {
+      targetIds, moduleType, resolvedFields,
+      preservationPhrase: freshPreservation ?? (continuingSameTask ? activeTaskRef.current!.preservationPhrase : null),
+      exclusionPhrase: freshExclusion ?? (continuingSameTask ? activeTaskRef.current!.exclusionPhrase : null),
+      excludedTargetIds: excludedTargetsContextRef.current?.map((t) => t.id)
+        ?? (continuingSameTask ? activeTaskRef.current!.excludedTargetIds : []),
+      turnsSinceEstablished: 0,
+    };
+  }
+
+  function sameTaskTargets(a: string[], b: string[]): boolean {
+    return a.length > 0 && b.length > 0 && a.some((id) => b.includes(id));
   }
 
   async function handleApply() {
@@ -1656,6 +2006,11 @@ export function AIEngineerPanel({
     setPending(null);
     setStrongConfirmChecked(false);
     setResolving(false);
+    // D4-E3K completion pass §C — Apply is an explicit reset trigger: the
+    // task this proposal came from is now committed history, not
+    // something a LATER "do the same"/continuation should keep building
+    // on top of.
+    activeTaskRef.current = null;
   }
 
   function handleCancel() {
@@ -1674,6 +2029,10 @@ export function AIEngineerPanel({
     }]);
     setPending(null);
     setStrongConfirmChecked(false);
+    // D4-E3K completion pass §C — Cancel/rejection is an explicit reset
+    // trigger: the rejected proposal's target/fields are never a safe
+    // basis for a later "do the same".
+    activeTaskRef.current = null;
   }
 
   // Sub-phase 4, item 4 — Apply for a repair proposal: every candidate's

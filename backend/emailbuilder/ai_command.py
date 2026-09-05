@@ -4144,6 +4144,27 @@ def build_deterministic_multi_module_plan(message, resolved_targets):
         if not isinstance(target_id, str) or not target_id or module_type not in module_capabilities.get_all_module_types():
             continue
 
+        # D4-E3K completion pass §G/§H — a CROSS-TURN "do the same to X"
+        # request (a SEPARATE later turn, never this same message's own
+        # in-message compound — that case already reaches this point via
+        # a REAL preceding target in THIS SAME resolved_targets list).
+        # The frontend remembers only the bounded field->value pairs its
+        # own prior turn's ALREADY-VALIDATED action patch actually
+        # contained (activeEditTask.ts's own ActiveEditTaskContext —
+        # never a raw module snapshot) and resends them here. Seeding
+        # `previous_resolved` from it, once, BEFORE this entry's own
+        # _SAME_TRIGGER_RE check below, means the EXISTING propagation
+        # branch a few lines down — capability-filtered via THIS target's
+        # own `allowed` set, exactly like any other "do the same"
+        # resolution — is the ONLY code that ever turns it into a real
+        # patch. No new mutation path, no new validation bypass: an
+        # unsupported field is dropped by that same existing filter, and
+        # the result still passes through _validate_patch() below like
+        # every other operation in this plan.
+        propagated_patch = entry.get('propagated_patch') if isinstance(entry.get('propagated_patch'), dict) else None
+        if propagated_patch and previous_resolved is None:
+            previous_resolved = (module_type, propagated_patch, None, list(propagated_patch.items()))
+
         lowered_segment = (matched_phrase or '').lower()
 
         # D4-E3G hardening — a real false-positive found during live QA:
@@ -4411,8 +4432,21 @@ class CanonicalIntentEmailCommandProvider(EmailCommandProvider):
         # + the "all X" resolver both fire from the SAME message); an
         # ordinary compound request with no exclusion phrase is completely
         # unaffected (excluded_ids is empty, filtered_targets == resolved_targets).
+        # D4-E3K completion pass §G/§H — a single-entry resolved_targets
+        # list is now ALSO accepted, but ONLY when that one entry carries
+        # a propagated_patch: the frontend's own cross-turn "do the same
+        # to X" mechanism (activeEditTask.ts), which by construction never
+        # sends more than the ONE newly-named target. An ordinary compound
+        # message still only ever reaches here with 2+ entries (see
+        # AIEngineerPanel.tsx's own `distinctTargetIds.size >= 2` gate) —
+        # this is strictly additive, never a relaxation of what an
+        # ordinary request can trigger.
         resolved_targets = (context or {}).get('resolved_targets')
-        if isinstance(resolved_targets, list) and len(resolved_targets) >= 2:
+        is_single_cross_turn_same = (
+            isinstance(resolved_targets, list) and len(resolved_targets) == 1
+            and isinstance(resolved_targets[0], dict) and bool(resolved_targets[0].get('propagated_patch'))
+        )
+        if isinstance(resolved_targets, list) and (len(resolved_targets) >= 2 or is_single_cross_turn_same):
             excluded_ids = _excluded_target_ids_from_context(context or {})
             filtered_targets = (
                 [t for t in resolved_targets if not (isinstance(t, dict) and t.get('id') in excluded_ids)]
