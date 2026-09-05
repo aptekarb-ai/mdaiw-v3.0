@@ -1,5 +1,15 @@
 # MDAIW Module-4 Documentation Package
 
+> **Phase-1 is complete.** For the authoritative, current state of the
+> implementation (not the original plan below), start with
+> `MODULE-4_PHASE-1_COMPLETION.md`, `MODULE-4_IMPLEMENTATION_STATUS.md`,
+> `MODULE-4_KNOWN_LIMITATIONS_AND_PHASE2.md`, `MODULE-4_RUNTIME_GUIDE.md`,
+> and `MODULE-4_AI_ENGINEER_ARCHITECTURE.md` in this same directory. The
+> rest of this package (`01_UI_UX_Designs/`, `02_Claude_Code_Prompts/`,
+> `03_Implementation_Plan/`, `MODULE-4_IMPLEMENTATION_PLAN.md`) is the
+> original pre-implementation design/planning material — historically
+> useful, but not authoritative for what exists today.
+
 This package is ready to copy to:
 
 `C:\Projects\MDAIW\docs\module-4`
